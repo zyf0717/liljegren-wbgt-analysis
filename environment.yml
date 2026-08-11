@@ -1,0 +1,16 @@
+﻿name: liljegren-wbgt-analysis
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - jupyterlab
+  - duckdb
+  - scipy
+  - pandas
+  - pyarrow
+  - matplotlib
+  - ipykernel
+  - openpyxl
+  - scikit-learn
