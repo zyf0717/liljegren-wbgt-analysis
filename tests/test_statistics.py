@@ -11,6 +11,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from liljegren_analysis import (  # noqa: E402
+    pooled_difference_statistics,
     pooled_mean,
     pooled_pearson_correlation,
     pooled_sample_covariance,
@@ -43,8 +44,8 @@ def _daily_row(result_date: str, x: list[float], y: list[float]) -> dict[str, ob
         "variance_b": values_y.var(ddof=1) if n > 1 else np.nan,
         "variance_difference": difference.var(ddof=1) if n > 1 else np.nan,
         "covariance_ab": _sample_covariance(values_x, values_y) if n > 1 else np.nan,
-        "absolute_difference_sum_c": np.abs(difference).sum(),
-        "squared_difference_sum_c": np.square(difference).sum(),
+        "mean_absolute_difference_c": np.abs(difference).mean(),
+        "rmse_c": np.sqrt(np.square(difference).mean()),
         "min_difference_c": difference.min(),
         "max_difference_c": difference.max(),
         "max_absolute_difference_c": np.abs(difference).max(),
@@ -94,6 +95,38 @@ class StatisticsTests(unittest.TestCase):
             _correlation(self.x, self.y),
         )
 
+    def test_pooled_difference_statistics_match_raw_values(self) -> None:
+        result = pooled_difference_statistics(
+            self.daily["n"],
+            mean_differences=self.daily["mean_difference_c"],
+            sample_variances=self.daily["variance_difference"],
+            mean_absolute_differences=self.daily["mean_absolute_difference_c"],
+            root_mean_squared_differences=self.daily["rmse_c"],
+            min_differences=self.daily["min_difference_c"],
+            max_differences=self.daily["max_difference_c"],
+            max_absolute_differences=self.daily["max_absolute_difference_c"],
+        )
+
+        self.assertEqual(result["n"], len(self.difference))
+        self.assertAlmostEqual(result["mean_difference_c"], self.difference.mean())
+        self.assertAlmostEqual(
+            result["variance_difference"], self.difference.var(ddof=1)
+        )
+        self.assertAlmostEqual(
+            result["stddev_difference_c"], self.difference.std(ddof=1)
+        )
+        self.assertAlmostEqual(
+            result["mean_absolute_difference_c"], np.abs(self.difference).mean()
+        )
+        self.assertAlmostEqual(
+            result["rmse_c"], np.sqrt(np.square(self.difference).mean())
+        )
+        self.assertEqual(result["min_difference_c"], self.difference.min())
+        self.assertEqual(result["max_difference_c"], self.difference.max())
+        self.assertEqual(
+            result["max_absolute_difference_c"], np.abs(self.difference).max()
+        )
+
     def test_single_observation_returns_nan_sample_moments(self) -> None:
         self.assertTrue(np.isnan(pooled_sample_variance([1], [2.0], [np.nan])))
         self.assertTrue(
@@ -103,6 +136,28 @@ class StatisticsTests(unittest.TestCase):
     def test_invalid_counts_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive finite integers"):
             pooled_mean([2, 0], [1.0, 2.0])
+
+    def test_pooled_difference_statistics_validate_inputs(self) -> None:
+        arguments = {
+            "mean_differences": [0.5],
+            "sample_variances": [0.5],
+            "mean_absolute_differences": [0.5],
+            "root_mean_squared_differences": [0.5],
+            "min_differences": [0.0],
+            "max_differences": [1.0],
+            "max_absolute_differences": [1.0],
+        }
+
+        with self.assertRaisesRegex(ValueError, "length does not match counts"):
+            pooled_difference_statistics(
+                [2],
+                **{**arguments, "max_absolute_differences": [1.0, 2.0]},
+            )
+        with self.assertRaisesRegex(ValueError, "must not be negative"):
+            pooled_difference_statistics(
+                [2],
+                **{**arguments, "mean_absolute_differences": [-1.0]},
+            )
 
 
 if __name__ == "__main__":

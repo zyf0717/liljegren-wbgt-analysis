@@ -6,6 +6,65 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
+def pooled_difference_statistics(
+    counts: ArrayLike,
+    *,
+    mean_differences: ArrayLike,
+    sample_variances: ArrayLike,
+    mean_absolute_differences: ArrayLike,
+    root_mean_squared_differences: ArrayLike,
+    min_differences: ArrayLike,
+    max_differences: ArrayLike,
+    max_absolute_differences: ArrayLike,
+) -> dict[str, float | int]:
+    """Pool mergeable difference statistics from grouped summaries.
+
+    Inputs after ``counts`` are keyword-only to keep the similarly shaped
+    daily summary arrays unambiguous. Observation-level quantiles cannot be
+    reconstructed from grouped scalar quantiles and are not returned.
+    """
+
+    n = _count_array(counts)
+    means = _finite_array(mean_differences, "mean_differences", length=len(n))
+    absolute_means = _nonnegative_array(
+        mean_absolute_differences,
+        "mean_absolute_differences",
+        length=len(n),
+    )
+    root_mean_squares = _nonnegative_array(
+        root_mean_squared_differences,
+        "root_mean_squared_differences",
+        length=len(n),
+    )
+    minima = _finite_array(min_differences, "min_differences", length=len(n))
+    maxima = _finite_array(max_differences, "max_differences", length=len(n))
+    absolute_maxima = _nonnegative_array(
+        max_absolute_differences,
+        "max_absolute_differences",
+        length=len(n),
+    )
+
+    total = int(n.sum())
+    mean = pooled_mean(n, means)
+    variance = pooled_sample_variance(n, means, sample_variances)
+    mean_absolute_difference = float(np.dot(n, absolute_means) / total)
+    root_mean_squared_difference = float(
+        np.sqrt(np.dot(n, np.square(root_mean_squares)) / total)
+    )
+
+    return {
+        "n": total,
+        "mean_difference_c": mean,
+        "variance_difference": variance,
+        "stddev_difference_c": float(np.sqrt(variance)),
+        "mean_absolute_difference_c": mean_absolute_difference,
+        "rmse_c": root_mean_squared_difference,
+        "min_difference_c": float(minima.min()),
+        "max_difference_c": float(maxima.max()),
+        "max_absolute_difference_c": float(absolute_maxima.max()),
+    }
+
+
 def pooled_mean(counts: ArrayLike, means: ArrayLike) -> float:
     """Return ``sum(n_i * mean_i) / sum(n_i)``."""
 
@@ -120,6 +179,18 @@ def _finite_array(values: ArrayLike, name: str, *, length: int | None = None) ->
     result = _array(values, name, length=length)
     if not np.isfinite(result).all():
         raise ValueError(f"{name} must contain finite values")
+    return result
+
+
+def _nonnegative_array(
+    values: ArrayLike,
+    name: str,
+    *,
+    length: int | None = None,
+) -> np.ndarray:
+    result = _finite_array(values, name, length=length)
+    if (result < 0).any():
+        raise ValueError(f"{name} must not be negative")
     return result
 
 
