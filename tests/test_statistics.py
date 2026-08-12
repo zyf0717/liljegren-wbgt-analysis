@@ -5,21 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from liljegren_analysis import (
-    pooled_difference_statistics,
-    pooled_mean,
-    pooled_pearson_correlation,
-    pooled_sample_covariance,
-    pooled_sample_variance,
-)
-
-
-def _sample_covariance(x: np.ndarray, y: np.ndarray) -> float:
-    return float(np.sum((x - x.mean()) * (y - y.mean())) / (len(x) - 1))
-
-
-def _correlation(x: np.ndarray, y: np.ndarray) -> float:
-    return _sample_covariance(x, y) / (x.std(ddof=1) * y.std(ddof=1))
+from liljegren_analysis import pooled_difference_statistics
 
 
 def _daily_row(result_date: str, x: list[float], y: list[float]) -> dict[str, object]:
@@ -32,13 +18,8 @@ def _daily_row(result_date: str, x: list[float], y: list[float]) -> dict[str, ob
         "implementation_b": "b",
         "result_date": result_date,
         "n": n,
-        "mean_a_c": values_x.mean(),
-        "mean_b_c": values_y.mean(),
         "mean_difference_c": difference.mean(),
-        "variance_a": values_x.var(ddof=1) if n > 1 else np.nan,
-        "variance_b": values_y.var(ddof=1) if n > 1 else np.nan,
         "variance_difference": difference.var(ddof=1) if n > 1 else np.nan,
-        "covariance_ab": _sample_covariance(values_x, values_y) if n > 1 else np.nan,
         "mean_absolute_difference_c": np.abs(difference).mean(),
         "rmse_c": np.sqrt(np.square(difference).mean()),
         "min_difference_c": difference.min(),
@@ -61,34 +42,6 @@ class StatisticsTests(unittest.TestCase):
         self.x = np.concatenate(self.x_groups)
         self.y = np.concatenate(self.y_groups)
         self.difference = self.x - self.y
-
-    def test_pooling_primitives_match_raw_values(self) -> None:
-        n = self.daily["n"]
-        self.assertAlmostEqual(pooled_mean(n, self.daily["mean_a_c"]), self.x.mean())
-        self.assertAlmostEqual(
-            pooled_sample_variance(n, self.daily["mean_a_c"], self.daily["variance_a"]),
-            self.x.var(ddof=1),
-        )
-        self.assertAlmostEqual(
-            pooled_sample_covariance(
-                n,
-                self.daily["mean_a_c"],
-                self.daily["mean_b_c"],
-                self.daily["covariance_ab"],
-            ),
-            _sample_covariance(self.x, self.y),
-        )
-        self.assertAlmostEqual(
-            pooled_pearson_correlation(
-                n,
-                self.daily["mean_a_c"],
-                self.daily["mean_b_c"],
-                self.daily["variance_a"],
-                self.daily["variance_b"],
-                self.daily["covariance_ab"],
-            ),
-            _correlation(self.x, self.y),
-        )
 
     def test_pooled_difference_statistics_match_raw_values(self) -> None:
         result = pooled_difference_statistics(
@@ -122,15 +75,18 @@ class StatisticsTests(unittest.TestCase):
             result["max_absolute_difference_c"], np.abs(self.difference).max()
         )
 
-    def test_single_observation_returns_nan_sample_moments(self) -> None:
-        self.assertTrue(np.isnan(pooled_sample_variance([1], [2.0], [np.nan])))
-        self.assertTrue(
-            np.isnan(pooled_sample_covariance([1], [2.0], [3.0], [np.nan]))
-        )
-
     def test_invalid_counts_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive finite integers"):
-            pooled_mean([2, 0], [1.0, 2.0])
+            pooled_difference_statistics(
+                [2, 0],
+                mean_differences=[1.0, 2.0],
+                sample_variances=[1.0, 1.0],
+                mean_absolute_differences=[1.0, 2.0],
+                root_mean_squared_differences=[1.0, 2.0],
+                min_differences=[1.0, 2.0],
+                max_differences=[1.0, 2.0],
+                max_absolute_differences=[1.0, 2.0],
+            )
 
     def test_pooled_difference_statistics_validate_inputs(self) -> None:
         arguments = {

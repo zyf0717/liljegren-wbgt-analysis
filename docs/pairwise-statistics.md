@@ -33,8 +33,6 @@ daily_pairwise = all_results.query(
             left_result.result_date,
             left_result.implementation AS implementation_a,
             right_result.implementation AS implementation_b,
-            left_result.value_c AS value_a_c,
-            right_result.value_c AS value_b_c,
             left_result.value_c - right_result.value_c AS difference_c
         FROM valid_results AS left_result
         INNER JOIN valid_results AS right_result
@@ -49,13 +47,8 @@ daily_pairwise = all_results.query(
         implementation_b,
         result_date,
         count(*) AS n,
-        avg(value_a_c) AS mean_a_c,
-        avg(value_b_c) AS mean_b_c,
         avg(difference_c) AS mean_difference_c,
-        var_samp(value_a_c) AS variance_a,
-        var_samp(value_b_c) AS variance_b,
         var_samp(difference_c) AS variance_difference,
-        covar_samp(value_a_c, value_b_c) AS covariance_ab,
         avg(abs(difference_c)) AS mean_absolute_difference_c,
         sqrt(avg(difference_c * difference_c)) AS rmse_c,
         min(difference_c) AS min_difference_c,
@@ -73,49 +66,8 @@ differences are always `implementation_a - implementation_b`.
 
 ## Calculation API
 
-```python
-from liljegren_analysis import (
-    pooled_mean,
-    pooled_pearson_correlation,
-    pooled_sample_covariance,
-    pooled_sample_variance,
-)
-```
-
-Each function accepts one-dimensional array-like inputs, including Pandas
-Series. For one implementation pair selected by notebook code:
-
-```python
-pair = daily_pairwise.loc[
-    (daily_pairwise["implementation_a"] == implementation_a)
-    & (daily_pairwise["implementation_b"] == implementation_b)
-]
-n = pair["n"]
-
-mean_difference_c = pooled_mean(n, pair["mean_difference_c"])
-variance_difference = pooled_sample_variance(
-    n,
-    pair["mean_difference_c"],
-    pair["variance_difference"],
-)
-covariance_ab = pooled_sample_covariance(
-    n,
-    pair["mean_a_c"],
-    pair["mean_b_c"],
-    pair["covariance_ab"],
-)
-pearson_r = pooled_pearson_correlation(
-    n,
-    pair["mean_a_c"],
-    pair["mean_b_c"],
-    pair["variance_a"],
-    pair["variance_b"],
-    pair["covariance_ab"],
-)
-```
-
-For the persisted difference-only daily table, pool every mergeable output
-metric with the higher-level helper:
+Pool every mergeable output metric from the persisted difference-only daily
+table with the project helper:
 
 ```python
 from liljegren_analysis import pooled_difference_statistics
@@ -153,20 +105,16 @@ max_difference_c = pair["max_difference_c"].max()
 max_absolute_difference_c = pair["max_absolute_difference_c"].max()
 ```
 
-For hierarchical rollups, retain the pooled counts, means, sample variances,
-sample covariance, MAE, RMSE, and extrema listed below in the notebook's output
-table.
+For hierarchical rollups, retain the pooled counts, difference means, sample
+variances, MAE, RMSE, and extrema listed below in the notebook's output table.
 
 ## Required columns
 
 | Column | Daily statistic |
 |---|---|
 | `n` | Matched row count |
-| `mean_a_c`, `mean_b_c` | Matched implementation means |
 | `mean_difference_c` | Mean signed difference |
-| `variance_a`, `variance_b` | Sample variances of matched values |
 | `variance_difference` | Sample variance of signed differences |
-| `covariance_ab` | Sample covariance of matched values |
 | `mean_absolute_difference_c` | Mean absolute difference |
 | `rmse_c` | Root mean squared difference |
 | `min_difference_c`, `max_difference_c` | Signed extrema |
@@ -185,7 +133,7 @@ For group (i), let (n_i) be its count, \(\bar z_i\) its mean, and
 \bar z = \frac{\sum_i n_i\bar z_i}{N}
 \]
 
-This is used for `mean_a_c`, `mean_b_c`, and `mean_difference_c`.
+This is used for `mean_difference_c`.
 
 ### Sample variance and SD
 
@@ -199,23 +147,6 @@ s_z^2=\frac{M2_z}{N-1},\qquad s_z=\sqrt{s_z^2}
 
 The first term is within-group variation; the second is between-group
 variation. Averaging daily SDs or variances is incorrect.
-
-### Sample covariance and Pearson correlation
-
-For daily sample covariance \(c_{xy,i}\):
-
-\[
-C_{xy}=\sum_i\left[(n_i-1)c_{xy,i}
-+n_i(\bar x_i-\bar x)(\bar y_i-\bar y)\right]
-\]
-
-\[
-\operatorname{Cov}(x,y)=\frac{C_{xy}}{N-1},\qquad
-r=\frac{C_{xy}}{\sqrt{M2_xM2_y}}
-\]
-
-Daily correlations alone are insufficient for exact pooling. `r_squared` is
-reported as \(r^2\), which measures squared linear association, not agreement.
 
 ### MAE and RMSE
 
