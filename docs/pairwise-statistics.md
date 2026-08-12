@@ -1,9 +1,14 @@
 # Daily-to-overall pairwise statistics
 
 Compute row-level pairs and daily sufficient statistics in DuckDB, then pool
-the small daily table in the notebook. The library exposes only the moment
-calculations; grouping, column selection, and output construction remain
-notebook-level decisions.
+the small daily table in the notebook. The library exposes the reusable daily
+work unit, transactional persistence, and moment calculations; grouping,
+column selection, and output construction remain notebook-level decisions.
+
+The reusable daily work unit and transactional persistence API are exported as
+`compute_daily_pairwise()` and `persist_daily_pairwise()`. The CLI and daily
+notebook share these functions; process orchestration and filesystem defaults
+remain in their respective entry points.
 
 ## Daily sufficient-statistics query
 
@@ -51,8 +56,8 @@ daily_pairwise = all_results.query(
         var_samp(value_b_c) AS variance_b,
         var_samp(difference_c) AS variance_difference,
         covar_samp(value_a_c, value_b_c) AS covariance_ab,
-        sum(abs(difference_c)) AS absolute_difference_sum_c,
-        sum(difference_c * difference_c) AS squared_difference_sum_c,
+        avg(abs(difference_c)) AS mean_absolute_difference_c,
+        sqrt(avg(difference_c * difference_c)) AS rmse_c,
         min(difference_c) AS min_difference_c,
         max(difference_c) AS max_difference_c,
         max(abs(difference_c)) AS max_absolute_difference_c
@@ -109,22 +114,48 @@ pearson_r = pooled_pearson_correlation(
 )
 ```
 
+For the persisted difference-only daily table, pool every mergeable output
+metric with the higher-level helper:
+
+```python
+from liljegren_analysis import pooled_difference_statistics
+
+statistics = pooled_difference_statistics(
+    pair["n"],
+    mean_differences=pair["mean_difference_c"],
+    sample_variances=pair["variance_difference"],
+    mean_absolute_differences=pair["mean_absolute_difference_c"],
+    root_mean_squared_differences=pair["rmse_c"],
+    min_differences=pair["min_difference_c"],
+    max_differences=pair["max_difference_c"],
+    max_absolute_differences=pair["max_absolute_difference_c"],
+)
+```
+
+This helper returns the pooled count, difference mean/variance/standard
+deviation, MAE, RMSE, and extrema. Grouping and construction of
+the implementation-pair output table remain notebook responsibilities.
+
 The notebook can apply these calculations inside its own `groupby` loop and
 construct only the required output columns. Additive and extrema metrics do
 not require library helpers:
 
 ```python
 total_n = pair["n"].sum()
-mean_absolute_difference_c = pair["absolute_difference_sum_c"].sum() / total_n
-rmse_c = (pair["squared_difference_sum_c"].sum() / total_n) ** 0.5
+mean_absolute_difference_c = (
+    pair["n"] * pair["mean_absolute_difference_c"]
+).sum() / total_n
+rmse_c = (
+    (pair["n"] * pair["rmse_c"] ** 2).sum() / total_n
+) ** 0.5
 min_difference_c = pair["min_difference_c"].min()
 max_difference_c = pair["max_difference_c"].max()
 max_absolute_difference_c = pair["max_absolute_difference_c"].max()
 ```
 
 For hierarchical rollups, retain the pooled counts, means, sample variances,
-sample covariance, additive sums, and extrema listed below in the notebook's
-output table.
+sample covariance, MAE, RMSE, and extrema listed below in the notebook's output
+table.
 
 ## Required columns
 
@@ -136,8 +167,8 @@ output table.
 | `variance_a`, `variance_b` | Sample variances of matched values |
 | `variance_difference` | Sample variance of signed differences |
 | `covariance_ab` | Sample covariance of matched values |
-| `absolute_difference_sum_c` | Sum of absolute differences |
-| `squared_difference_sum_c` | Sum of squared differences |
+| `mean_absolute_difference_c` | Mean absolute difference |
+| `rmse_c` | Root mean squared difference |
 | `min_difference_c`, `max_difference_c` | Signed extrema |
 | `max_absolute_difference_c` | Maximum absolute difference |
 
@@ -188,15 +219,14 @@ reported as \(r^2\), which measures squared linear association, not agreement.
 
 ### MAE and RMSE
 
-For daily absolute-difference sum \(A_i=\sum |d|\) and squared-difference sum
-\(Q_i=\sum d^2\):
+For daily MAE \(a_i\) and RMSE \(r_i\):
 
 \[
-\operatorname{MAE}=\frac{\sum_i A_i}{N}
+\operatorname{MAE}=\frac{\sum_i n_i a_i}{N}
 \]
 
 \[
-\operatorname{RMSE}=\sqrt{\frac{\sum_i Q_i}{N}}
+\operatorname{RMSE}=\sqrt{\frac{\sum_i n_i r_i^2}{N}}
 \]
 
 ### Extrema
