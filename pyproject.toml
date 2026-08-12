@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liljegren-wbgt-analysis"
+version = "0.1.0"
+description = "Analysis helpers for comparing WBGT implementations"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "duckdb",
+    "numpy",
+    "pyarrow",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel",
+    "jupyterlab",
+    "matplotlib",
+    "openpyxl",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

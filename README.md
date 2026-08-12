@@ -6,20 +6,19 @@ HeatStressBench ERA5 results.
 ## Environment
 
 ```powershell
-conda env create -f environment.yml
-conda activate liljegren-wbgt-analysis
+uv sync
 ```
 
-The repository is not installed as a package. From a notebook under
-`notebooks/`, import directly from `src`:
+This creates a project-local `.venv`, installs the package in editable mode,
+and synchronizes dependencies with the committed lockfile. Start Jupyter with:
 
 ```python
-import sys
-from pathlib import Path
+uv run jupyter lab
+```
 
-repository = Path("..").resolve()
-sys.path.insert(0, str(repository / "src"))
+The package is importable without modifying `sys.path`:
 
+```python
 from liljegren_analysis import CampaignResults, pooled_sample_variance
 ```
 
@@ -38,6 +37,5 @@ The intended workflow is:
 ## Tests
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 ```

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-
-sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
-
-from liljegren_analysis import (  # noqa: E402
+from liljegren_analysis import (
     pooled_difference_statistics,
     pooled_mean,
     pooled_pearson_correlation,

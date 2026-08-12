@@ -13,15 +13,13 @@ from zoneinfo import ZoneInfo
 import duckdb
 
 
-REPOSITORY = Path(__file__).parents[1]
-sys.path.insert(0, str(REPOSITORY / "src"))
-
-from liljegren_analysis import (  # noqa: E402
+from liljegren_analysis import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )
 
 
+REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (
     REPOSITORY / ".hsb" / "campaigns" / "era5-2025-all-six-m2-w20-v8",
     REPOSITORY
