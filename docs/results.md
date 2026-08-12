@@ -9,13 +9,11 @@ results/<result_date>/<run_id>/<implementation>/results.parquet
 From a notebook under `notebooks/`:
 
 ```python
-import sys
 from pathlib import Path
 
-repository = Path("..").resolve()
-sys.path.insert(0, str(repository / "src"))
-
 from liljegren_analysis import CampaignResults
+
+repository = Path("..").resolve()
 ```
 
 Open a campaign and construct a scoped relation:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 import unittest
 from datetime import date
@@ -11,10 +10,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-
-sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
-
-from liljegren_analysis import (  # noqa: E402
+from liljegren_analysis import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )

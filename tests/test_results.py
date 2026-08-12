@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,9 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
-
-from liljegren_analysis import CampaignResults  # noqa: E402
+from liljegren_analysis import CampaignResults
 
 
 def _write_result(
