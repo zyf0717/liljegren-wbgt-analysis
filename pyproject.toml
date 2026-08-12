@@ -21,6 +21,7 @@ dev = [
     "matplotlib",
     "openpyxl",
     "pandas",
+    "plotly>=6.9.0",
     "pytest>=9.1.1",
     "scikit-learn",
     "scipy",
