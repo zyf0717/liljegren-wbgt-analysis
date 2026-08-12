@@ -45,8 +45,8 @@ def pooled_difference_statistics(
     )
 
     total = int(n.sum())
-    mean = pooled_mean(n, means)
-    variance = pooled_sample_variance(n, means, sample_variances)
+    mean = _pooled_mean(n, means)
+    variance = _pooled_sample_variance(n, means, sample_variances)
     mean_absolute_difference = float(np.dot(n, absolute_means) / total)
     root_mean_squared_difference = float(
         np.sqrt(np.dot(n, np.square(root_mean_squares)) / total)
@@ -65,7 +65,7 @@ def pooled_difference_statistics(
     }
 
 
-def pooled_mean(counts: ArrayLike, means: ArrayLike) -> float:
+def _pooled_mean(counts: ArrayLike, means: ArrayLike) -> float:
     """Return ``sum(n_i * mean_i) / sum(n_i)``."""
 
     n = _count_array(counts)
@@ -73,7 +73,7 @@ def pooled_mean(counts: ArrayLike, means: ArrayLike) -> float:
     return float(np.dot(n, mean) / n.sum())
 
 
-def pooled_sample_variance(
+def _pooled_sample_variance(
     counts: ArrayLike,
     means: ArrayLike,
     sample_variances: ArrayLike,
@@ -103,58 +103,6 @@ def pooled_sample_variance(
     within[multiple] = (n[multiple] - 1) * variance[multiple]
     between = n * np.square(mean - overall_mean)
     return float((within.sum() + between.sum()) / (total - 1))
-
-
-def pooled_sample_covariance(
-    counts: ArrayLike,
-    means_x: ArrayLike,
-    means_y: ArrayLike,
-    sample_covariances: ArrayLike,
-) -> float:
-    """Pool sample covariances with the between-group covariance correction.
-
-    With pooled means ``mean_x`` and ``mean_y``, this computes::
-
-        C = sum(
-            (n_i - 1) * covariance_i
-            + n_i * (mean_x_i - mean_x) * (mean_y_i - mean_y)
-        )
-        covariance = C / (N - 1)
-    """
-
-    n = _count_array(counts)
-    mean_x = _finite_array(means_x, "means_x", length=len(n))
-    mean_y = _finite_array(means_y, "means_y", length=len(n))
-    covariance = _sample_moment_array(sample_covariances, n, "sample_covariances")
-    total = n.sum()
-    if total < 2:
-        return float("nan")
-
-    overall_x = float(np.dot(n, mean_x) / total)
-    overall_y = float(np.dot(n, mean_y) / total)
-    within = np.zeros_like(n)
-    multiple = n > 1
-    within[multiple] = (n[multiple] - 1) * covariance[multiple]
-    between = n * (mean_x - overall_x) * (mean_y - overall_y)
-    return float((within.sum() + between.sum()) / (total - 1))
-
-
-def pooled_pearson_correlation(
-    counts: ArrayLike,
-    means_x: ArrayLike,
-    means_y: ArrayLike,
-    sample_variances_x: ArrayLike,
-    sample_variances_y: ArrayLike,
-    sample_covariances: ArrayLike,
-) -> float:
-    """Return Pearson correlation reconstructed from grouped moments."""
-
-    variance_x = pooled_sample_variance(counts, means_x, sample_variances_x)
-    variance_y = pooled_sample_variance(counts, means_y, sample_variances_y)
-    covariance = pooled_sample_covariance(counts, means_x, means_y, sample_covariances)
-    denominator = np.sqrt(variance_x * variance_y)
-    return float(covariance / denominator) if denominator > 0 else float("nan")
-
 
 def _array(values: ArrayLike, name: str, *, length: int | None = None) -> np.ndarray:
     try:

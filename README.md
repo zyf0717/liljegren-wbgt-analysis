@@ -19,7 +19,7 @@ uv run jupyter lab
 The package is importable without modifying `sys.path`:
 
 ```python
-from liljegren_analysis import CampaignResults, pooled_sample_variance
+from liljegren_analysis import CampaignResults, pooled_difference_statistics
 ```
 
 ## Documentation
