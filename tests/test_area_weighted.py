@@ -14,6 +14,7 @@ from liljegren_analysis import (
     compute_daily_area_weighted_pairwise,
     persist_daily_area_weighted_pairwise,
 )
+from liljegren_analysis.area_weighted import _ERA5_LATITUDE_WEIGHTS
 
 
 RESULT_COLUMNS = [
@@ -79,6 +80,22 @@ def _write_results(
 
 
 class AreaWeightedPairwiseTests(unittest.TestCase):
+    def test_precomputed_weights_cover_era5_latitudes(self) -> None:
+        weights = dict(
+            zip(
+                _ERA5_LATITUDE_WEIGHTS["latitude_code"].to_pylist(),
+                _ERA5_LATITUDE_WEIGHTS["area_weight"].to_pylist(),
+                strict=True,
+            )
+        )
+
+        self.assertEqual(len(weights), 721)
+        self.assertAlmostEqual(weights["n000000"], 1.0)
+        self.assertAlmostEqual(weights["n600000"], math.cos(math.radians(60)))
+        self.assertAlmostEqual(weights["n600000"], weights["s600000"])
+        self.assertGreater(weights["n900000"], 0.0)
+        self.assertEqual(weights["n900000"], weights["s900000"])
+
     def test_compute_matches_direct_weighted_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -162,6 +179,30 @@ class AreaWeightedPairwiseTests(unittest.TestCase):
                     (first, second),
                     threads=1,
                 )
+
+    def test_compute_rejects_latitude_outside_quarter_degree_grid(self) -> None:
+        invalid_row_ids = (
+            "era5-global-n000100-e0000000-2025010100",
+            "era5-global-n900001-e0000000-2025010100",
+            "era5-global-s000000-e0000000-2025010100",
+        )
+        for row_id in invalid_row_ids:
+            with (
+                self.subTest(row_id=row_id),
+                tempfile.TemporaryDirectory() as temporary_directory,
+            ):
+                root = Path(temporary_directory)
+                first = root / "first"
+                second = root / "second"
+                _write_results(first, "alpha", [row_id], [2.0])
+                _write_results(second, "beta", [row_id], [1.0])
+
+                with self.assertRaisesRegex(duckdb.Error, "Invalid ERA5 row_id"):
+                    compute_daily_area_weighted_pairwise(
+                        date(2025, 1, 1),
+                        (first, second),
+                        threads=1,
+                    )
 
     def test_persistence_is_versioned_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

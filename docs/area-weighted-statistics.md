@@ -21,7 +21,14 @@ w = \frac{
 This is exact spherical latitude-band area normalized so an interior
 equatorial cell has weight one. The common longitude-width and Earth-radius
 terms cancel from every reported moment. Each hourly observation receives its
-cell weight.
+cell weight. For every non-polar latitude this formula simplifies exactly to
+`cos(latitude)`; the boundary form retains the small positive area of the
+half-height cells centered at the poles.
+
+The 721 weights for the fixed ERA5 latitude grid are precomputed as an
+in-memory lookup before aggregation and reused for every matching observation.
+Pair/day weight sums remain dynamic because missing values change the matched
+observations.
 
 ## Daily sufficient statistics
 
