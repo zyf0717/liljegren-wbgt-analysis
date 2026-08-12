@@ -10,6 +10,16 @@ The reusable daily work unit and transactional persistence API are exported as
 notebook share these functions; process orchestration and filesystem defaults
 remain in their respective entry points.
 
+The row-weighted database is `data/daily_pairwise_v2.duckdb`. Its explicit
+19-column schema is recorded as version 2 in `pairwise_schema`; persistence
+validates that contract before deleting any rows and inserts columns by name.
+The legacy 21-column database is intentionally not migrated in place.
+
+Before scanning a date, every input root is enumerated by `(run_id,
+implementation)`. Duplicate scopes are rejected because unioning overlapping
+results would turn the pairwise self-join into a many-to-many join. Different
+roots may still supply complementary implementations for the same run IDs.
+
 ## Daily sufficient-statistics query
 
 ```python

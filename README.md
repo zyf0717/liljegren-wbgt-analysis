@@ -18,13 +18,18 @@ ordered lexicographically so each unordered pair appears once.
 Pairwise statistics are computed daily in DuckDB and persisted to a local
 database. Each date runs in a fresh child process because reused DuckDB
 processes exhibited progressive slowdown during long runs. A single controller
-writes results synchronously, and date-scoped transactions make interrupted
-runs resumable and reruns idempotent.
+writes results synchronously. Versioned schemas, explicit-column inserts, and
+date-scoped transactions make interrupted runs resumable and reruns idempotent.
+Overlapping run/implementation scopes are rejected before results are scanned.
 
 The yearly notebook pools only mergeable daily statistics: counts, means,
 sample variances, MAE, RMSE, and extrema. Daily approximate quantiles are not
 pooled because scalar quantiles cannot reconstruct observation-level yearly
 quantiles.
+
+A separate ERA5 analysis weights every selected land grid cell by its exact
+spherical 0.25-degree cell area. It reports weighted population moments without
+changing the row-weighted statistics or their interpretation.
 
 ## Repository structure
 
@@ -86,14 +91,25 @@ uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
   --run /path/to/campaign \
-  --database data/daily_pairwise.duckdb
+  --database data/daily_pairwise_v2.duckdb
 ```
 
-The yearly notebook reads `data/daily_pairwise.duckdb`, requires complete daily
-coverage for each implementation pair, and produces the pooled table used by
-downstream paper analysis.
+Run the independent ERA5 cell-area-weighted pipeline with:
+
+```bash
+uv run python scripts/daily_pairwise_area_weighted.py \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31 \
+  --run /path/to/campaign \
+  --database data/daily_pairwise_area_weighted_v1.duckdb
+```
+
+`yearly_pairwise.ipynb` reads the v2 row-weighted database;
+`yearly_pairwise_area_weighted.ipynb` reads the independent weighted database.
+Both require complete daily coverage for each implementation pair.
 
 ## Method documentation
 
 - [Campaign result scanning and DuckDB relations](docs/results.md)
 - [Daily-to-overall pairwise statistics](docs/pairwise-statistics.md)
+- [ERA5 cell-area-weighted statistics](docs/area-weighted-statistics.md)

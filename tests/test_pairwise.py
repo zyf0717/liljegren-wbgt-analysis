@@ -132,6 +132,28 @@ class PairwiseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "threads must be positive"):
             compute_daily_pairwise(date(2025, 1, 1), (Path("unused"),), threads=0)
 
+    def test_compute_rejects_overlapping_result_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first = root / "first"
+            second = root / "second"
+            _write_results(first, "alpha", [1.0, 2.0, 3.0])
+            _write_results(first, "beta", [1.0, 2.0, 3.0])
+            _write_results(second, "alpha", [1.0, 2.0, 3.0])
+
+            with self.assertRaisesRegex(ValueError, "Overlapping result scope"):
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    (first, first),
+                    threads=1,
+                )
+            with self.assertRaisesRegex(ValueError, "implementation=alpha"):
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    (first, second),
+                    threads=1,
+                )
+
     def test_persistence_is_idempotent_and_rolls_back_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -147,11 +169,24 @@ class PairwiseTests(unittest.TestCase):
                     ).fetchone()[0],
                     3,
                 )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT table_name, schema_version FROM pairwise_schema"
+                    ).fetchall(),
+                    [("daily_pairwise", 2)],
+                )
+
+                reordered = result.select(list(reversed(result.column_names)))
+                persist_daily_pairwise(
+                    connection,
+                    date(2025, 1, 1),
+                    reordered,
+                )
 
                 invalid = pa.table(
                     {"result_date": pa.array([date(2025, 1, 1)])}
                 )
-                with self.assertRaises(duckdb.Error):
+                with self.assertRaisesRegex(ValueError, "result schema differs"):
                     persist_daily_pairwise(
                         connection,
                         date(2025, 1, 1),
@@ -165,6 +200,54 @@ class PairwiseTests(unittest.TestCase):
                     3,
                 )
                 persist_daily_pairwise(connection, date(2025, 1, 1), result)
+
+                wrong_date = result.set_column(
+                    0,
+                    "result_date",
+                    pa.array([date(2025, 1, 2)] * len(result)),
+                )
+                with self.assertRaisesRegex(ValueError, "date other than"):
+                    persist_daily_pairwise(
+                        connection,
+                        date(2025, 1, 1),
+                        wrong_date,
+                    )
+
+    def test_persistence_rejects_legacy_schema_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            result = self._compute(root)
+            database = root / "legacy.duckdb"
+
+            with duckdb.connect(str(database)) as connection:
+                connection.register("legacy", result)
+                connection.execute(
+                    """
+                    CREATE TABLE daily_pairwise AS
+                    SELECT *,
+                           0.0::DOUBLE AS absolute_difference_sum_c,
+                           0.0::DOUBLE AS squared_difference_sum_c
+                    FROM legacy
+                    """
+                )
+                connection.unregister("legacy")
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Incompatible daily_pairwise database schema",
+                ):
+                    persist_daily_pairwise(
+                        connection,
+                        date(2025, 1, 1),
+                        result,
+                    )
+
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT count(*) FROM daily_pairwise"
+                    ).fetchone()[0],
+                    len(result),
+                )
 
 
 if __name__ == "__main__":

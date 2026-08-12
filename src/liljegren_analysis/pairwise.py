@@ -10,7 +10,35 @@ from time import monotonic
 import duckdb
 import pyarrow as pa
 
+from ._persistence import PairwiseTableSchema, persist_date_partition
 from .results import CampaignResults
+
+
+DAILY_PAIRWISE_SCHEMA = PairwiseTableSchema(
+    table_name="daily_pairwise",
+    version=2,
+    columns=(
+        ("result_date", "DATE", False),
+        ("implementation_a", "VARCHAR", False),
+        ("implementation_b", "VARCHAR", False),
+        ("n", "BIGINT", False),
+        ("mean_difference_c", "DOUBLE", False),
+        ("variance_difference", "DOUBLE", True),
+        ("stddev_difference_c", "DOUBLE", True),
+        ("mean_absolute_difference_c", "DOUBLE", False),
+        ("rmse_c", "DOUBLE", False),
+        ("min_difference_c", "DOUBLE", False),
+        ("max_difference_c", "DOUBLE", False),
+        ("max_absolute_difference_c", "DOUBLE", False),
+        ("p05_difference_c", "DOUBLE", False),
+        ("p25_difference_c", "DOUBLE", False),
+        ("median_difference_c", "DOUBLE", False),
+        ("p75_difference_c", "DOUBLE", False),
+        ("p95_difference_c", "DOUBLE", False),
+        ("median_absolute_difference_c", "DOUBLE", False),
+        ("p95_absolute_difference_c", "DOUBLE", False),
+    ),
+)
 
 
 DAILY_PAIRWISE_SQL = """
@@ -122,16 +150,7 @@ def compute_daily_pairwise(
     started = monotonic()
     with duckdb.connect() as connection:
         connection.execute(f"SET threads = {threads}")
-        relations = [
-            CampaignResults.from_campaign(run, connection=connection).scan(
-                result_date=result_date,
-            )
-            for run in runs
-        ]
-        all_results = relations[0]
-        for relation in relations[1:]:
-            all_results = all_results.union(relation)
-
+        all_results = _combined_results(result_date, runs, connection)
         result = all_results.query("results", DAILY_PAIRWISE_SQL)
         return (
             result_date,
@@ -148,24 +167,43 @@ def persist_daily_pairwise(
 ) -> None:
     """Transactionally replace one date in ``daily_pairwise``."""
 
-    connection.register("_day_result", result)
-    connection.execute("BEGIN")
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS daily_pairwise AS
-            SELECT * FROM _day_result
-            LIMIT 0
-            """
+    persist_date_partition(connection, result_date, result, DAILY_PAIRWISE_SCHEMA)
+
+
+def _combined_results(
+    result_date: date,
+    runs: tuple[Path, ...],
+    connection: duckdb.DuckDBPyConnection,
+) -> duckdb.DuckDBPyRelation:
+    _validate_nonoverlapping_scopes(result_date, runs)
+    relations = [
+        CampaignResults.from_campaign(run, connection=connection).scan(
+            result_date=result_date,
         )
-        connection.execute(
-            "DELETE FROM daily_pairwise WHERE result_date = ?",
-            [result_date],
-        )
-        connection.execute("INSERT INTO daily_pairwise SELECT * FROM _day_result")
-        connection.execute("COMMIT")
-    except Exception:
-        connection.execute("ROLLBACK")
-        raise
-    finally:
-        connection.unregister("_day_result")
+        for run in runs
+    ]
+    combined = relations[0]
+    for relation in relations[1:]:
+        combined = combined.union(relation)
+    return combined
+
+
+def _validate_nonoverlapping_scopes(
+    result_date: date,
+    runs: tuple[Path, ...],
+) -> None:
+    scopes: dict[tuple[str, str], Path] = {}
+    for run in runs:
+        date_root = run.expanduser().resolve() / "results" / result_date.isoformat()
+        for path in sorted(date_root.glob("*/*/results.parquet")):
+            run_id = path.parents[1].name
+            implementation = path.parent.name
+            scope = (run_id, implementation)
+            previous = scopes.get(scope)
+            if previous is not None:
+                raise ValueError(
+                    "Overlapping result scope for "
+                    f"{result_date} run_id={run_id} "
+                    f"implementation={implementation}: {previous} and {path}"
+                )
+            scopes[scope] = path.resolve()
