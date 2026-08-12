@@ -5,7 +5,10 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from liljegren_analysis import pooled_difference_statistics
+from liljegren_analysis import (
+    pooled_area_weighted_difference_statistics,
+    pooled_difference_statistics,
+)
 
 
 def _daily_row(result_date: str, x: list[float], y: list[float]) -> dict[str, object]:
@@ -109,6 +112,61 @@ class StatisticsTests(unittest.TestCase):
                 [2],
                 **{**arguments, "mean_absolute_differences": [-1.0]},
             )
+
+    def test_pooled_area_weighted_statistics_match_direct_values(self) -> None:
+        groups = [
+            (np.asarray([1.0, 3.0]), np.asarray([1.0, 0.5])),
+            (np.asarray([-1.0, 2.0]), np.asarray([0.25, 0.75])),
+        ]
+        counts = [len(values) for values, _ in groups]
+        weight_sums = [weights.sum() for _, weights in groups]
+        means = [
+            np.average(values, weights=weights)
+            for values, weights in groups
+        ]
+        variances = [
+            np.average(np.square(values - mean), weights=weights)
+            for (values, weights), mean in zip(groups, means, strict=True)
+        ]
+        absolute_means = [
+            np.average(np.abs(values), weights=weights)
+            for values, weights in groups
+        ]
+        root_mean_squares = [
+            np.sqrt(np.average(np.square(values), weights=weights))
+            for values, weights in groups
+        ]
+
+        result = pooled_area_weighted_difference_statistics(
+            counts,
+            area_weight_sums=weight_sums,
+            mean_differences=means,
+            population_variances=variances,
+            mean_absolute_differences=absolute_means,
+            root_mean_squared_differences=root_mean_squares,
+        )
+
+        values = np.concatenate([values for values, _ in groups])
+        weights = np.concatenate([weights for _, weights in groups])
+        mean = np.average(values, weights=weights)
+        self.assertEqual(result["n"], len(values))
+        self.assertAlmostEqual(result["area_weight_sum"], weights.sum())
+        self.assertAlmostEqual(
+            result["area_weighted_mean_difference_c"],
+            mean,
+        )
+        self.assertAlmostEqual(
+            result["area_weighted_variance_difference"],
+            np.average(np.square(values - mean), weights=weights),
+        )
+        self.assertAlmostEqual(
+            result["area_weighted_mean_absolute_difference_c"],
+            np.average(np.abs(values), weights=weights),
+        )
+        self.assertAlmostEqual(
+            result["area_weighted_rmse_c"],
+            np.sqrt(np.average(np.square(values), weights=weights)),
+        )
 
 
 if __name__ == "__main__":

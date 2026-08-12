@@ -65,6 +65,70 @@ def pooled_difference_statistics(
     }
 
 
+def pooled_area_weighted_difference_statistics(
+    counts: ArrayLike,
+    *,
+    area_weight_sums: ArrayLike,
+    mean_differences: ArrayLike,
+    population_variances: ArrayLike,
+    mean_absolute_differences: ArrayLike,
+    root_mean_squared_differences: ArrayLike,
+) -> dict[str, float | int]:
+    """Pool mergeable cell-area-weighted difference statistics."""
+
+    n = _count_array(counts)
+    weights = _positive_array(
+        area_weight_sums,
+        "area_weight_sums",
+        length=len(n),
+    )
+    means = _finite_array(mean_differences, "mean_differences", length=len(n))
+    variances = _nonnegative_array(
+        population_variances,
+        "population_variances",
+        length=len(n),
+    )
+    absolute_means = _nonnegative_array(
+        mean_absolute_differences,
+        "mean_absolute_differences",
+        length=len(n),
+    )
+    root_mean_squares = _nonnegative_array(
+        root_mean_squared_differences,
+        "root_mean_squared_differences",
+        length=len(n),
+    )
+
+    total_weight = float(weights.sum())
+    mean = float(np.dot(weights, means) / total_weight)
+    variance = float(
+        np.dot(
+            weights,
+            variances + np.square(means - mean),
+        )
+        / total_weight
+    )
+    mean_absolute_difference = float(
+        np.dot(weights, absolute_means) / total_weight
+    )
+    root_mean_squared_difference = float(
+        np.sqrt(
+            np.dot(weights, np.square(root_mean_squares))
+            / total_weight
+        )
+    )
+
+    return {
+        "n": int(n.sum()),
+        "area_weight_sum": total_weight,
+        "area_weighted_mean_difference_c": mean,
+        "area_weighted_variance_difference": variance,
+        "area_weighted_stddev_difference_c": float(np.sqrt(variance)),
+        "area_weighted_mean_absolute_difference_c": mean_absolute_difference,
+        "area_weighted_rmse_c": root_mean_squared_difference,
+    }
+
+
 def _pooled_mean(counts: ArrayLike, means: ArrayLike) -> float:
     """Return ``sum(n_i * mean_i) / sum(n_i)``."""
 
@@ -104,6 +168,7 @@ def _pooled_sample_variance(
     between = n * np.square(mean - overall_mean)
     return float((within.sum() + between.sum()) / (total - 1))
 
+
 def _array(values: ArrayLike, name: str, *, length: int | None = None) -> np.ndarray:
     try:
         result = np.asarray(values, dtype=np.float64)
@@ -139,6 +204,18 @@ def _nonnegative_array(
     result = _finite_array(values, name, length=length)
     if (result < 0).any():
         raise ValueError(f"{name} must not be negative")
+    return result
+
+
+def _positive_array(
+    values: ArrayLike,
+    name: str,
+    *,
+    length: int | None = None,
+) -> np.ndarray:
+    result = _finite_array(values, name, length=length)
+    if (result <= 0).any():
+        raise ValueError(f"{name} must be positive")
     return result
 
 

@@ -28,14 +28,19 @@ DEFAULT_RUNS = (
     / "era5-2025-meteor-m4-w18"
     / "wbgt-comparison-20260810-231240",
 )
-DEFAULT_DATABASE = REPOSITORY / "data" / "daily_pairwise.duckdb"
-DEFAULT_LOG = REPOSITORY / "data" / "daily_pairwise.log"
+DEFAULT_DATABASE = REPOSITORY / "data" / "daily_pairwise_v2.duckdb"
+DEFAULT_LOG = REPOSITORY / "data" / "daily_pairwise_v2.log"
 SGT = ZoneInfo("Asia/Singapore")
-LOGGER = logging.getLogger("daily_pairwise")
 
-def parse_args() -> argparse.Namespace:
+
+def parse_args(
+    *,
+    description: str = "Persist daily pairwise statistics with isolated workers.",
+    default_database: Path = DEFAULT_DATABASE,
+    default_log: Path = DEFAULT_LOG,
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Persist daily pairwise statistics with isolated workers.",
+        description=description,
     )
     parser.add_argument(
         "--start-date",
@@ -58,14 +63,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database",
         type=Path,
-        default=DEFAULT_DATABASE,
-        help=f"Output DuckDB file (default: {DEFAULT_DATABASE}).",
+        default=default_database,
+        help=f"Output DuckDB file (default: {default_database}).",
     )
     parser.add_argument(
         "--log-file",
         type=Path,
-        default=DEFAULT_LOG,
-        help=f"Append progress logs to this file (default: {DEFAULT_LOG}).",
+        default=default_log,
+        help=f"Append progress logs to this file (default: {default_log}).",
     )
     parser.add_argument(
         "--workers",
@@ -116,7 +121,7 @@ class _SgtFormatter(logging.Formatter):
         return timestamp.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
 
 
-def _configure_logging(log_file: Path) -> None:
+def _configure_logging(log_file: Path, logger: logging.Logger) -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     formatter = _SgtFormatter("[%(asctime)s SGT] %(message)s")
     for handler in (
@@ -124,13 +129,26 @@ def _configure_logging(log_file: Path) -> None:
         logging.FileHandler(log_file, encoding="utf-8"),
     ):
         handler.setFormatter(formatter)
-        LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.propagate = False
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
-def main() -> int:
-    args = parse_args()
+def run_pipeline(
+    *,
+    compute,
+    persist,
+    description: str,
+    default_database: Path,
+    default_log: Path,
+    logger_name: str,
+) -> int:
+    args = parse_args(
+        description=description,
+        default_database=default_database,
+        default_log=default_log,
+    )
+    logger = logging.getLogger(logger_name)
     runs = tuple(
         path.expanduser().resolve()
         for path in (args.run if args.run is not None else DEFAULT_RUNS)
@@ -141,17 +159,17 @@ def main() -> int:
     database = args.database.expanduser().resolve()
     database.parent.mkdir(parents=True, exist_ok=True)
     log_file = args.log_file.expanduser().resolve()
-    _configure_logging(log_file)
+    _configure_logging(log_file, logger)
 
     days = _days(args.start_date, args.end_date)
-    LOGGER.info(
+    logger.info(
         "Processing %d dates with %d workers and %d threads per worker",
         len(days),
         args.workers,
         args.threads_per_worker,
     )
-    LOGGER.info("Output: %s", database)
-    LOGGER.info("Log: %s", log_file)
+    logger.info("Output: %s", database)
+    logger.info("Log: %s", log_file)
 
     # A fresh PID per date prevents the DuckDB process-state slowdown observed
     # when a worker handled successive dates.
@@ -162,7 +180,7 @@ def main() -> int:
     try:
         futures = [
             executor.submit(
-                compute_daily_pairwise,
+                compute,
                 result_date,
                 runs,
                 args.threads_per_worker,
@@ -175,8 +193,8 @@ def main() -> int:
         with duckdb.connect(str(database)) as writer:
             for completed, future in enumerate(as_completed(futures), start=1):
                 result_date, result, worker_pid, compute_seconds = future.result()
-                persist_daily_pairwise(writer, result_date, result)
-                LOGGER.info(
+                persist(writer, result_date, result)
+                logger.info(
                     "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
                     result_date,
                     worker_pid,
@@ -186,14 +204,25 @@ def main() -> int:
                 )
             writer.execute("CHECKPOINT")
 
-        LOGGER.info("Saved daily_pairwise to %s", database)
+        logger.info("Saved pairwise statistics to %s", database)
         return 0
     except Exception:
-        LOGGER.exception("daily_pairwise failed")
+        logger.exception("Pairwise processing failed")
         raise
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
         logging.shutdown()
+
+
+def main() -> int:
+    return run_pipeline(
+        compute=compute_daily_pairwise,
+        persist=persist_daily_pairwise,
+        description="Persist daily pairwise statistics with isolated workers.",
+        default_database=DEFAULT_DATABASE,
+        default_log=DEFAULT_LOG,
+        logger_name="daily_pairwise",
+    )
 
 
 if __name__ == "__main__":
