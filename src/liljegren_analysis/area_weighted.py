@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import date
 from pathlib import Path
@@ -12,6 +13,42 @@ import pyarrow as pa
 
 from ._persistence import PairwiseTableSchema, persist_date_partition
 from .pairwise import _combined_results
+
+
+ERA5_GRID_SPACING_DEGREES = 0.25
+_ERA5_LATITUDE_SCALE = 10_000
+_ERA5_LATITUDE_STEP = round(
+    ERA5_GRID_SPACING_DEGREES * _ERA5_LATITUDE_SCALE
+)
+_ERA5_MAX_LATITUDE = 90 * _ERA5_LATITUDE_SCALE
+
+
+def _normalized_cell_area_weight(latitude_degrees: float) -> float:
+    half_spacing = ERA5_GRID_SPACING_DEGREES / 2.0
+    lower = math.radians(max(-90.0, latitude_degrees - half_spacing))
+    upper = math.radians(min(90.0, latitude_degrees + half_spacing))
+    normalization = 2.0 * math.sin(math.radians(half_spacing))
+    return (math.sin(upper) - math.sin(lower)) / normalization
+
+
+def _precomputed_latitude_weights() -> pa.Table:
+    latitude_units = range(
+        -_ERA5_MAX_LATITUDE,
+        _ERA5_MAX_LATITUDE + 1,
+        _ERA5_LATITUDE_STEP,
+    )
+    codes: list[str] = []
+    weights: list[float] = []
+    for units in latitude_units:
+        hemisphere = "s" if units < 0 else "n"
+        codes.append(f"{hemisphere}{abs(units):06d}")
+        weights.append(
+            _normalized_cell_area_weight(units / _ERA5_LATITUDE_SCALE)
+        )
+    return pa.table({"latitude_code": codes, "area_weight": weights})
+
+
+_ERA5_LATITUDE_WEIGHTS = _precomputed_latitude_weights()
 
 
 DAILY_AREA_WEIGHTED_PAIRWISE_SCHEMA = PairwiseTableSchema(
@@ -60,47 +97,23 @@ paired_values AS (
        AND left_result.row_id = right_result.row_id
        AND left_result.implementation < right_result.implementation
 ),
-located_values AS (
-    SELECT
-        *,
-        CASE
-            WHEN regexp_matches(
-                row_id,
-                '^era5-global-[ns][0-9]{6}-.+'
-            )
-            THEN
-                CASE
-                    WHEN regexp_extract(
-                        row_id,
-                        '^era5-global-([ns])([0-9]{6})-',
-                        1
-                    ) = 's'
-                    THEN -1.0
-                    ELSE 1.0
-                END
-                * CAST(
-                    regexp_extract(
-                        row_id,
-                        '^era5-global-([ns])([0-9]{6})-',
-                        2
-                    ) AS INTEGER
-                )
-                / 10000.0
-            ELSE error('Invalid ERA5 row_id: ' || row_id)
-        END AS latitude_degrees
-    FROM paired_values
-),
 weighted_values AS (
     SELECT
-        result_date,
-        implementation_a,
-        implementation_b,
-        difference_c,
-        (
-            sin(radians(least(90.0, latitude_degrees + 0.125)))
-            - sin(radians(greatest(-90.0, latitude_degrees - 0.125)))
-        ) / (2.0 * sin(radians(0.125))) AS area_weight
-    FROM located_values
+        paired.result_date,
+        paired.implementation_a,
+        paired.implementation_b,
+        paired.difference_c,
+        CASE
+            WHEN regexp_full_match(
+                paired.row_id,
+                '^era5-global-[ns][0-9]{6}-.+$'
+            ) AND latitude.area_weight IS NOT NULL
+            THEN latitude.area_weight
+            ELSE error('Invalid ERA5 row_id: ' || paired.row_id)
+        END AS area_weight
+    FROM paired_values AS paired
+    LEFT JOIN _era5_latitude_weights AS latitude
+        ON substring(paired.row_id, 13, 7) = latitude.latitude_code
 ),
 daily_sums AS (
     SELECT
@@ -180,6 +193,10 @@ def compute_daily_area_weighted_pairwise(
     started = monotonic()
     with duckdb.connect() as connection:
         connection.execute(f"SET threads = {threads}")
+        connection.register(
+            "_era5_latitude_weights",
+            _ERA5_LATITUDE_WEIGHTS,
+        )
         all_results = _combined_results(result_date, runs, connection)
         result = all_results.query(
             "results",
