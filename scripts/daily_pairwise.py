@@ -17,6 +17,7 @@ from liljegren_analysis import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )
+from liljegren_analysis.pairwise_sql import SAMPLE_SCOPES
 
 
 REPOSITORY = Path(__file__).parents[1]
@@ -28,19 +29,19 @@ DEFAULT_RUNS = (
     / "era5-2025-meteor-m4-w18"
     / "wbgt-comparison-20260810-231240",
 )
-DEFAULT_DATABASE = REPOSITORY / "data" / "daily_pairwise_v2.duckdb"
-DEFAULT_LOG = REPOSITORY / "data" / "daily_pairwise_v2.log"
 SGT = ZoneInfo("Asia/Singapore")
+_OUTPUT_STEMS = {
+    "pairwise": "daily_pairwise_v4",
+    "all-implementations": "daily_pairwise_all_implementations_v4",
+}
 
 
-def parse_args(
-    *,
-    description: str = "Persist daily pairwise statistics with isolated workers.",
-    default_database: Path = DEFAULT_DATABASE,
-    default_log: Path = DEFAULT_LOG,
-) -> argparse.Namespace:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=description,
+        description=(
+            "Persist row- and area-weighted daily pairwise summaries with "
+            "isolated date workers."
+        ),
     )
     parser.add_argument(
         "--start-date",
@@ -63,14 +64,21 @@ def parse_args(
     parser.add_argument(
         "--database",
         type=Path,
-        default=default_database,
-        help=f"Output DuckDB file (default: {default_database}).",
+        help="Output DuckDB file (default: derived from the selected modes).",
     )
     parser.add_argument(
         "--log-file",
         type=Path,
-        default=default_log,
-        help=f"Append progress logs to this file (default: {default_log}).",
+        help="Progress log (default: derived from the selected modes).",
+    )
+    parser.add_argument(
+        "--sample-scope",
+        choices=SAMPLE_SCOPES,
+        default="pairwise",
+        help=(
+            "Valid rows required per pair or across all seven "
+            "implementations (default: pairwise)."
+        ),
     )
     parser.add_argument(
         "--workers",
@@ -87,6 +95,11 @@ def parse_args(
     args = parser.parse_args()
     if args.start_date > args.end_date:
         parser.error("--start-date must not be after --end-date")
+    stem = _OUTPUT_STEMS[args.sample_scope]
+    if args.database is None:
+        args.database = REPOSITORY / "data" / f"{stem}.duckdb"
+    if args.log_file is None:
+        args.log_file = REPOSITORY / "data" / f"{stem}.log"
     return args
 
 
@@ -134,21 +147,11 @@ def _configure_logging(log_file: Path, logger: logging.Logger) -> None:
     logger.propagate = False
 
 
-def run_pipeline(
-    *,
-    compute,
-    persist,
-    description: str,
-    default_database: Path,
-    default_log: Path,
-    logger_name: str,
-) -> int:
-    args = parse_args(
-        description=description,
-        default_database=default_database,
-        default_log=default_log,
+def run_pipeline() -> int:
+    args = parse_args()
+    logger = logging.getLogger(
+        f"daily_pairwise.{args.sample_scope}"
     )
-    logger = logging.getLogger(logger_name)
     runs = tuple(
         path.expanduser().resolve()
         for path in (args.run if args.run is not None else DEFAULT_RUNS)
@@ -163,8 +166,10 @@ def run_pipeline(
 
     days = _days(args.start_date, args.end_date)
     logger.info(
-        "Processing %d dates with %d workers and %d threads per worker",
+        "Processing %d dates sample_scope=%s with %d workers "
+        "and %d threads per worker",
         len(days),
+        args.sample_scope,
         args.workers,
         args.threads_per_worker,
     )
@@ -180,10 +185,11 @@ def run_pipeline(
     try:
         futures = [
             executor.submit(
-                compute,
+                compute_daily_pairwise,
                 result_date,
                 runs,
                 args.threads_per_worker,
+                args.sample_scope,
             )
             for result_date in days
         ]
@@ -192,8 +198,15 @@ def run_pipeline(
         # persisted synchronously before the next result is accepted.
         with duckdb.connect(str(database)) as writer:
             for completed, future in enumerate(as_completed(futures), start=1):
-                result_date, result, worker_pid, compute_seconds = future.result()
-                persist(writer, result_date, result)
+                result_date, summaries, worker_pid, compute_seconds = (
+                    future.result()
+                )
+                persist_daily_pairwise(
+                    writer,
+                    result_date,
+                    summaries,
+                    args.sample_scope,
+                )
                 logger.info(
                     "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
                     result_date,
@@ -215,14 +228,7 @@ def run_pipeline(
 
 
 def main() -> int:
-    return run_pipeline(
-        compute=compute_daily_pairwise,
-        persist=persist_daily_pairwise,
-        description="Persist daily pairwise statistics with isolated workers.",
-        default_database=DEFAULT_DATABASE,
-        default_log=DEFAULT_LOG,
-        logger_name="daily_pairwise",
-    )
+    return run_pipeline()
 
 
 if __name__ == "__main__":

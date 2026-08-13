@@ -1,115 +1,102 @@
 # Liljegren WBGT implementation analysis
 
-This repository contains the reproducible analysis supporting a paper that
-compares implementations of the Liljegren wet-bulb globe temperature (WBGT)
-model over HeatStressBench ERA5 runs. It is an analysis repository, not a
-general-purpose Python library. Code under `src/` keeps the computational core
-importable, testable, and safe to execute in child processes. Notebooks support
-first-cut and interactive analysis, while scripts provide hardened headless
-execution of established workflows.
+Reproducible analysis supporting a comparison of Liljegren wet-bulb globe
+temperature implementations over HeatStressBench ERA5 runs. Code under `src/`
+contains testable computation; notebooks provide paper-facing analysis; scripts
+provide hardened headless execution.
 
 ## Analysis design
 
-The analysis matches valid WBGT results by date, run, cycle, and row, then
-computes signed differences for every implementation pair. Differences are
-defined as `implementation_a - implementation_b`, with implementation names
+For each date, valid WBGT values are matched by run, cycle, and row identity.
+Signed differences are `implementation_a - implementation_b`, with names
 ordered lexicographically so each unordered pair appears once.
 
-Pairwise statistics are computed daily in DuckDB and persisted to a local
-database. Each date runs in a fresh child process because reused DuckDB
-processes exhibited progressive slowdown during long runs. A single controller
-writes results synchronously. Versioned schemas, explicit-column inserts, and
-date-scoped transactions make interrupted runs resumable and reruns idempotent.
-Overlapping run/implementation scopes are rejected before results are scanned.
+The v4 production query touches the full-resolution ERA5 results once per date.
+Pairwise scope uses one implementation self-join. Complete-case scope aggregates
+the seven values once and expands the 21 fixed pairs without a join-back or
+self-join. A latitude-weight join and grouped aggregation then emit:
 
-The yearly notebook pools only mergeable daily statistics: counts, means,
-sample variances, MAE, RMSE, and extrema. Daily approximate quantiles are not
-pooled because scalar quantiles cannot reconstruct observation-level yearly
-quantiles.
+- exact unweighted and cell-area-weighted sufficient sums and extrema;
+- a fixed-bin absolute-difference histogram for annual P50/P95/P99.
 
-A separate ERA5 analysis weights every selected land grid cell by its exact
-spherical 0.25-degree cell area. It reports weighted population moments without
-changing the row-weighted statistics or their interpretation.
+Daily partitions are persisted atomically to one DuckDB cache. Interrupted runs
+are resumable and reruns replace dates idempotently. The annual notebook reads
+only these compact summaries; it never reconstructs observation-level annual
+differences.
+
+The runner supports two populations:
+
+- `pairwise`: each pair uses rows valid for those two implementations;
+- `all-implementations`: every pair uses the same rows valid across the fixed
+  canonical seven implementations.
+
+Both row- and area-weighted statistics are always produced together.
 
 ## Repository structure
 
-- `notebooks/` — first-cut analysis and interactive work that benefits from a
-  GUI, including viewing tables and charts. The daily and yearly pairwise
-  notebooks expose analysis choices and intermediate results directly.
-- `scripts/` — hardened command-line entry points for repeatable headless runs,
-  including logging, validation, concurrency, and failure handling.
-- `src/liljegren_analysis/` — testable shared functions and APIs used by both
-  notebooks and scripts, including result scanning, pairwise SQL,
-  transactional persistence, and pooling calculations.
-- `tests/` — regression tests for result discovery, pairwise aggregation,
-  persistence, and pooled statistics.
-- `docs/` — details of the result layout and statistical formulas.
+- `notebooks/` — interactive daily execution and annual paper analysis.
+- `scripts/` — repeatable headless daily processing.
+- `src/liljegren_analysis/` — result scanning, SQL, distribution definitions,
+  persistence, and pooling formulas.
+- `tests/` — aggregation, persistence, distribution, and pooling regression
+  tests.
+- `docs/` — result layout and statistical method details.
 
-## Inputs and generated data
+## Inputs
 
-The HeatStressBench campaign outputs are external inputs and are not committed.
-Each campaign root supplied to the analysis must contain:
+Each supplied HeatStressBench campaign root must contain:
 
 ```text
 results/<date>/<run>/<implementation>/results.parquet
 ```
 
-Local campaign paths under `.hsb/` and generated files under `data/` are
-ignored by Git. The default paths in the script and notebook identify the runs
-used by this analysis and may need to be changed when reproducing it elsewhere.
+Campaigns under `.hsb/` and generated files under `data/` are ignored by Git.
 
-## Reproducible environment
+## Environment
 
-Python 3.12 or newer and
-[uv](https://docs.astral.sh/uv/) are required. Create or synchronize the locked
-project environment with:
+Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) are required.
 
 ```bash
 uv sync
-```
-
-Run the test suite before analysis:
-
-```bash
 uv run pytest -q
 ```
 
 ## Run the analysis
 
-For an interactive run, start Jupyter and execute the daily notebook before the
-yearly notebook:
-
-```bash
-uv run jupyter lab
-```
-
-For command-line daily processing, provide one or more HeatStressBench campaign
-roots as needed:
+The default pair-specific run writes `data/daily_pairwise_v4.duckdb`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
   --run /path/to/campaign \
-  --database data/daily_pairwise_v2.duckdb
+  --sample-scope pairwise
 ```
 
-Run the independent ERA5 cell-area-weighted pipeline with:
+The paper complete-case cache writes
+`data/daily_pairwise_all_implementations_v4.duckdb`:
 
 ```bash
-uv run python scripts/daily_pairwise_area_weighted.py \
-  --start-date 2025-01-01 \
-  --end-date 2025-12-31 \
-  --run /path/to/campaign \
-  --database data/daily_pairwise_area_weighted_v1.duckdb
+uv run python scripts/daily_pairwise.py \
+  --sample-scope all-implementations
 ```
 
-`yearly_pairwise.ipynb` reads the v2 row-weighted database;
-`yearly_pairwise_area_weighted.ipynb` reads the independent weighted database.
-Both require complete daily coverage for each implementation pair.
+Matching log paths are derived automatically. `--database` and `--log-file`
+override the defaults. Each date uses a fresh worker process; the controller is
+the only database writer.
+
+For annual analysis:
+
+```bash
+uv run jupyter lab
+```
+
+Open `notebooks/yearly_pairwise.ipynb`. It pools exact sums, reconstructs
+histogram quantile intervals, and builds row/area-weighted matrices including
+parametric limits of agreement.
 
 ## Method documentation
 
 - [Campaign result scanning and DuckDB relations](docs/results.md)
-- [Daily-to-overall pairwise statistics](docs/pairwise-statistics.md)
-- [ERA5 cell-area-weighted statistics](docs/area-weighted-statistics.md)
+- [Single-pass pairwise statistics](docs/pairwise-statistics.md)
+- [ERA5 cell-area weighting](docs/area-weighted-statistics.md)

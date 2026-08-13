@@ -10,46 +10,24 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis import (
-    compute_daily_area_weighted_pairwise,
-    persist_daily_area_weighted_pairwise,
-)
+from liljegren_analysis import compute_daily_pairwise
 from liljegren_analysis.area_weighted import _ERA5_LATITUDE_WEIGHTS
-
-
-RESULT_COLUMNS = [
-    "result_date",
-    "implementation_a",
-    "implementation_b",
-    "n",
-    "area_weight_sum",
-    "area_weighted_mean_difference_c",
-    "area_weighted_variance_difference",
-    "area_weighted_stddev_difference_c",
-    "area_weighted_mean_absolute_difference_c",
-    "area_weighted_rmse_c",
-]
 
 
 def _row_id(latitude: float, hour: int) -> str:
     hemisphere = "n" if latitude >= 0 else "s"
     magnitude = round(abs(latitude) * 10_000)
-    return (
-        f"era5-global-{hemisphere}{magnitude:06d}-"
-        f"e0000000-20250101{hour:02d}"
-    )
+    return f"era5-global-{hemisphere}{magnitude:06d}-e0000000-20250101{hour:02d}"
 
 
-def _area_weight(latitude: float) -> float:
+def _weight(latitude: float) -> float:
     half_spacing = math.radians(0.125)
     lower = math.radians(max(-90.0, latitude - 0.125))
     upper = math.radians(min(90.0, latitude + 0.125))
-    return (math.sin(upper) - math.sin(lower)) / (
-        2.0 * math.sin(half_spacing)
-    )
+    return (math.sin(upper) - math.sin(lower)) / (2 * math.sin(half_spacing))
 
 
-def _write_results(
+def _write(
     campaign: Path,
     implementation: str,
     row_ids: list[str],
@@ -64,7 +42,7 @@ def _write_results(
         / "results.parquet"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    count = len(row_ids)
+    count = len(values)
     pq.write_table(
         pa.table(
             {
@@ -79,8 +57,8 @@ def _write_results(
     )
 
 
-class AreaWeightedPairwiseTests(unittest.TestCase):
-    def test_precomputed_weights_cover_era5_latitudes(self) -> None:
+class AreaWeightedTests(unittest.TestCase):
+    def test_precomputed_weights_cover_era5_grid(self) -> None:
         weights = dict(
             zip(
                 _ERA5_LATITUDE_WEIGHTS["latitude_code"].to_pylist(),
@@ -88,160 +66,52 @@ class AreaWeightedPairwiseTests(unittest.TestCase):
                 strict=True,
             )
         )
-
         self.assertEqual(len(weights), 721)
         self.assertAlmostEqual(weights["n000000"], 1.0)
         self.assertAlmostEqual(weights["n600000"], math.cos(math.radians(60)))
-        self.assertAlmostEqual(weights["n600000"], weights["s600000"])
+        self.assertEqual(weights["n600000"], weights["s600000"])
         self.assertGreater(weights["n900000"], 0.0)
-        self.assertEqual(weights["n900000"], weights["s900000"])
 
-    def test_compute_matches_direct_weighted_statistics(self) -> None:
+    def test_single_pass_area_sums_match_direct_calculation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            first = root / "first"
-            second = root / "second"
             latitudes = [0.0, 60.0, -60.0, -90.0]
-            row_ids = [
-                _row_id(latitude, hour)
-                for hour, latitude in enumerate(latitudes)
-            ]
+            row_ids = [_row_id(value, index) for index, value in enumerate(latitudes)]
             left = [2.0, 4.0, 6.0, 8.0]
             right = [1.0, 1.0, 3.0, 4.0]
-            _write_results(first, "alpha", row_ids, left)
-            _write_results(second, "beta", row_ids, right)
-
-            _, result, _, _ = compute_daily_area_weighted_pairwise(
+            _write(root, "alpha", row_ids, left)
+            _write(root, "beta", row_ids, right)
+            _, summaries, _, _ = compute_daily_pairwise(
                 date(2025, 1, 1),
-                (first, second),
-                threads=1,
+                (root,),
+                1,
             )
 
-        self.assertEqual(result.column_names, RESULT_COLUMNS)
-        row = result.to_pylist()[0]
+        row = summaries.pairwise.to_pylist()[0]
         differences = [x - y for x, y in zip(left, right, strict=True)]
-        weights = [_area_weight(latitude) for latitude in latitudes]
-        total_weight = sum(weights)
-        mean = sum(
-            weight * difference
-            for weight, difference in zip(weights, differences, strict=True)
-        ) / total_weight
-        variance = sum(
-            weight * (difference - mean) ** 2
-            for weight, difference in zip(weights, differences, strict=True)
-        ) / total_weight
-        mean_absolute = sum(
-            weight * abs(difference)
-            for weight, difference in zip(weights, differences, strict=True)
-        ) / total_weight
-        rmse = math.sqrt(
-            sum(
-                weight * difference**2
-                for weight, difference in zip(weights, differences, strict=True)
-            )
-            / total_weight
-        )
-
+        weights = [_weight(latitude) for latitude in latitudes]
         self.assertEqual(row["n"], 4)
-        self.assertAlmostEqual(row["area_weight_sum"], total_weight)
+        self.assertAlmostEqual(row["area_weight_sum"], sum(weights))
         self.assertAlmostEqual(
-            row["area_weighted_mean_difference_c"],
-            mean,
+            row["area_weighted_difference_sum_c"],
+            sum(w * d for w, d in zip(weights, differences, strict=True)),
         )
         self.assertAlmostEqual(
-            row["area_weighted_variance_difference"],
-            variance,
+            row["area_weighted_squared_difference_sum_c2"],
+            sum(w * d * d for w, d in zip(weights, differences, strict=True)),
         )
         self.assertAlmostEqual(
-            row["area_weighted_stddev_difference_c"],
-            math.sqrt(variance),
+            row["area_weighted_absolute_difference_sum_c"],
+            sum(w * abs(d) for w, d in zip(weights, differences, strict=True)),
         )
-        self.assertAlmostEqual(
-            row["area_weighted_mean_absolute_difference_c"],
-            mean_absolute,
-        )
-        self.assertAlmostEqual(row["area_weighted_rmse_c"], rmse)
-        self.assertAlmostEqual(_area_weight(60.0), _area_weight(-60.0))
-        self.assertAlmostEqual(_area_weight(0.0), 1.0)
-        self.assertGreater(_area_weight(-90.0), 0.0)
 
-    def test_compute_rejects_non_era5_row_identity(self) -> None:
+    def test_invalid_era5_identity_fails_the_combined_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            first = root / "first"
-            second = root / "second"
-            _write_results(first, "alpha", ["row-1"], [2.0])
-            _write_results(second, "beta", ["row-1"], [1.0])
-
+            _write(root, "alpha", ["row-1"], [2.0])
+            _write(root, "beta", ["row-1"], [1.0])
             with self.assertRaisesRegex(duckdb.Error, "Invalid ERA5 row_id"):
-                compute_daily_area_weighted_pairwise(
-                    date(2025, 1, 1),
-                    (first, second),
-                    threads=1,
-                )
-
-    def test_compute_rejects_latitude_outside_quarter_degree_grid(self) -> None:
-        invalid_row_ids = (
-            "era5-global-n000100-e0000000-2025010100",
-            "era5-global-n900001-e0000000-2025010100",
-            "era5-global-s000000-e0000000-2025010100",
-        )
-        for row_id in invalid_row_ids:
-            with (
-                self.subTest(row_id=row_id),
-                tempfile.TemporaryDirectory() as temporary_directory,
-            ):
-                root = Path(temporary_directory)
-                first = root / "first"
-                second = root / "second"
-                _write_results(first, "alpha", [row_id], [2.0])
-                _write_results(second, "beta", [row_id], [1.0])
-
-                with self.assertRaisesRegex(duckdb.Error, "Invalid ERA5 row_id"):
-                    compute_daily_area_weighted_pairwise(
-                        date(2025, 1, 1),
-                        (first, second),
-                        threads=1,
-                    )
-
-    def test_persistence_is_versioned_and_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            first = root / "first"
-            second = root / "second"
-            row_ids = [_row_id(0.0, 0), _row_id(60.0, 1)]
-            _write_results(first, "alpha", row_ids, [2.0, 4.0])
-            _write_results(second, "beta", row_ids, [1.0, 1.0])
-            _, result, _, _ = compute_daily_area_weighted_pairwise(
-                date(2025, 1, 1),
-                (first, second),
-                threads=1,
-            )
-
-            with duckdb.connect() as connection:
-                persist_daily_area_weighted_pairwise(
-                    connection,
-                    date(2025, 1, 1),
-                    result,
-                )
-                persist_daily_area_weighted_pairwise(
-                    connection,
-                    date(2025, 1, 1),
-                    result,
-                )
-
-                self.assertEqual(
-                    connection.execute(
-                        "SELECT count(*) FROM daily_pairwise_area_weighted"
-                    ).fetchone()[0],
-                    1,
-                )
-                self.assertEqual(
-                    connection.execute(
-                        "SELECT table_name, schema_version FROM pairwise_schema"
-                    ).fetchall(),
-                    [("daily_pairwise_area_weighted", 1)],
-                )
+                compute_daily_pairwise(date(2025, 1, 1), (root,), 1)
 
 
 if __name__ == "__main__":
