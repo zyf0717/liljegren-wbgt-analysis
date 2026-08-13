@@ -17,7 +17,7 @@ from liljegren_analysis import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )
-from liljegren_analysis.pairwise_sql import SAMPLE_SCOPES
+from liljegren_analysis.comparison.sql import SAMPLE_SCOPES
 
 
 REPOSITORY = Path(__file__).parents[1]

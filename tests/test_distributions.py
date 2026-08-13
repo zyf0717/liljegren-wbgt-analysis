@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from liljegren_analysis.distributions import (
+from liljegren_analysis.comparison.distributions import (
     absolute_difference_bin_bounds,
 )
 

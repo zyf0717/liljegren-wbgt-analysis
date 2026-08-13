@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from liljegren_analysis.country_cells import Country, country_cells, load_countries
+from liljegren_analysis.country.cells import Country, country_cells, load_countries
 from shapely.geometry import box
 
 

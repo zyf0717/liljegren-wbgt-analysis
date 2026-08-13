@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
-from liljegren_analysis.country_cells import (
+from liljegren_analysis.country.cells import (
     NATURAL_EARTH_VERSION,
     cached_natural_earth_boundaries,
     country_cells,

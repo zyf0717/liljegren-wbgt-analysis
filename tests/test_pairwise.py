@@ -11,12 +11,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from liljegren_analysis import compute_daily_pairwise, persist_daily_pairwise
-from liljegren_analysis.area_weighted import _ERA5_LATITUDE_WEIGHTS
-from liljegren_analysis.pairwise import (
+from liljegren_analysis.comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
+from liljegren_analysis.comparison.pairwise import (
     DailyPairwiseSummaries,
     _combined_results,
 )
-from liljegren_analysis.pairwise_sql import (
+from liljegren_analysis.comparison.sql import (
     EXPECTED_IMPLEMENTATIONS,
     build_daily_pairwise_sql,
 )

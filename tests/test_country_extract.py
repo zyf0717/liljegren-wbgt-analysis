@@ -18,7 +18,7 @@ from liljegren_analysis import (
     extract_countries_observations,
     extract_country_observations,
 )
-from liljegren_analysis.country_extract import _parquet_may_overlap
+from liljegren_analysis.country.extraction import _parquet_may_overlap
 
 
 def _write_boundaries(path: Path) -> None:
@@ -251,9 +251,10 @@ class CountryExtractionTests(unittest.TestCase):
             progress: list[CountryExtractionProgress] = []
 
             with patch(
-                "liljegren_analysis.country_extract._create_results_view",
+                "liljegren_analysis.country.extraction._create_results_view",
                 wraps=__import__(
-                    "liljegren_analysis.country_extract", fromlist=["_create_results_view"]
+                    "liljegren_analysis.country.extraction",
+                    fromlist=["_create_results_view"],
                 )._create_results_view,
             ) as create_results_view:
                 extractions = extract_countries_observations(
@@ -360,7 +361,7 @@ class CountryExtractionTests(unittest.TestCase):
             _write_results(campaign)
 
             with patch(
-                "liljegren_analysis.country_extract._execute_scan",
+                "liljegren_analysis.country.extraction._execute_scan",
                 side_effect=KeyboardInterrupt,
             ):
                 with self.assertRaises(KeyboardInterrupt):

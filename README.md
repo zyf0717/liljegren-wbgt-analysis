@@ -36,8 +36,11 @@ Both row- and area-weighted statistics are always produced together.
 
 - `notebooks/` — interactive daily execution and annual paper analysis.
 - `scripts/` — repeatable headless daily processing.
-- `src/liljegren_analysis/` — result scanning, SQL, distribution definitions,
-  persistence, and pooling formulas.
+- `src/liljegren_analysis/country/` — country boundaries, grid cells, and
+  observation extraction.
+- `src/liljegren_analysis/comparison/` — pairwise SQL, persistence,
+  distributions, weighting, and pooling formulas.
+- `src/liljegren_analysis/results.py` — shared campaign result scanning.
 - `tests/` — aggregation, persistence, distribution, and pooling regression
   tests.
 - `docs/` — result layout and statistical method details.
