@@ -12,6 +12,7 @@ dependencies = [
     "duckdb",
     "numpy",
     "pyarrow",
+    "shapely>=2.1,<3",
 ]
 
 [dependency-groups]

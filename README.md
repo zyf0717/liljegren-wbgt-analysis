@@ -95,6 +95,24 @@ Open `notebooks/yearly_pairwise.ipynb`. It pools exact sums, reconstructs
 histogram quantile intervals, and builds row/area-weighted matrices including
 parametric limits of agreement.
 
+For raw Singapore classification-transition analysis with editable thresholds,
+open `notebooks/sg_classification_changes.ipynb`. DuckDB filters country cells
+from Parquet, then the bounded observations and all subsequent analysis remain
+inspectable pandas DataFrames. It does not compute global agreement statistics.
+
+To select all 0.25-degree ERA5 cell footprints intersecting one or more ADM0
+countries, pass ISO alpha-2 or alpha-3 codes:
+
+```bash
+uv run python scripts/country_cells.py SG JPN \
+  --output data/country_cells_sg_jpn.csv
+```
+
+The script uses checksum-pinned Natural Earth 10m boundaries and emits both a
+28-character `cell_id` and the matching `row_id_prefix`. Boundary-intersecting
+cells are retained even when their centers fall outside the country, which is
+required for countries smaller than one ERA5 cell.
+
 ## Method documentation
 
 - [Campaign result scanning and DuckDB relations](docs/results.md)
