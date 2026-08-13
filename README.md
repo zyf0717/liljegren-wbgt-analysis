@@ -95,11 +95,26 @@ Open `notebooks/yearly_pairwise.ipynb`. It pools exact sums, reconstructs
 histogram quantile intervals, and builds row/area-weighted matrices including
 parametric limits of agreement.
 
+Extract the reusable country-specific Parquet cache before opening the country
+classification notebook:
+
+```bash
+uv run python scripts/extract_country.py JPN
+```
+
+The default output is `data/country/<iso3>/observations.parquet`, accompanied by
+`manifest.json`. Use `--start-date`, `--end-date`, repeatable `--run`, and
+`--threads` to change extraction scope; existing caches require explicit
+`--force` replacement.
+
 For raw country classification-transition analysis with editable thresholds,
-open `notebooks/country_classification_changes.ipynb`. Edit the parameters cell
-immediately after the imports: `COUNTRY_CODE` accepts ISO alpha-2 or alpha-3
+open `notebooks/country_classification_changes.ipynb`. It reads the cached
+country observations rather than rescanning campaign Parquet. Edit the
+parameters cell immediately after the imports: `COUNTRY_CODE` accepts ISO
+alpha-2 or alpha-3
 (default `SG`; use `JPN` for Japan), while the dates, thresholds, and DuckDB
-thread count are also declared there. DuckDB filters country cells from Parquet,
+thread count are also declared there. Setting `DUCKDB_THREADS` to zero keeps
+DuckDB's default. DuckDB filters country cells from Parquet,
 then the bounded observations and all subsequent analysis remain inspectable
 pandas DataFrames. It does not compute global agreement statistics. For large
 countries, narrow `ANALYSIS_START_DATE` and `ANALYSIS_END_DATE` to keep the
