@@ -95,10 +95,15 @@ Open `notebooks/yearly_pairwise.ipynb`. It pools exact sums, reconstructs
 histogram quantile intervals, and builds row/area-weighted matrices including
 parametric limits of agreement.
 
-For raw Singapore classification-transition analysis with editable thresholds,
-open `notebooks/sg_classification_changes.ipynb`. DuckDB filters country cells
-from Parquet, then the bounded observations and all subsequent analysis remain
-inspectable pandas DataFrames. It does not compute global agreement statistics.
+For raw country classification-transition analysis with editable thresholds,
+open `notebooks/country_classification_changes.ipynb`. Edit the parameters cell
+immediately after the imports: `COUNTRY_CODE` accepts ISO alpha-2 or alpha-3
+(default `SG`; use `JPN` for Japan), while the dates, thresholds, and DuckDB
+thread count are also declared there. DuckDB filters country cells from Parquet,
+then the bounded observations and all subsequent analysis remain inspectable
+pandas DataFrames. It does not compute global agreement statistics. For large
+countries, narrow `ANALYSIS_START_DATE` and `ANALYSIS_END_DATE` to keep the
+pandas working set manageable.
 
 To select all 0.25-degree ERA5 cell footprints intersecting one or more ADM0
 countries, pass ISO alpha-2 or alpha-3 codes:
