@@ -1,4 +1,4 @@
-"""Compute and persist single-pass daily pairwise WBGT summaries."""
+"""Compute and persist single-pass daily temperature summaries."""
 
 from __future__ import annotations
 
@@ -22,15 +22,18 @@ from .distributions import ABS_HISTOGRAM_VERSION
 from .sql import (
     EXPECTED_IMPLEMENTATIONS,
     IMPLEMENTATION_SET_VERSION,
+    QUANTITY_SCOPE,
+    QUANTITY_SET_VERSION,
     SAMPLE_SCOPES,
     SampleScope,
     build_daily_pairwise_sql,
 )
-from ..results import CampaignResults
+from ..results import RESULT_QUANTITIES, RESULT_SCHEMA_ID, CampaignResults
 
 
 PAIRWISE_COLUMNS = (
     "result_date",
+    "quantity",
     "implementation_a",
     "implementation_b",
     "n",
@@ -53,6 +56,7 @@ PAIRWISE_COLUMNS = (
 )
 ABS_HISTOGRAM_COLUMNS = (
     "result_date",
+    "quantity",
     "implementation_a",
     "implementation_b",
     "abs_bin_id",
@@ -61,12 +65,24 @@ ABS_HISTOGRAM_COLUMNS = (
     "n",
     "area_weight_sum",
 )
+QUANTITY_STATUS_COLUMNS = (
+    "result_date",
+    "quantity",
+    "implementation",
+    "status",
+    "value_present",
+    "n",
+    "area_weight_sum",
+)
+
+
 @dataclass(frozen=True)
 class DailyPairwiseSummaries:
     """Compact results from one date-scoped full-data pass."""
 
     pairwise: pa.Table
     abs_histogram: pa.Table
+    quantity_status: pa.Table
 
 
 def compute_daily_pairwise(
@@ -95,7 +111,7 @@ def compute_daily_pairwise(
 
     summaries = _split_summaries(combined)
     if sample_scope == "all-implementations":
-        expected_pairs = len(EXPECTED_IMPLEMENTATIONS) * (
+        expected_pairs = len(RESULT_QUANTITIES) * len(EXPECTED_IMPLEMENTATIONS) * (
             len(EXPECTED_IMPLEMENTATIONS) - 1
         ) // 2
         if summaries.pairwise.num_rows != expected_pairs:
@@ -122,6 +138,7 @@ def persist_daily_pairwise(
         {
             "daily_pairwise": summaries.pairwise,
             "daily_pairwise_abs_histogram": summaries.abs_histogram,
+            "daily_quantity_status": summaries.quantity_status,
         },
         _database_schema(sample_scope),
     )
@@ -135,12 +152,14 @@ def _split_summaries(combined: pa.Table) -> DailyPairwiseSummaries:
     return DailyPairwiseSummaries(
         pairwise=rows("pairwise", PAIRWISE_COLUMNS),
         abs_histogram=rows("abs_histogram", ABS_HISTOGRAM_COLUMNS),
+        quantity_status=rows("quantity_status", QUANTITY_STATUS_COLUMNS),
     )
 
 
 def _database_schema(sample_scope: SampleScope) -> PairwiseDatabaseSchema:
     pair_identity = (
         ("result_date", "DATE", False),
+        ("quantity", "VARCHAR", False),
         ("implementation_a", "VARCHAR", False),
         ("implementation_b", "VARCHAR", False),
     )
@@ -170,25 +189,54 @@ def _database_schema(sample_scope: SampleScope) -> PairwiseDatabaseSchema:
         ("n", "BIGINT", False),
         ("area_weight_sum", "DOUBLE", False),
     )
+    quantity_status_columns = (
+        ("result_date", "DATE", False),
+        ("quantity", "VARCHAR", False),
+        ("implementation", "VARCHAR", False),
+        ("status", "VARCHAR", False),
+        ("value_present", "BOOLEAN", False),
+        ("n", "BIGINT", False),
+        ("area_weight_sum", "DOUBLE", False),
+    )
     return PairwiseDatabaseSchema(
-        version=4,
+        version=5,
         sample_scope=sample_scope,
+        result_schema_id=RESULT_SCHEMA_ID,
+        quantity_scope=QUANTITY_SCOPE,
+        quantity_set_version=QUANTITY_SET_VERSION,
         implementation_set_version=IMPLEMENTATION_SET_VERSION,
         abs_histogram_version=ABS_HISTOGRAM_VERSION,
         tables=(
             TableSchema(
                 "daily_pairwise",
                 pairwise_columns,
-                ("result_date", "implementation_a", "implementation_b"),
+                (
+                    "result_date",
+                    "quantity",
+                    "implementation_a",
+                    "implementation_b",
+                ),
             ),
             TableSchema(
                 "daily_pairwise_abs_histogram",
                 histogram_columns,
                 (
                     "result_date",
+                    "quantity",
                     "implementation_a",
                     "implementation_b",
                     "abs_bin_id",
+                ),
+            ),
+            TableSchema(
+                "daily_quantity_status",
+                quantity_status_columns,
+                (
+                    "result_date",
+                    "quantity",
+                    "implementation",
+                    "status",
+                    "value_present",
                 ),
             ),
         ),

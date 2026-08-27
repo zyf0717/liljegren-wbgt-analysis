@@ -22,8 +22,8 @@ Open a campaign and construct a scoped relation:
 campaign = (
     repository
     / ".hsb"
-    / "campaigns"
-    / "era5-2025-all-six-m2-w20-v8"
+    / "runs"
+    / "wbgt-comparison-20260823-181813"
 )
 
 results = CampaignResults.from_campaign(campaign)
@@ -42,6 +42,8 @@ results.scan(
     run_ids=None,
     implementation=None,
     implementations=None,
+    quantity=None,
+    quantities=None,
     include_filename=False,
 )
 ```
@@ -56,13 +58,15 @@ results.scan(
 | `run_ids` | Multiple runs/shards | `[1, 2, 8]` | No explicit run set |
 | `implementation` | One implementation | `"meteor"` | All implementations |
 | `implementations` | Multiple implementations | `["heatstress", "meteor"]` | No explicit implementation set |
+| `quantity` | One temperature quantity | `"tg"` | All quantities unless `quantities` is supplied |
+| `quantities` | Multiple quantities | `["wbgt", "tnwb"]` | All three quantities |
 | `include_filename` | Source-file provenance | `True` | Filename excluded |
 
 Date arguments accept ISO strings or `datetime.date` values. Use one of an
 exact `result_date`, explicit `dates`, or both range arguments. Singular and
-plural run/implementation forms are mutually exclusive. Integer run IDs are
-padded to four digits. Duplicate plural values are removed; empty selections
-are rejected.
+plural run, implementation, and quantity forms are mutually exclusive. Integer
+run IDs are padded to four digits. Duplicate plural values are removed; empty
+selections are rejected. Quantities use canonical order `wbgt`, `tg`, `tnwb`.
 
 The scanner generates exact path cross-products for scoped values. This is
 important because the directory structure is not Hive-style: applying a SQL
@@ -75,6 +79,7 @@ Common scopes:
 results.scan(result_date="2025-01-01")
 results.scan(result_date="2025-01-01", run_id=1)
 results.scan(implementation="heatstress")
+results.scan(result_date="2025-01-01", quantity="tg")
 
 results.scan(
     dates=["2025-01-01", "2025-01-07"],
@@ -103,9 +108,16 @@ and query it carefully.
 | `cycle_ordinal` | Parquet result column |
 | `row_id` | Parquet result identity |
 | `row_ordinal` | Parquet result order |
-| `status` | Parquet result status |
-| `value_c` | WBGT result in degrees Celsius |
+| `wbgt_status`, `wbgt_c` | WBGT status and value in degrees Celsius |
+| `tg_status`, `tg_c` | Globe-temperature status and value in degrees Celsius |
+| `tnwb_status`, `tnwb_c` | Natural wet-bulb status and value in degrees Celsius |
 | `filename` | Source path, only with `include_filename=True` |
+
+All source files must contain the three identity columns and all six qualified
+quantity columns with string statuses and numeric values. Extra columns are
+ignored. Legacy `status`/`value_c` files are rejected. A quantity selector
+controls the output projection and Parquet column pruning, but schema validation
+still requires the complete qualified source schema.
 
 The return value is a `duckdb.DuckDBPyRelation`. `.query()`, `.filter()`,
 `.project()`, `.aggregate()`, `.order()`, and `.union()` remain lazy. `.df()`,
@@ -119,12 +131,10 @@ Relations must use the same DuckDB connection before they can be unioned:
 import duckdb
 
 runs = [
-    repository / ".hsb" / "campaigns" / "era5-2025-all-six-m2-w20-v8",
     repository
     / ".hsb"
     / "runs"
-    / "era5-2025-meteor-m4-w18"
-    / "wbgt-comparison-20260810-231240",
+    / "wbgt-comparison-20260823-181813",
 ]
 
 con = duckdb.connect()
@@ -152,9 +162,9 @@ not create a persistent view. The returned relation remains lazy.
 summary = all_results.query(
     "results",  # Query-local name for all_results.
     """
-    SELECT implementation, count(*) AS observations, avg(value_c) AS mean_c
+    SELECT implementation, count(*) AS observations, avg(tg_c) AS mean_tg_c
     FROM results
-    WHERE status = 'ok'
+    WHERE tg_status = 'ok' AND tg_c IS NOT NULL
     GROUP BY implementation
     ORDER BY implementation
     """,

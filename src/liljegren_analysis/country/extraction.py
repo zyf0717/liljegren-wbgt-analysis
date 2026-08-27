@@ -1,4 +1,4 @@
-"""Extract valid country observations to reusable Parquet caches."""
+"""Extract matched country result rows to reusable Parquet caches."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..results import _validate_result_schema
 from .cells import (
     Country,
     cached_natural_earth_boundaries,
@@ -40,7 +41,8 @@ class CountryExtraction:
     start_date: str
     end_date: str
     selected_cell_count: int
-    observation_count: int
+    result_row_count: int
+    valid_observation_counts: dict[str, int]
     runs: tuple[str, ...]
     parquet_file: str
     parquet_size_bytes: int
@@ -165,10 +167,11 @@ def extract_country_observations(
     progress: ProgressCallback | None = None,
     status_interval_seconds: float = 30.0,
 ) -> CountryExtraction:
-    """Write valid observations for one ADM0 country to Parquet.
+    """Write matched result rows for one ADM0 country to Parquet.
 
-    Cells are selected by positive-area country overlap. Only successful,
-    non-null observations are written. ``threads=0`` keeps DuckDB's default.
+    Cells are selected by positive-area country overlap. All matched result
+    rows and component statuses are written. ``threads=0`` keeps DuckDB's
+    default.
     """
 
     output_path = Path(output).expanduser().resolve()
@@ -334,6 +337,30 @@ def _extract_countries_observations(
                 """
             ).fetchall()
         }
+        valid_counts = {
+            iso_a3: {
+                "wbgt": int(wbgt),
+                "tg": int(tg),
+                "tnwb": int(tnwb),
+            }
+            for iso_a3, wbgt, tg, tnwb in connection.execute(
+                """
+                SELECT
+                    country_iso_a3,
+                    count(*) FILTER (
+                        WHERE wbgt_status = 'ok' AND wbgt_c IS NOT NULL
+                    ),
+                    count(*) FILTER (
+                        WHERE tg_status = 'ok' AND tg_c IS NOT NULL
+                    ),
+                    count(*) FILTER (
+                        WHERE tnwb_status = 'ok' AND tnwb_c IS NOT NULL
+                    )
+                FROM _matched_country_results
+                GROUP BY country_iso_a3
+                """
+            ).fetchall()
+        }
         missing = [
             selection.country.name
             for selection in selections
@@ -341,7 +368,7 @@ def _extract_countries_observations(
         ]
         if missing:
             raise ValueError(
-                f"No valid observations found for {', '.join(missing)} "
+                f"No result rows found for {', '.join(missing)} "
                 f"from {start_date} to {end_date}"
             )
 
@@ -363,6 +390,7 @@ def _extract_countries_observations(
                 end_date,
                 len(selection.cell_ids),
                 counts[iso_a3],
+                valid_counts[iso_a3],
                 resolved_runs,
                 selection.output.name,
                 temporary_output.stat().st_size,
@@ -568,6 +596,7 @@ def _create_results_view(
     connection: duckdb.DuckDBPyConnection, files: Sequence[Path]
 ) -> None:
     relation = connection.read_parquet([path.as_posix() for path in files], filename=True)
+    _validate_result_schema(relation)
     relation.project(
         """
         parse_path(filename)[-4]::DATE AS result_date,
@@ -576,8 +605,12 @@ def _create_results_view(
         cycle_ordinal,
         row_id,
         row_ordinal,
-        status,
-        value_c
+        wbgt_status,
+        wbgt_c,
+        tg_status,
+        tg_c,
+        tnwb_status,
+        tnwb_c
         """
     ).create_view("_country_results", replace=True)
 
@@ -606,11 +639,14 @@ def _execute_scan(
                 row_id,
                 substring(row_id, 1, 28) AS cell_id,
                 row_ordinal,
-                value_c
+                wbgt_status,
+                wbgt_c,
+                tg_status,
+                tg_c,
+                tnwb_status,
+                tnwb_c
             FROM _country_results AS results
-            WHERE results.status = 'ok'
-              AND results.value_c IS NOT NULL
-              AND ({range_predicate})
+            WHERE ({range_predicate})
         )
         SELECT
             cells.country_iso_a3,
@@ -621,7 +657,12 @@ def _execute_scan(
             results.row_id,
             results.cell_id,
             results.row_ordinal,
-            results.value_c
+            results.wbgt_status,
+            results.wbgt_c,
+            results.tg_status,
+            results.tg_c,
+            results.tnwb_status,
+            results.tnwb_c
         FROM selected_results AS results
         INNER JOIN _country_cells AS cells USING (cell_id)
     """
@@ -673,7 +714,12 @@ def _export_country(
                 row_id,
                 cell_id,
                 row_ordinal,
-                value_c
+                wbgt_status,
+                wbgt_c,
+                tg_status,
+                tg_c,
+                tnwb_status,
+                tnwb_c
             FROM _matched_country_results
             WHERE country_iso_a3 = {country}
         ) TO {destination} (
@@ -690,13 +736,14 @@ def _metadata(
     start_date: date,
     end_date: date,
     selected_cell_count: int,
-    observation_count: int,
+    result_row_count: int,
+    valid_observation_counts: dict[str, int],
     runs: tuple[Path, ...],
     parquet_file: str,
     parquet_size_bytes: int,
 ) -> CountryExtraction:
     return CountryExtraction(
-        schema_version=1,
+        schema_version=2,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         country_iso_a2=country.iso_a2,
         country_iso_a3=country.iso_a3,
@@ -704,7 +751,8 @@ def _metadata(
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
         selected_cell_count=selected_cell_count,
-        observation_count=observation_count,
+        result_row_count=result_row_count,
+        valid_observation_counts=valid_observation_counts,
         runs=tuple(str(run) for run in runs),
         parquet_file=parquet_file,
         parquet_size_bytes=parquet_size_bytes,

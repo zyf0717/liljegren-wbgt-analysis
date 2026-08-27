@@ -18,8 +18,8 @@ SPEC.loader.exec_module(MODULE)
 class DailyPairwiseScriptTests(unittest.TestCase):
     def test_scope_specific_default_paths(self) -> None:
         for scope, stem in {
-            "pairwise": "daily_pairwise_v4",
-            "all-implementations": "daily_pairwise_all_implementations_v4",
+            "pairwise": "daily_pairwise_v5",
+            "all-implementations": "daily_pairwise_all_implementations_v5",
         }.items():
             with (
                 self.subTest(scope=scope),

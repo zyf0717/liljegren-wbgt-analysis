@@ -112,8 +112,12 @@ def _write_results(campaign: Path) -> None:
                     "era5-global-n002500-e0005000-2025010100",
                 ],
                 "row_ordinal": pa.array([1, 2, 3], type=pa.uint32()),
-                "status": ["ok", "error", "ok"],
-                "value_c": [31.0, None, 99.0],
+                "wbgt_status": ["ok", "error", "ok"],
+                "wbgt_c": [31.0, None, 99.0],
+                "tg_status": ["ok", "ok", "ok"],
+                "tg_c": [30.0, 29.0, 98.0],
+                "tnwb_status": ["ok", "non-convergent", "ok"],
+                "tnwb_c": [29.0, None, 97.0],
             }
         ),
         path,
@@ -136,8 +140,12 @@ def _write_irrelevant_results(campaign: Path, *, statistics: bool = True) -> Pat
                 "cycle_ordinal": pa.array([1], type=pa.uint32()),
                 "row_id": ["era5-global-s900000-w1800000-2025010100"],
                 "row_ordinal": pa.array([1], type=pa.uint32()),
-                "status": ["ok"],
-                "value_c": [99.0],
+                "wbgt_status": ["ok"],
+                "wbgt_c": [99.0],
+                "tg_status": ["ok"],
+                "tg_c": [98.0],
+                "tnwb_status": ["ok"],
+                "tnwb_c": [97.0],
             }
         ),
         path,
@@ -147,7 +155,7 @@ def _write_irrelevant_results(campaign: Path, *, statistics: bool = True) -> Pat
 
 
 class CountryExtractionTests(unittest.TestCase):
-    def test_extracts_valid_country_rows_and_writes_manifest(self) -> None:
+    def test_extracts_all_country_rows_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             campaign = root / "campaign"
@@ -167,7 +175,12 @@ class CountryExtractionTests(unittest.TestCase):
 
             with duckdb.connect() as connection:
                 rows = connection.execute(
-                    "SELECT implementation, cell_id, value_c FROM read_parquet(?)",
+                    """
+                    SELECT implementation, cell_id, wbgt_status, wbgt_c,
+                           tg_status, tg_c, tnwb_status, tnwb_c
+                    FROM read_parquet(?)
+                    ORDER BY row_id
+                    """,
                     [str(output)],
                 ).fetchall()
                 columns = [
@@ -182,7 +195,28 @@ class CountryExtractionTests(unittest.TestCase):
 
             self.assertEqual(
                 rows,
-                [("alpha", "era5-global-n002500-e0002500", 31.0)],
+                [
+                    (
+                        "alpha",
+                        "era5-global-n002500-e0002500",
+                        "ok",
+                        31.0,
+                        "ok",
+                        30.0,
+                        "ok",
+                        29.0,
+                    ),
+                    (
+                        "alpha",
+                        "era5-global-n002500-e0002500",
+                        "error",
+                        None,
+                        "ok",
+                        29.0,
+                        "non-convergent",
+                        None,
+                    ),
+                ],
             )
             self.assertEqual(
                 columns,
@@ -194,12 +228,26 @@ class CountryExtractionTests(unittest.TestCase):
                     "row_id",
                     "cell_id",
                     "row_ordinal",
-                    "value_c",
+                    "wbgt_status",
+                    "wbgt_c",
+                    "tg_status",
+                    "tg_c",
+                    "tnwb_status",
+                    "tnwb_c",
                 ],
             )
             self.assertEqual(extraction.country_iso_a3, "XXX")
-            self.assertEqual(extraction.observation_count, 1)
-            self.assertEqual(manifest["observation_count"], 1)
+            self.assertEqual(extraction.result_row_count, 2)
+            self.assertEqual(
+                extraction.valid_observation_counts,
+                {"wbgt": 1, "tg": 2, "tnwb": 1},
+            )
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(manifest["result_row_count"], 2)
+            self.assertEqual(
+                manifest["valid_observation_counts"],
+                {"wbgt": 1, "tg": 2, "tnwb": 1},
+            )
             self.assertEqual(manifest["parquet_file"], "observations.parquet")
             status = json.loads(
                 output.with_name("extraction-status.json").read_text(encoding="utf-8")
@@ -226,7 +274,7 @@ class CountryExtractionTests(unittest.TestCase):
                 boundaries=boundaries,
                 overwrite=True,
             )
-            self.assertEqual(replacement.observation_count, 1)
+            self.assertEqual(replacement.result_row_count, 2)
 
     def test_rejects_negative_threads(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-negative"):
@@ -277,16 +325,19 @@ class CountryExtractionTests(unittest.TestCase):
 
             with duckdb.connect() as connection:
                 first = connection.execute(
-                    "SELECT row_id, value_c FROM read_parquet(?)",
+                    "SELECT row_id, wbgt_c FROM read_parquet(?) ORDER BY row_id",
                     [str(output_directory / "xxx" / "observations.parquet")],
                 ).fetchall()
                 second = connection.execute(
-                    "SELECT row_id, value_c FROM read_parquet(?)",
+                    "SELECT row_id, wbgt_c FROM read_parquet(?) ORDER BY row_id",
                     [str(output_directory / "yyy" / "observations.parquet")],
                 ).fetchall()
             self.assertEqual(
                 first,
-                [("era5-global-n002500-e0002500-2025010100", 31.0)],
+                [
+                    ("era5-global-n002500-e0002500-2025010100", 31.0),
+                    ("era5-global-n002500-e0002500-2025010101", None),
+                ],
             )
             self.assertEqual(
                 second,
@@ -294,7 +345,7 @@ class CountryExtractionTests(unittest.TestCase):
             )
             with duckdb.connect() as connection:
                 overlap = connection.execute(
-                    "SELECT row_id, value_c FROM read_parquet(?)",
+                    "SELECT row_id, wbgt_c FROM read_parquet(?) ORDER BY row_id",
                     [str(output_directory / "qqq" / "observations.parquet")],
                 ).fetchall()
             self.assertEqual(overlap, first)

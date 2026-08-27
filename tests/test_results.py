@@ -34,8 +34,13 @@ def _write_result(
                 "cycle_ordinal": pa.array([1], type=pa.uint32()),
                 "row_id": ["era5-global-n012500-e1037500-2025010100"],
                 "row_ordinal": pa.array([1], type=pa.uint32()),
-                "status": ["ok"],
-                "value_c": [value],
+                "wbgt_status": ["ok"],
+                "wbgt_c": [value],
+                "tg_status": ["ok"],
+                "tg_c": [value + 10.0],
+                "tnwb_status": ["ok"],
+                "tnwb_c": [value + 20.0],
+                "unrelated_diagnostic": ["ignored"],
             }
         ),
         path,
@@ -62,9 +67,9 @@ class CampaignResultsTests(unittest.TestCase):
                 summary = combined.query(
                     "results",
                     """
-                    SELECT implementation, count(*) AS observations, avg(value_c) AS mean_c
+                    SELECT implementation, count(*) AS observations, avg(wbgt_c) AS mean_c
                     FROM results
-                    WHERE status = 'ok'
+                    WHERE wbgt_status = 'ok'
                     GROUP BY implementation
                     ORDER BY implementation
                     """,
@@ -85,7 +90,7 @@ class CampaignResultsTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                relation.aggregate("count(*), avg(value_c)").fetchone(),
+                relation.aggregate("count(*), avg(wbgt_c)").fetchone(),
                 (2, 30.5),
             )
 
@@ -93,7 +98,7 @@ class CampaignResultsTests(unittest.TestCase):
                 dates=["2025-01-01", "2025-01-03", "2025-01-03"]
             )
             self.assertEqual(
-                explicit.aggregate("count(*), avg(value_c)").fetchone(),
+                explicit.aggregate("count(*), avg(wbgt_c)").fetchone(),
                 (2, 64.5),
             )
 
@@ -147,6 +152,93 @@ class CampaignResultsTests(unittest.TestCase):
                 results.scan(implementations=[])
             with self.assertRaisesRegex(TypeError, "not a string"):
                 results.scan(dates="2025-01-01")  # type: ignore[arg-type]
+            with self.assertRaisesRegex(ValueError, "cannot be combined"):
+                results.scan(quantity="tg", quantities=("wbgt", "tg"))
+            with self.assertRaisesRegex(ValueError, "must not be empty"):
+                results.scan(quantities=[])
+            with self.assertRaisesRegex(TypeError, "not a string"):
+                results.scan(quantities="tg")  # type: ignore[arg-type]
+            with self.assertRaisesRegex(ValueError, "Unsupported result quantities"):
+                results.scan(quantity="invalid")  # type: ignore[arg-type]
+
+    def test_quantity_selection_is_qualified_and_column_pruned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            campaign = Path(temporary_directory) / "campaign"
+            _write_result(campaign, "heatstress", 30.0)
+
+            relation = CampaignResults.from_campaign(campaign).scan(quantity="tg")
+
+            self.assertEqual(
+                relation.columns,
+                [
+                    "result_date",
+                    "run_id",
+                    "implementation",
+                    "cycle_ordinal",
+                    "row_id",
+                    "row_ordinal",
+                    "tg_status",
+                    "tg_c",
+                ],
+            )
+            plan = relation.explain()
+            self.assertIn("tg_status", plan)
+            self.assertIn("tg_c", plan)
+            self.assertNotIn("wbgt_status", plan)
+            self.assertNotIn("tnwb_status", plan)
+
+            selected = CampaignResults.from_campaign(campaign).scan(
+                quantities=("tnwb", "wbgt", "tnwb")
+            )
+            self.assertEqual(
+                selected.columns[-4:],
+                ["wbgt_status", "wbgt_c", "tnwb_status", "tnwb_c"],
+            )
+
+    def test_rejects_legacy_generic_result_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            campaign = Path(temporary_directory) / "campaign"
+            path = (
+                campaign
+                / "results"
+                / "2025-01-01"
+                / "0001"
+                / "heatstress"
+                / "results.parquet"
+            )
+            path.parent.mkdir(parents=True)
+            pq.write_table(
+                pa.table(
+                    {
+                        "cycle_ordinal": pa.array([1], type=pa.uint32()),
+                        "row_id": ["era5-global-n012500-e1037500-2025010100"],
+                        "row_ordinal": pa.array([1], type=pa.uint32()),
+                        "status": ["ok"],
+                        "value_c": [30.0],
+                    }
+                ),
+                path,
+            )
+
+            with self.assertRaisesRegex(ValueError, "legacy status/value_c"):
+                CampaignResults.from_campaign(campaign).scan()
+
+    def test_rejects_incompatible_quantity_column_types(self) -> None:
+        cases = (
+            ("wbgt_status", pa.array([1], type=pa.int32()), "status types"),
+            ("tg_c", pa.array(["invalid"]), "value types"),
+        )
+        for column, invalid_values, message in cases:
+            with self.subTest(column=column), tempfile.TemporaryDirectory() as root:
+                campaign = Path(root) / "campaign"
+                _write_result(campaign, "heatstress", 30.0)
+                path = next(campaign.rglob("results.parquet"))
+                table = pq.read_table(path)
+                index = table.column_names.index(column)
+                pq.write_table(table.set_column(index, column, invalid_values), path)
+
+                with self.assertRaisesRegex(ValueError, message):
+                    CampaignResults.from_campaign(campaign).scan()
 
 
 if __name__ == "__main__":
