@@ -1,6 +1,6 @@
 # ERA5 cell-area-weighted pairwise statistics
 
-Area-weighted statistics are emitted by the same v4 query and over the same
+Area-weighted statistics are emitted by the same v5 query and over the same
 matched observations as unweighted statistics. There is no second full-data
 pass.
 
@@ -19,7 +19,8 @@ w=\frac{
 
 This is exact spherical latitude-band area normalized to one at an interior
 equatorial cell. Earth-radius and longitude-width factors cancel. The fixed 721
-latitude weights are precomputed in memory and joined once after pair creation.
+latitude weights are precomputed in memory and joined once in the materialized
+wide base relation, before pair or quantity expansion.
 
 ## Sufficient sums and annual metrics
 

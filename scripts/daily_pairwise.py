@@ -1,4 +1,4 @@
-"""Persist daily pairwise WBGT statistics with isolated date workers."""
+"""Persist daily pairwise temperature statistics with isolated workers."""
 
 from __future__ import annotations
 
@@ -22,17 +22,12 @@ from liljegren_analysis.comparison.sql import SAMPLE_SCOPES
 
 REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (
-    REPOSITORY / ".hsb" / "campaigns" / "era5-2025-all-six-m2-w20-v8",
-    REPOSITORY
-    / ".hsb"
-    / "runs"
-    / "era5-2025-meteor-m4-w18"
-    / "wbgt-comparison-20260810-231240",
+    REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813",
 )
 SGT = ZoneInfo("Asia/Singapore")
 _OUTPUT_STEMS = {
-    "pairwise": "daily_pairwise_v4",
-    "all-implementations": "daily_pairwise_all_implementations_v4",
+    "pairwise": "daily_pairwise_v5",
+    "all-implementations": "daily_pairwise_all_implementations_v5",
 }
 
 
@@ -166,7 +161,8 @@ def run_pipeline() -> int:
 
     days = _days(args.start_date, args.end_date)
     logger.info(
-        "Processing %d dates sample_scope=%s with %d workers "
+        "Processing %d dates quantities=wbgt,tg,tnwb quantity_scope=joint "
+        "sample_scope=%s with %d workers "
         "and %d threads per worker",
         len(days),
         args.sample_scope,

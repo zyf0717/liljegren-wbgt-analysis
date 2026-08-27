@@ -20,6 +20,7 @@ from liljegren_analysis.comparison.sql import (
     EXPECTED_IMPLEMENTATIONS,
     build_daily_pairwise_sql,
 )
+from liljegren_analysis.results import RESULT_SCHEMA_ID
 
 
 def _row_id(index: int) -> str:
@@ -32,6 +33,8 @@ def _write_results(
     values: list[float | None],
     *,
     statuses: list[str] | None = None,
+    tg_statuses: list[str] | None = None,
+    tnwb_statuses: list[str] | None = None,
     cycle_ordinals: list[int] | None = None,
     row_ids: list[str] | None = None,
 ) -> None:
@@ -45,6 +48,9 @@ def _write_results(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     count = len(values)
+    resolved_statuses = statuses or ["ok"] * count
+    tg_values = [None if value is None else value + 100.0 for value in values]
+    tnwb_values = [None if value is None else value - 100.0 for value in values]
     pq.write_table(
         pa.table(
             {
@@ -54,8 +60,12 @@ def _write_results(
                 ),
                 "row_id": row_ids or [_row_id(index) for index in range(count)],
                 "row_ordinal": pa.array(range(count), type=pa.uint32()),
-                "status": statuses or ["ok"] * count,
-                "value_c": values,
+                "wbgt_status": resolved_statuses,
+                "wbgt_c": values,
+                "tg_status": tg_statuses or resolved_statuses,
+                "tg_c": tg_values,
+                "tnwb_status": tnwb_statuses or resolved_statuses,
+                "tnwb_c": tnwb_values,
             }
         ),
         path,
@@ -94,6 +104,7 @@ class PairwiseTests(unittest.TestCase):
         rows = {
             (row["implementation_a"], row["implementation_b"]): row
             for row in summaries.pairwise.to_pylist()
+            if row["quantity"] == "wbgt"
         }
         self.assertEqual(
             list(rows),
@@ -115,23 +126,60 @@ class PairwiseTests(unittest.TestCase):
             with duckdb.connect() as connection:
                 connection.register("summary", table)
                 grouped = {
-                    (row[0], row[1]): row[2:]
+                    (row[0], row[1], row[2]): row[3:]
                     for row in connection.execute(
                     """
-                    SELECT implementation_a, implementation_b,
+                    SELECT quantity, implementation_a, implementation_b,
                            sum(n), sum(area_weight_sum)
                     FROM summary
-                    GROUP BY implementation_a, implementation_b
-                    ORDER BY implementation_a, implementation_b
+                    GROUP BY quantity, implementation_a, implementation_b
+                    ORDER BY quantity, implementation_a, implementation_b
                     """
                     ).fetchall()
                 }
             for pair, total in rows.items():
-                self.assertEqual(grouped[pair][0], total["n"])
+                key = ("wbgt", *pair)
+                self.assertEqual(grouped[key][0], total["n"])
                 self.assertAlmostEqual(
-                    grouped[pair][1],
+                    grouped[key][1],
                     total["area_weight_sum"],
                 )
+
+        support = {
+            (row["implementation_a"], row["implementation_b"]): {
+                item["n"]
+                for item in summaries.pairwise.to_pylist()
+                if item["implementation_a"] == row["implementation_a"]
+                and item["implementation_b"] == row["implementation_b"]
+            }
+            for row in summaries.pairwise.to_pylist()
+        }
+        self.assertTrue(all(len(counts) == 1 for counts in support.values()))
+
+    def test_statuses_are_independent_but_agreement_population_is_joint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            campaign = Path(temporary_directory) / "campaign"
+            _write_results(campaign, "alpha", [10.0, 20.0])
+            _write_results(
+                campaign,
+                "beta",
+                [8.0, 18.0],
+                tg_statuses=["failed", "ok"],
+            )
+            _, summaries, _, _ = compute_daily_pairwise(
+                date(2025, 1, 1), (campaign,), threads=1
+            )
+
+        self.assertEqual({row["n"] for row in summaries.pairwise.to_pylist()}, {1})
+        beta_tg = [
+            row
+            for row in summaries.quantity_status.to_pylist()
+            if row["quantity"] == "tg" and row["implementation"] == "beta"
+        ]
+        self.assertEqual(
+            {(row["status"], row["value_present"], row["n"]) for row in beta_tg},
+            {("failed", True, 1), ("ok", True, 1)},
+        )
 
     def test_all_implementations_uses_one_complete_population(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -162,8 +210,9 @@ class PairwiseTests(unittest.TestCase):
             )
 
         rows = summaries.pairwise.to_pylist()
-        self.assertEqual(len(rows), 21)
+        self.assertEqual(len(rows), 63)
         self.assertEqual({row["n"] for row in rows}, {1})
+        self.assertEqual({row["quantity"] for row in rows}, {"wbgt", "tg", "tnwb"})
         observed = {
             row[key]
             for row in rows
@@ -211,8 +260,10 @@ class PairwiseTests(unittest.TestCase):
     def test_query_plan_has_one_source_scan_self_join_and_aggregate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             campaign = Path(temporary_directory) / "campaign"
+            second_campaign = Path(temporary_directory) / "second-campaign"
             _write_results(campaign, "alpha", [1.0])
             _write_results(campaign, "beta", [2.0])
+            _write_results(second_campaign, "gamma", [3.0])
             with duckdb.connect() as connection:
                 connection.register(
                     "_era5_latitude_weights",
@@ -220,7 +271,7 @@ class PairwiseTests(unittest.TestCase):
                 )
                 results = _combined_results(
                     date(2025, 1, 1),
-                    (campaign,),
+                    (campaign, second_campaign),
                     connection,
                 )
                 plan = results.query(
@@ -228,11 +279,15 @@ class PairwiseTests(unittest.TestCase):
                     build_daily_pairwise_sql("pairwise"),
                 ).explain()
 
-        # DuckDB prints PARQUET_SCAN twice inside one operator box: once as
-        # its heading and once as its function name.
-        self.assertEqual(plan.count("PARQUET_SCAN"), 2)
-        self.assertEqual(plan.count("HASH_GROUP_BY"), 1)
+        # DuckDB prints PARQUET_SCAN twice per operator box: once as its
+        # heading and once as its function name. Two roots therefore produce
+        # two physical source operators and four textual mentions.
+        self.assertEqual(plan.count("PARQUET_SCAN"), 4)
+        self.assertEqual(plan.count("HASH_GROUP_BY"), 2)
         self.assertEqual(plan.count("HASH_JOIN"), 2)
+        sql = build_daily_pairwise_sql("pairwise")
+        pair_path = sql[sql.index("paired_wide AS"):sql.index("weighted_values AS")]
+        self.assertLess(pair_path.index("paired_wide AS"), pair_path.index("unnest(["))
 
     def test_all_implementations_sql_uses_wide_complete_rows(self) -> None:
         sql = build_daily_pairwise_sql("all-implementations")
@@ -241,8 +296,14 @@ class PairwiseTests(unittest.TestCase):
         self.assertNotIn("_expected_implementations", sql)
         self.assertNotIn("INNER JOIN complete_observations", sql)
         self.assertNotIn("CROSS JOIN LATERAL", sql)
-        self.assertEqual(sql.count("unnest(["), 4)
-        self.assertEqual(sql.count("max(value_c) FILTER"), 7)
+        self.assertEqual(sql.count("unnest(["), 7)
+        self.assertEqual(
+            sum(
+                sql.count(f"max({quantity}_c) FILTER")
+                for quantity in ("wbgt", "tg", "tnwb")
+            ),
+            21,
+        )
         self.assertEqual(sql.count("count(*) FILTER"), 10)
 
     def test_persistence_is_atomic_idempotent_and_mode_protected(self) -> None:
@@ -255,18 +316,19 @@ class PairwiseTests(unittest.TestCase):
                 persist_daily_pairwise(connection, date(2025, 1, 1), summaries)
                 self.assertEqual(
                     connection.execute("SELECT * FROM pairwise_schema").fetchall(),
-                    [(4, "pairwise", 1, 1)],
+                    [(5, "pairwise", RESULT_SCHEMA_ID, "joint", 1, 1, 1)],
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT count(*) FROM daily_pairwise"
                     ).fetchone()[0],
-                    3,
+                    9,
                 )
 
                 invalid = DailyPairwiseSummaries(
                     summaries.pairwise,
                     summaries.abs_histogram.slice(1),
+                    summaries.quantity_status,
                 )
                 with self.assertRaisesRegex(ValueError, "totals differ"):
                     persist_daily_pairwise(
@@ -278,7 +340,7 @@ class PairwiseTests(unittest.TestCase):
                     connection.execute(
                         "SELECT count(*) FROM daily_pairwise"
                     ).fetchone()[0],
-                    3,
+                    9,
                 )
 
                 with self.assertRaisesRegex(
@@ -290,6 +352,34 @@ class PairwiseTests(unittest.TestCase):
                         date(2025, 1, 1),
                         summaries,
                         sample_scope="all-implementations",
+                    )
+
+    def test_persistence_rejects_v4_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            summaries = self._compute(root)
+            with duckdb.connect(str(root / "v4.duckdb")) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE pairwise_schema (
+                        schema_version INTEGER NOT NULL,
+                        sample_scope VARCHAR NOT NULL,
+                        implementation_set_version INTEGER NOT NULL,
+                        abs_histogram_version INTEGER NOT NULL
+                    );
+                    INSERT INTO pairwise_schema VALUES (4, 'pairwise', 1, 1);
+                    CREATE TABLE daily_pairwise (result_date DATE);
+                    CREATE TABLE daily_pairwise_abs_histogram (result_date DATE)
+                    """
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "expected version 5",
+                ):
+                    persist_daily_pairwise(
+                        connection,
+                        date(2025, 1, 1),
+                        summaries,
                     )
 
 

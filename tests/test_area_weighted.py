@@ -49,8 +49,12 @@ def _write(
                 "cycle_ordinal": pa.array([1] * count, type=pa.uint32()),
                 "row_id": row_ids,
                 "row_ordinal": pa.array(range(count), type=pa.uint32()),
-                "status": ["ok"] * count,
-                "value_c": values,
+                "wbgt_status": ["ok"] * count,
+                "wbgt_c": values,
+                "tg_status": ["ok"] * count,
+                "tg_c": values,
+                "tnwb_status": ["ok"] * count,
+                "tnwb_c": values,
             }
         ),
         path,
@@ -87,7 +91,11 @@ class AreaWeightedTests(unittest.TestCase):
                 1,
             )
 
-        row = summaries.pairwise.to_pylist()[0]
+        row = next(
+            item
+            for item in summaries.pairwise.to_pylist()
+            if item["quantity"] == "wbgt"
+        )
         differences = [x - y for x, y in zip(left, right, strict=True)]
         weights = [_weight(latitude) for latitude in latitudes]
         self.assertEqual(row["n"], 4)

@@ -28,6 +28,9 @@ class PairwiseDatabaseSchema:
 
     version: int
     sample_scope: str
+    result_schema_id: str
+    quantity_scope: str
+    quantity_set_version: int
     implementation_set_version: int
     abs_histogram_version: int
     tables: tuple[TableSchema, ...]
@@ -39,7 +42,7 @@ def persist_date_partitions(
     results: dict[str, pa.Table],
     schema: PairwiseDatabaseSchema,
 ) -> None:
-    """Atomically replace one date in every v4 summary table."""
+    """Atomically replace one date in every versioned summary table."""
 
     expected_tables = {table.table_name for table in schema.tables}
     if set(results) != expected_tables:
@@ -109,16 +112,18 @@ def _validate_cross_table_totals(connection: duckdb.DuckDBPyConnection) -> None:
         """
         WITH histogram AS (
             SELECT
+                quantity,
                 implementation_a,
                 implementation_b,
                 sum(n)::BIGINT AS n,
                 sum(area_weight_sum) AS area_weight_sum
             FROM _day_daily_pairwise_abs_histogram
-            GROUP BY implementation_a, implementation_b
+            GROUP BY quantity, implementation_a, implementation_b
         )
         SELECT count(*)
         FROM _day_daily_pairwise AS totals
-        FULL OUTER JOIN histogram USING (implementation_a, implementation_b)
+        FULL OUTER JOIN histogram
+            USING (quantity, implementation_a, implementation_b)
         WHERE totals.implementation_a IS NULL
            OR histogram.implementation_a IS NULL
            OR totals.n <> histogram.n
@@ -128,6 +133,58 @@ def _validate_cross_table_totals(connection: duckdb.DuckDBPyConnection) -> None:
     ).fetchone()[0]
     if invalid:
         raise ValueError("Daily histogram totals differ from pairwise totals")
+
+    invalid_joint_support = connection.execute(
+        """
+        SELECT count(*)
+        FROM (
+            SELECT
+                implementation_a,
+                implementation_b,
+                min(n) AS minimum_n,
+                max(n) AS maximum_n,
+                min(area_weight_sum) AS minimum_area_weight_sum,
+                max(area_weight_sum) AS maximum_area_weight_sum
+            FROM _day_daily_pairwise
+            GROUP BY implementation_a, implementation_b
+        )
+        WHERE minimum_n <> maximum_n
+           OR maximum_area_weight_sum - minimum_area_weight_sum
+                > greatest(1e-6, abs(maximum_area_weight_sum) * 1e-12)
+        """
+    ).fetchone()[0]
+    if invalid_joint_support:
+        raise ValueError("Joint quantity populations differ across quantities")
+
+    invalid_status_totals = connection.execute(
+        """
+        WITH totals AS (
+            SELECT
+                quantity,
+                implementation,
+                sum(n)::BIGINT AS n,
+                sum(area_weight_sum) AS area_weight_sum
+            FROM _day_daily_quantity_status
+            GROUP BY quantity, implementation
+        )
+        SELECT count(*)
+        FROM (
+            SELECT
+                implementation,
+                min(n) AS minimum_n,
+                max(n) AS maximum_n,
+                min(area_weight_sum) AS minimum_area_weight_sum,
+                max(area_weight_sum) AS maximum_area_weight_sum
+            FROM totals
+            GROUP BY implementation
+        )
+        WHERE minimum_n <> maximum_n
+           OR maximum_area_weight_sum - minimum_area_weight_sum
+                > greatest(1e-6, abs(maximum_area_weight_sum) * 1e-12)
+        """
+    ).fetchone()[0]
+    if invalid_status_totals:
+        raise ValueError("Quantity status totals differ across quantities")
 
 
 def _ensure_schema(
@@ -149,6 +206,9 @@ def _ensure_schema(
     expected_metadata_columns = [
         ("schema_version", "INTEGER", False),
         ("sample_scope", "VARCHAR", False),
+        ("result_schema_id", "VARCHAR", False),
+        ("quantity_scope", "VARCHAR", False),
+        ("quantity_set_version", "INTEGER", False),
         ("implementation_set_version", "INTEGER", False),
         ("abs_histogram_version", "INTEGER", False),
     ]
@@ -160,6 +220,9 @@ def _ensure_schema(
         (
             schema.version,
             schema.sample_scope,
+            schema.result_schema_id,
+            schema.quantity_scope,
+            schema.quantity_set_version,
             schema.implementation_set_version,
             schema.abs_histogram_version,
         )
@@ -181,16 +244,22 @@ def _create_schema(
         CREATE TABLE pairwise_schema (
             schema_version INTEGER NOT NULL,
             sample_scope VARCHAR NOT NULL,
+            result_schema_id VARCHAR NOT NULL,
+            quantity_scope VARCHAR NOT NULL,
+            quantity_set_version INTEGER NOT NULL,
             implementation_set_version INTEGER NOT NULL,
             abs_histogram_version INTEGER NOT NULL
         )
         """
     )
     connection.execute(
-        "INSERT INTO pairwise_schema VALUES (?, ?, ?, ?)",
+        "INSERT INTO pairwise_schema VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
             schema.version,
             schema.sample_scope,
+            schema.result_schema_id,
+            schema.quantity_scope,
+            schema.quantity_set_version,
             schema.implementation_set_version,
             schema.abs_histogram_version,
         ],
@@ -243,6 +312,9 @@ def _incompatible_message(schema: PairwiseDatabaseSchema) -> str:
     return (
         "Incompatible pairwise database schema; expected version "
         f"{schema.version}, sample_scope={schema.sample_scope}, "
+        f"result_schema_id={schema.result_schema_id}, "
+        f"quantity_scope={schema.quantity_scope}, "
+        f"quantity_set_version={schema.quantity_set_version}, "
         f"implementation_set_version={schema.implementation_set_version}, "
         f"and abs_histogram_version={schema.abs_histogram_version}. "
         "Use a new versioned database path and recompute."

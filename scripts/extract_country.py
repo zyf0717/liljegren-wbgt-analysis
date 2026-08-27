@@ -1,4 +1,4 @@
-"""Extract valid observations for countries to reusable Parquet caches."""
+"""Extract all matched country result rows to reusable Parquet caches."""
 
 from __future__ import annotations
 
@@ -18,18 +18,15 @@ from liljegren_analysis import (
 
 REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (
-    REPOSITORY / ".hsb" / "campaigns" / "era5-2025-all-six-m2-w20-v8",
-    REPOSITORY
-    / ".hsb"
-    / "runs"
-    / "era5-2025-meteor-m4-w18"
-    / "wbgt-comparison-20260810-231240",
+    REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813",
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Cache valid WBGT observations for one or more ADM0 countries.",
+        description=(
+            "Cache WBGT, Tg, and Tnwb result rows for one or more ADM0 countries."
+        ),
     )
     parser.add_argument(
         "countries",
@@ -131,7 +128,7 @@ def run() -> int:
 
     for extraction, output in zip(extractions, outputs, strict=True):
         print(
-            f"Saved {extraction.observation_count:,} {extraction.country_iso_a3} "
+            f"Saved {extraction.result_row_count:,} {extraction.country_iso_a3} "
             f"observations to {output}"
         )
     return 0

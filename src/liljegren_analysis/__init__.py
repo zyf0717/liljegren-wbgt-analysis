@@ -15,13 +15,25 @@ from .comparison import (
     pooled_difference_statistics,
     pooled_sufficient_statistics,
 )
-from .results import CampaignResults
+from .results import (
+    RESULT_QUANTITIES,
+    RESULT_QUANTITY_SPECS,
+    RESULT_SCHEMA_ID,
+    CampaignResults,
+    ResultQuantity,
+    ResultQuantitySpec,
+)
 
 __all__ = [
     "CampaignResults",
     "CountryExtraction",
     "CountryExtractionProgress",
     "DailyPairwiseSummaries",
+    "RESULT_QUANTITIES",
+    "RESULT_QUANTITY_SPECS",
+    "RESULT_SCHEMA_ID",
+    "ResultQuantity",
+    "ResultQuantitySpec",
     "compute_daily_pairwise",
     "extract_countries_observations",
     "extract_country_observations",

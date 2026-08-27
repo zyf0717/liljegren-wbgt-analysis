@@ -1,26 +1,32 @@
 # Single-pass daily-to-annual pairwise statistics
 
-`compute_daily_pairwise()` performs one date-scoped scan. Pairwise scope uses a
-self-join; complete-case scope aggregates the seven implementation values into
-one wide row per observation and directly expands the 21 fixed pairs. Its one
-`GROUPING SETS` aggregate returns pair totals and absolute-difference histogram
-bins. `persist_daily_pairwise()` validates and replaces both daily partitions
-in one transaction.
+`compute_daily_pairwise()` performs one date-scoped wide scan for WBGT, Tg, and
+Tnwb. A materialized base relation joins ERA5 latitude weights before any
+fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
+one self-join and expands quantities afterward. Complete-case scope aggregates
+all seven implementations and all three quantities in one grouped pass, then
+expands the 21 fixed pairs and three quantities after the 7:1 reduction.
+`persist_daily_pairwise()` validates and replaces all daily partitions in one
+transaction.
 
 ## Population selection
 
-Pairwise scope uses every row valid for an individual pair. Complete-case scope
-restricts input to `heatstress`, `heatstress-jl`, `heatstress-r`, `liljegren-c`,
-`meteor`, `pywbgt`, and `thermofeel`, then retains only identities present once
-and valid for all seven. The fixed pair expansion occurs only after this check,
-so all 21 pairs have identical support without an implementation join-back.
+An implementation row is agreement-eligible only when all three statuses are
+`ok` and all three values are non-null. Pairwise scope joins these joint-valid
+rows per implementation pair. Complete-case scope additionally restricts input
+to `heatstress`, `heatstress-jl`, `heatstress-r`, `liljegren-c`, `meteor`,
+`pywbgt`, and `thermofeel`, then retains only identities present exactly once
+for every implementation. Therefore each pair has identical `n` and
+`area_weight_sum` across WBGT, Tg, and Tnwb. Coverage summaries retain the
+independent status and value-presence counts for each quantity.
 
 Input roots are enumerated by `(run_id, implementation)` before scanning.
 Overlapping scopes are rejected to prevent many-to-many joins.
 
-## v4 daily tables
+## v5 daily tables
 
-`daily_pairwise` contains authoritative sufficient statistics:
+`daily_pairwise`, keyed by date, quantity, and implementation pair, contains
+authoritative sufficient statistics:
 
 - `n`, `sum_difference_c`, `sum_squared_difference_c2`, and
   `sum_absolute_difference_c`;
@@ -32,8 +38,8 @@ Overlapping scopes are rejected to prevent many-to-many joins.
 Floating sums use DuckDB's compensated `fsum`. Daily derived means, variances,
 and scalar quantiles are intentionally absent.
 
-`daily_pairwise_abs_histogram` stores non-empty fixed bins with count and area
-mass. Bounds are lower-inclusive and upper-exclusive:
+`daily_pairwise_abs_histogram` stores non-empty fixed bins keyed by quantity,
+with count and area mass. Bounds are lower-inclusive and upper-exclusive:
 
 - `[0,2)` by 0.01 °C;
 - `[2,5)` by 0.05 °C;
@@ -45,6 +51,10 @@ Annual P50/P95/P99 are the midpoints of their containing bins; lower and upper
 bounds are retained. An overflow percentile is an explicit error. Exact strict
 threshold fractions come from the main sufficient-statistics table rather than
 from histogram approximation.
+
+`daily_quantity_status` is keyed by date, quantity, implementation, status, and
+`value_present`. It stores row count and area-weight mass independently of the
+joint-validity agreement filter.
 
 ## Annual pooling
 
@@ -69,6 +79,7 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-Schema metadata records version 4, sample scope, canonical implementation-set
-version, and histogram version. Old databases are never migrated or mixed with
-v4 partitions.
+Schema metadata records version 5, result-schema ID, `quantity_scope=joint`,
+quantity-set version 1, sample scope, canonical implementation-set version, and
+histogram version. Old databases are rejected; v4 data is never migrated or
+mixed with v5 partitions.
