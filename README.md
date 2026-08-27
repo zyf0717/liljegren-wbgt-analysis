@@ -7,17 +7,22 @@ provide hardened headless execution.
 
 ## Analysis design
 
-For each date, valid WBGT values are matched by run, cycle, and row identity.
-Signed differences are `implementation_a - implementation_b`, with names
-ordered lexicographically so each unordered pair appears once.
+For each date, WBGT, globe temperature (Tg), and natural wet-bulb temperature
+(Tnwb) are matched by run, cycle, and row identity. Agreement uses joint
+validity: all three quantities must have status `ok` and a non-null value for
+each selected implementation. Signed differences are
+`implementation_a - implementation_b`, with names ordered lexicographically so
+each unordered pair appears once.
 
-The v4 production query touches the full-resolution ERA5 results once per date.
-Pairwise scope uses one implementation self-join. Complete-case scope aggregates
-the seven values once and expands the 21 fixed pairs without a join-back or
-self-join. A latitude-weight join and grouped aggregation then emit:
+The v5 production query materializes one wide base relation per date, including
+all three quantities and the ERA5 latitude weight. Pairwise scope uses one
+implementation self-join. Complete-case scope aggregates all 21 values for the
+seven implementations once and expands the 21 fixed pairs only after the 7:1
+reduction. The grouped aggregation then emits:
 
 - exact unweighted and cell-area-weighted sufficient sums and extrema;
-- a fixed-bin absolute-difference histogram for annual P50/P95/P99.
+- a fixed-bin absolute-difference histogram for annual P50/P95/P99;
+- independent per-quantity status and value-presence coverage.
 
 Daily partitions are persisted atomically to one DuckDB cache. Interrupted runs
 are resumable and reruns replace dates idempotently. The annual notebook reads
@@ -66,18 +71,19 @@ uv run pytest -q
 
 ## Run the analysis
 
-The default pair-specific run writes `data/daily_pairwise_v4.duckdb`:
+The default pair-specific run reads
+`.hsb/runs/wbgt-comparison-20260823-181813` and writes
+`data/daily_pairwise_v5.duckdb`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
-  --run /path/to/campaign \
   --sample-scope pairwise
 ```
 
 The paper complete-case cache writes
-`data/daily_pairwise_all_implementations_v4.duckdb`:
+`data/daily_pairwise_all_implementations_v5.duckdb`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
@@ -94,7 +100,7 @@ For annual analysis:
 uv run jupyter lab
 ```
 
-Open `notebooks/yearly_pairwise.ipynb`. It pools exact sums, reconstructs
+Open `notebooks/20-yearly_pairwise.ipynb`. It pools exact sums, reconstructs
 histogram quantile intervals, and builds row/area-weighted matrices including
 parametric limits of agreement.
 
@@ -105,23 +111,25 @@ classification notebook:
 uv run python scripts/extract_country.py JPN
 ```
 
-The default output is `data/country/<iso3>/observations.parquet`, accompanied by
-`manifest.json`. Use `--start-date`, `--end-date`, repeatable `--run`, and
-`--threads` to change extraction scope; existing caches require explicit
-`--force` replacement.
+The v2 output is `data/country/<iso3>/observations.parquet`, accompanied by
+`manifest.json`. It retains all matched rows and all six qualified component
+columns, including failed results. Use `--start-date`, `--end-date`, repeatable
+`--run`, and `--threads` to change extraction scope; existing caches require
+explicit `--force` replacement.
 
 For raw country classification-transition analysis with editable thresholds,
-open `notebooks/country_classification_changes.ipynb`. It reads the cached
+open `notebooks/11-era5_country_classification_changes.ipynb`. It reads the cached
 country observations rather than rescanning campaign Parquet. Edit the
 parameters cell immediately after the imports: `COUNTRY_CODE` accepts ISO
 alpha-2 or alpha-3
-(default `SG`; use `JPN` for Japan), while the dates, thresholds, and DuckDB
+(default `JPN`), while the dates, thresholds, and DuckDB
 thread count are also declared there. Setting `DUCKDB_THREADS` to zero keeps
 DuckDB's default. DuckDB filters country cells from Parquet,
 then the bounded observations and all subsequent analysis remain inspectable
 pandas DataFrames. It does not compute global agreement statistics. For large
 countries, narrow `ANALYSIS_START_DATE` and `ANALYSIS_END_DATE` to keep the
-pandas working set manageable.
+pandas working set manageable. The notebook reports Tg/Tnwb availability but
+applies heat-risk thresholds only to rows with valid WBGT.
 
 To select all 0.25-degree ERA5 cell footprints intersecting one or more ADM0
 countries, pass ISO alpha-2 or alpha-3 codes:
