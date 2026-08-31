@@ -193,6 +193,33 @@ Use `--quantity tg` or `--quantity tnwb` with a distinct output directory to
 analyze the other wide-product temperatures. Legacy WBGT-only products remain
 readable and the original extraction API is unchanged.
 
+### Global ISO 7243 cell-pair classification changes
+
+Classify four annual joint-support WBGT summary values and emit the 21 ordered
+implementation pairs for every complete-case cell. The product is
+deliberately unweighted: join `cell_lookup.parquet` downstream to geometric or
+LandScan population weights when calculating aggregate shares.
+
+```bash
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --input-root data/cellwise_temperature_quantiles/2025-joint-v1 \
+  --output-root data/cellwise_iso7243_classification_changes \
+  --thresholds-c 25 26 28 30 33
+```
+
+`cell_pair_differences.parquet` stores only `n_higher` and `n_lower`; derive
+`n_changed = n_higher + n_lower` and
+`n_same = n_compared - n_changed` when needed. It is written one implementation
+pair at a time, without DuckDB, a cross join, or materializing the output.
+
+Render 21 implementation-pair maps (each `n_changed / 4`, using a shared
+dynamic P99 color scale) plus the supplementary aggregate map and unweighted, geometric-weighted, and
+population-weighted `n_changed` distributions:
+
+```bash
+uv run python scripts/plot_cellwise_iso7243_classification.py
+```
+
 Open `notebooks/11-cellwise-temperature-quantiles.ipynb` to configure and run
 the persisted quantile generation, then
 `notebooks/31-cellwise-quantile-spread.ipynb` for the paper-facing

@@ -21,6 +21,8 @@ from .cellwise import (
     compute_cellwise_wbgt_quantiles,
     compute_joint_cellwise_temperature_quantiles,
     compute_era5_population_weights,
+    analyze_cellwise_iso7243_classification,
+    plot_cellwise_iso7243_classification,
 )
 from .classification import (
     ClassificationAnalysis,
@@ -59,6 +61,8 @@ __all__ = [
     "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",
     "compute_era5_population_weights",
+    "analyze_cellwise_iso7243_classification",
+    "plot_cellwise_iso7243_classification",
     "analyze_cellwise_quantile_spread",
     "extract_countries_observations",
     "extract_country_observations",
