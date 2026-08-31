@@ -20,16 +20,18 @@ def _code(name: str) -> str:
 class NotebookMigrationTests(unittest.TestCase):
     def test_migrated_notebooks_are_valid_python(self) -> None:
         for name in (
-            "10-daily_pairwise.ipynb",
-            "11-era5_country_classification_changes.ipynb",
-            "12-nasa_power_classification_changes.ipynb",
-            "20-yearly_pairwise.ipynb",
+            "10-daily-pairwise.ipynb",
+            "11-cellwise-temperature-quantiles.ipynb",
+            "20-era5-country-classification-changes.ipynb",
+            "21-nasa-power-classification-changes.ipynb",
+            "30-yearly-pairwise.ipynb",
+            "31-cellwise-quantile-spread.ipynb",
         ):
             with self.subTest(notebook=name):
                 compile(_code(name), name, "exec")
 
     def test_era5_country_classification_uses_native_wbgt_columns(self) -> None:
-        code = _code("11-era5_country_classification_changes.ipynb")
+        code = _code("20-era5-country-classification-changes.ipynb")
 
         self.assertIn("WHERE wbgt_status = 'ok' AND wbgt_c IS NOT NULL", code)
         self.assertIn("a.wbgt_c AS wbgt_c_a", code)
@@ -38,7 +40,7 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertNotIn(" AS difference_c", code)
 
     def test_nasa_power_classification_uses_native_wbgt_columns(self) -> None:
-        code = _code("12-nasa_power_classification_changes.ipynb")
+        code = _code("21-nasa-power-classification-changes.ipynb")
 
         self.assertIn('results["wbgt_status"].eq("ok")', code)
         self.assertIn('classified["wbgt_c"]', code)
