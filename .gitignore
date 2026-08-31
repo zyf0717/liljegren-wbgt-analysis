@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Runtime cellwise WBGT distribution products (potentially multi-GB).
+data/cellwise_wbgt_quantiles/
+
 # C extensions
 *.so
 

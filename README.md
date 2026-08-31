@@ -45,20 +45,20 @@ Both row- and area-weighted statistics are always produced together.
   observation extraction.
 - `src/liljegren_analysis/comparison/` — pairwise SQL, persistence,
   distributions, weighting, and pooling formulas.
-- `src/liljegren_analysis/results.py` — shared campaign result scanning.
+- `src/liljegren_analysis/results.py` — shared HSB run result scanning.
 - `tests/` — aggregation, persistence, distribution, and pooling regression
   tests.
 - `docs/` — result layout and statistical method details.
 
 ## Inputs
 
-Each supplied HeatStressBench campaign root must contain:
+Each supplied HeatStressBench run root must contain:
 
 ```text
 results/<date>/<run>/<implementation>/results.parquet
 ```
 
-Campaigns under `.hsb/` and generated files under `data/` are ignored by Git.
+HSB runs under `.hsb/` and generated files under `data/` are ignored by Git.
 
 ## Environment
 
@@ -90,9 +90,95 @@ uv run python scripts/daily_pairwise.py \
   --sample-scope all-implementations
 ```
 
+### Cellwise WBGT temporal quantiles
+
+Compute one implementation at a time; repeat the command for each result
+implementation. The pipeline assigns deterministic integer `cell_id` values
+from validated ERA5 row-ID spatial prefixes, streams each daily shard into a
+single implementation-local fixed-bin memmap, and writes only the final
+Parquet product:
+
+```bash
+uv run python scripts/compute_cellwise_wbgt_quantiles.py \
+  --hsb-run /path/to/hsb-run \
+  --implementation liljegren-c \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31 \
+  --output-root data/cellwise_wbgt_quantiles
+```
+
+`grid.parquet` holds the integer/source-cell identity and coordinates;
+`implementations/<implementation>.parquet` holds per-cell valid counts,
+P50/P90/P95/P99 midpoint estimates, their containing-bin bounds, and explicit
+underflow/overflow counts. `metadata.json` records the grid fingerprint,
+input fingerprint, bin specification, run scope, and throughput. The default
+raw-WBGT bins are -70 to 70 °C at 0.02 °C, with explicit edge bins. Work files
+live in `.work/`, resume only from a completed daily checkpoint with matching
+input metadata, and are removed after successful output persistence. A
+deterministic 100-cell exact-order-statistic validation sample runs by default;
+use `--exact-validation-cells 0` only when intentionally deferring it.
+
+The joint-support temperature product is the preferred input when comparing
+implementations. It reads all seven implementations and WBGT, Tg, and Tnwb
+together once per date to construct a strict common-validity mask. Replay then
+scans all three quantities once per implementation/date and updates three
+concurrent disk-backed histograms:
+
+```bash
+uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
+  --hsb-run /path/to/hsb-run \
+  --start-date 2025-01-01 \
+  --end-date 2025-12-31 \
+  --output-root data/cellwise_temperature_quantiles/2025-joint-v1 \
+  --threads 8 \
+  --memory-limit 16GB
+```
+
+An observation enters any joint histogram only when all 21
+implementation/quantity results have status `ok` and a finite value. Each wide
+`implementations/<implementation>.parquet` contains the shared `n_joint`,
+WBGT/Tg/Tnwb quantiles and bounds, and quantity-specific native-valid counts.
+Daily masks are bit-packed and content-hashed under `.work/joint_mask/` while a
+run is incomplete. Three dense in-memory NumPy histograms exist during replay:
+about 4.93 GB each, or 14.79 GB total, for 351,848 cells, 7,002 bins, and
+annual `uint16` counters. DuckDB is opened and closed for each daily mask or
+implementation replay scan, uses the configurable 16 GB default limit and
+`.work/duckdb/` spill directory, and never retains an accumulating multi-date
+relation. Histograms are discarded after their implementation's final Parquet
+file is written; no histogram work files are persisted. Completed outputs are
+idempotent; compatible masks and finalized implementation files resume after
+interruption, and `.work/` is
+removed after all seven wide files and metadata are committed atomically.
+
 Matching log paths are derived automatically. `--database` and `--log-file`
 override the defaults. Each date uses a fresh worker process; the controller is
 the only database writer.
+
+### Cellwise upper-tail implementation spread
+
+The reference-free analysis joins the persisted implementation quantiles by
+`cell_id`; it does not read daily HSB result shards. It reports P50/P90/P95/P99
+cross-implementation spreads using the retained-grid area weights, the
+Liljegren-C diagnostic, extrema frequencies, a comparison chart, and one map
+per quantile:
+
+```bash
+uv run python scripts/analyze_cellwise_quantile_spread.py \
+  --input-root data/cellwise_temperature_quantiles/2025-joint-v1 \
+  --output-root data/cellwise_temperature_quantiles/analysis/wbgt \
+  --quantity wbgt
+```
+
+Use `--quantity tg` or `--quantity tnwb` with a distinct output directory to
+analyze the other wide-product temperatures. Legacy WBGT-only products remain
+readable and the original extraction API is unchanged.
+
+Open `notebooks/11-cellwise-temperature-quantiles.ipynb` to configure and run
+the persisted quantile generation, then
+`notebooks/31-cellwise-quantile-spread.ipynb` for the paper-facing
+summary. The generation notebook invokes the same public API as the script;
+the analysis notebook reads persisted outputs and does not duplicate the
+calculations.
 
 For annual analysis:
 
@@ -100,7 +186,7 @@ For annual analysis:
 uv run jupyter lab
 ```
 
-Open `notebooks/20-yearly_pairwise.ipynb`. It pools exact sums, reconstructs
+Open `notebooks/30-yearly-pairwise.ipynb`. It pools exact sums, reconstructs
 histogram quantile intervals, and builds row/area-weighted matrices including
 parametric limits of agreement.
 
@@ -118,8 +204,8 @@ columns, including failed results. Use `--start-date`, `--end-date`, repeatable
 explicit `--force` replacement.
 
 For raw country classification-transition analysis with editable thresholds,
-open `notebooks/11-era5_country_classification_changes.ipynb`. It reads the cached
-country observations rather than rescanning campaign Parquet. Edit the
+open `notebooks/20-era5-country-classification-changes.ipynb`. It reads the cached
+country observations rather than rescanning HSB run Parquet. Edit the
 parameters cell immediately after the imports: `COUNTRY_CODE` accepts ISO
 alpha-2 or alpha-3
 (default `JPN`), while the dates, thresholds, and DuckDB
@@ -146,6 +232,6 @@ required for countries smaller than one ERA5 cell.
 
 ## Method documentation
 
-- [Campaign result scanning and DuckDB relations](docs/results.md)
+- [HSB run result scanning and DuckDB relations](docs/results.md)
 - [Single-pass pairwise statistics](docs/pairwise-statistics.md)
 - [ERA5 cell-area weighting](docs/area-weighted-statistics.md)

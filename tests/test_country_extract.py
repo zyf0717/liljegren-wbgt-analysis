@@ -92,9 +92,9 @@ def _write_multiple_boundaries(path: Path) -> None:
     )
 
 
-def _write_results(campaign: Path) -> None:
+def _write_results(hsb_run: Path) -> None:
     path = (
-        campaign
+        hsb_run
         / "results"
         / "2025-01-01"
         / "0001"
@@ -124,9 +124,9 @@ def _write_results(campaign: Path) -> None:
     )
 
 
-def _write_irrelevant_results(campaign: Path, *, statistics: bool = True) -> Path:
+def _write_irrelevant_results(hsb_run: Path, *, statistics: bool = True) -> Path:
     path = (
-        campaign
+        hsb_run
         / "results"
         / "2025-01-01"
         / "0002"
@@ -158,15 +158,15 @@ class CountryExtractionTests(unittest.TestCase):
     def test_extracts_all_country_rows_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            campaign = root / "campaign"
+            hsb_run = root / "hsb_run"
             boundaries = root / "boundaries.geojson"
             output = root / "data" / "country" / "xxx" / "observations.parquet"
             _write_boundaries(boundaries)
-            _write_results(campaign)
+            _write_results(hsb_run)
 
             extraction = extract_country_observations(
                 "xx",
-                (campaign,),
+                (hsb_run,),
                 date(2025, 1, 1),
                 date(2025, 1, 1),
                 output,
@@ -258,7 +258,7 @@ class CountryExtractionTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, "already exists"):
                 extract_country_observations(
                     "XX",
-                    (campaign,),
+                    (hsb_run,),
                     date(2025, 1, 1),
                     date(2025, 1, 1),
                     output,
@@ -267,7 +267,7 @@ class CountryExtractionTests(unittest.TestCase):
 
             replacement = extract_country_observations(
                 "XX",
-                (campaign,),
+                (hsb_run,),
                 date(2025, 1, 1),
                 date(2025, 1, 1),
                 output,
@@ -290,12 +290,12 @@ class CountryExtractionTests(unittest.TestCase):
     def test_extracts_multiple_countries_with_one_pruned_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            campaign = root / "campaign"
+            hsb_run = root / "hsb_run"
             boundaries = root / "boundaries.geojson"
             output_directory = root / "data" / "country"
             _write_multiple_boundaries(boundaries)
-            _write_results(campaign)
-            _write_irrelevant_results(campaign)
+            _write_results(hsb_run)
+            _write_irrelevant_results(hsb_run)
             progress: list[CountryExtractionProgress] = []
 
             with patch(
@@ -307,7 +307,7 @@ class CountryExtractionTests(unittest.TestCase):
             ) as create_results_view:
                 extractions = extract_countries_observations(
                     ["xx", "XXX", "yy", "QQ"],
-                    (campaign,),
+                    (hsb_run,),
                     date(2025, 1, 1),
                     date(2025, 1, 1),
                     output_directory,
@@ -359,16 +359,16 @@ class CountryExtractionTests(unittest.TestCase):
     def test_validates_all_countries_before_publishing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            campaign = root / "campaign"
+            hsb_run = root / "hsb_run"
             boundaries = root / "boundaries.geojson"
             output_directory = root / "data" / "country"
             _write_multiple_boundaries(boundaries)
-            _write_results(campaign)
+            _write_results(hsb_run)
 
             with self.assertRaisesRegex(ValueError, "Missing"):
                 extract_countries_observations(
                     ["XX", "ZZ"],
-                    (campaign,),
+                    (hsb_run,),
                     date(2025, 1, 1),
                     date(2025, 1, 1),
                     output_directory,
@@ -387,8 +387,8 @@ class CountryExtractionTests(unittest.TestCase):
 
     def test_footer_pruning_falls_back_when_statistics_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            with_statistics = _write_irrelevant_results(campaign)
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            with_statistics = _write_irrelevant_results(hsb_run)
             without_statistics = _write_irrelevant_results(
                 Path(temporary_directory) / "other", statistics=False
             )
@@ -405,11 +405,11 @@ class CountryExtractionTests(unittest.TestCase):
     def test_interruption_records_cancelled_without_publishing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            campaign = root / "campaign"
+            hsb_run = root / "hsb_run"
             boundaries = root / "boundaries.geojson"
             output_directory = root / "data" / "country"
             _write_boundaries(boundaries)
-            _write_results(campaign)
+            _write_results(hsb_run)
 
             with patch(
                 "liljegren_analysis.country.extraction._execute_scan",
@@ -418,7 +418,7 @@ class CountryExtractionTests(unittest.TestCase):
                 with self.assertRaises(KeyboardInterrupt):
                     extract_countries_observations(
                         ["XX"],
-                        (campaign,),
+                        (hsb_run,),
                         date(2025, 1, 1),
                         date(2025, 1, 1),
                         output_directory,

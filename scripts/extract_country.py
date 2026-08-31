@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         "--run",
         action="append",
         type=Path,
-        help="Campaign/run root; repeat for multiple roots.",
+        help="HSB run root; repeat for multiple roots.",
     )
     parser.add_argument(
         "--output",

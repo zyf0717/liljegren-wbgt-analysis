@@ -9,18 +9,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-from liljegren_analysis import CampaignResults
+from liljegren_analysis import HSBRunResults
 
 
 def _write_result(
-    campaign: Path,
+    hsb_run: Path,
     implementation: str,
     value: float,
     result_date: str = "2025-01-01",
     run_id: str = "0001",
 ) -> None:
     path = (
-        campaign
+        hsb_run
         / "results"
         / result_date
         / run_id
@@ -47,7 +47,7 @@ def _write_result(
     )
 
 
-class CampaignResultsTests(unittest.TestCase):
+class HSBRunResultsTests(unittest.TestCase):
     def test_shared_relations_can_be_queried(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -57,10 +57,10 @@ class CampaignResultsTests(unittest.TestCase):
             _write_result(second, "meteor", 32.0)
 
             with duckdb.connect() as connection:
-                combined = CampaignResults.from_campaign(
+                combined = HSBRunResults.from_hsb_run(
                     first, connection=connection
                 ).scan(result_date="2025-01-01").union(
-                    CampaignResults.from_campaign(second, connection=connection).scan(
+                    HSBRunResults.from_hsb_run(second, connection=connection).scan(
                         result_date="2025-01-01"
                     )
                 )
@@ -79,12 +79,12 @@ class CampaignResultsTests(unittest.TestCase):
 
     def test_inclusive_date_range_prunes_by_exact_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            _write_result(campaign, "heatstress", 30.0, "2025-01-01")
-            _write_result(campaign, "heatstress", 31.0, "2025-01-02")
-            _write_result(campaign, "heatstress", 99.0, "2025-01-03")
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            _write_result(hsb_run, "heatstress", 30.0, "2025-01-01")
+            _write_result(hsb_run, "heatstress", 31.0, "2025-01-02")
+            _write_result(hsb_run, "heatstress", 99.0, "2025-01-03")
 
-            relation = CampaignResults.from_campaign(campaign).scan(
+            relation = HSBRunResults.from_hsb_run(hsb_run).scan(
                 start_date="2025-01-01",
                 end_date="2025-01-02",
             )
@@ -94,7 +94,7 @@ class CampaignResultsTests(unittest.TestCase):
                 (2, 30.5),
             )
 
-            explicit = CampaignResults.from_campaign(campaign).scan(
+            explicit = HSBRunResults.from_hsb_run(hsb_run).scan(
                 dates=["2025-01-01", "2025-01-03", "2025-01-03"]
             )
             self.assertEqual(
@@ -104,13 +104,13 @@ class CampaignResultsTests(unittest.TestCase):
 
     def test_multiple_scopes_and_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
+            hsb_run = Path(temporary_directory) / "hsb_run"
             for run_id in ("0001", "0002"):
-                _write_result(campaign, "heatstress", 30.0, run_id=run_id)
-                _write_result(campaign, "meteor", 32.0, run_id=run_id)
-                _write_result(campaign, "pywbgt", 99.0, run_id=run_id)
+                _write_result(hsb_run, "heatstress", 30.0, run_id=run_id)
+                _write_result(hsb_run, "meteor", 32.0, run_id=run_id)
+                _write_result(hsb_run, "pywbgt", 99.0, run_id=run_id)
 
-            relation = CampaignResults.from_campaign(campaign).scan(
+            relation = HSBRunResults.from_hsb_run(hsb_run).scan(
                 run_ids=[1, 2, 2],
                 implementations=["heatstress", "meteor"],
                 include_filename=True,
@@ -132,9 +132,9 @@ class CampaignResultsTests(unittest.TestCase):
 
     def test_date_scope_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            _write_result(campaign, "heatstress", 30.0)
-            results = CampaignResults.from_campaign(campaign)
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            _write_result(hsb_run, "heatstress", 30.0)
+            results = HSBRunResults.from_hsb_run(hsb_run)
 
             with self.assertRaisesRegex(ValueError, "only one"):
                 results.scan(
@@ -163,10 +163,10 @@ class CampaignResultsTests(unittest.TestCase):
 
     def test_quantity_selection_is_qualified_and_column_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            _write_result(campaign, "heatstress", 30.0)
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            _write_result(hsb_run, "heatstress", 30.0)
 
-            relation = CampaignResults.from_campaign(campaign).scan(quantity="tg")
+            relation = HSBRunResults.from_hsb_run(hsb_run).scan(quantity="tg")
 
             self.assertEqual(
                 relation.columns,
@@ -187,7 +187,7 @@ class CampaignResultsTests(unittest.TestCase):
             self.assertNotIn("wbgt_status", plan)
             self.assertNotIn("tnwb_status", plan)
 
-            selected = CampaignResults.from_campaign(campaign).scan(
+            selected = HSBRunResults.from_hsb_run(hsb_run).scan(
                 quantities=("tnwb", "wbgt", "tnwb")
             )
             self.assertEqual(
@@ -197,9 +197,9 @@ class CampaignResultsTests(unittest.TestCase):
 
     def test_rejects_legacy_generic_result_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
+            hsb_run = Path(temporary_directory) / "hsb_run"
             path = (
-                campaign
+                hsb_run
                 / "results"
                 / "2025-01-01"
                 / "0001"
@@ -221,7 +221,7 @@ class CampaignResultsTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "legacy status/value_c"):
-                CampaignResults.from_campaign(campaign).scan()
+                HSBRunResults.from_hsb_run(hsb_run).scan()
 
     def test_rejects_incompatible_quantity_column_types(self) -> None:
         cases = (
@@ -230,15 +230,15 @@ class CampaignResultsTests(unittest.TestCase):
         )
         for column, invalid_values, message in cases:
             with self.subTest(column=column), tempfile.TemporaryDirectory() as root:
-                campaign = Path(root) / "campaign"
-                _write_result(campaign, "heatstress", 30.0)
-                path = next(campaign.rglob("results.parquet"))
+                hsb_run = Path(root) / "hsb_run"
+                _write_result(hsb_run, "heatstress", 30.0)
+                path = next(hsb_run.rglob("results.parquet"))
                 table = pq.read_table(path)
                 index = table.column_names.index(column)
                 pq.write_table(table.set_column(index, column, invalid_values), path)
 
                 with self.assertRaisesRegex(ValueError, message):
-                    CampaignResults.from_campaign(campaign).scan()
+                    HSBRunResults.from_hsb_run(hsb_run).scan()
 
 
 if __name__ == "__main__":

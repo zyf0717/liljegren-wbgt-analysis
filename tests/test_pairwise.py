@@ -28,7 +28,7 @@ def _row_id(index: int) -> str:
 
 
 def _write_results(
-    campaign: Path,
+    hsb_run: Path,
     implementation: str,
     values: list[float | None],
     *,
@@ -39,7 +39,7 @@ def _write_results(
     row_ids: list[str] | None = None,
 ) -> None:
     path = (
-        campaign
+        hsb_run
         / "results"
         / "2025-01-01"
         / "0001"
@@ -158,16 +158,16 @@ class PairwiseTests(unittest.TestCase):
 
     def test_statuses_are_independent_but_agreement_population_is_joint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            _write_results(campaign, "alpha", [10.0, 20.0])
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            _write_results(hsb_run, "alpha", [10.0, 20.0])
             _write_results(
-                campaign,
+                hsb_run,
                 "beta",
                 [8.0, 18.0],
                 tg_statuses=["failed", "ok"],
             )
             _, summaries, _, _ = compute_daily_pairwise(
-                date(2025, 1, 1), (campaign,), threads=1
+                date(2025, 1, 1), (hsb_run,), threads=1
             )
 
         self.assertEqual({row["n"] for row in summaries.pairwise.to_pylist()}, {1})
@@ -183,7 +183,7 @@ class PairwiseTests(unittest.TestCase):
 
     def test_all_implementations_uses_one_complete_population(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
+            hsb_run = Path(temporary_directory) / "hsb_run"
             for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
                 values: list[float | None] = [
                     float(index),
@@ -199,12 +199,12 @@ class PairwiseTests(unittest.TestCase):
                     }
                 if implementation == EXPECTED_IMPLEMENTATIONS[-1]:
                     values[1] = None
-                _write_results(campaign, implementation, values, **arguments)
-            _write_results(campaign, "unexpected", [1.0, 2.0, 3.0])
+                _write_results(hsb_run, implementation, values, **arguments)
+            _write_results(hsb_run, "unexpected", [1.0, 2.0, 3.0])
 
             _, summaries, _, _ = compute_daily_pairwise(
                 date(2025, 1, 1),
-                (campaign,),
+                (hsb_run,),
                 threads=1,
                 sample_scope="all-implementations",
             )
@@ -222,13 +222,13 @@ class PairwiseTests(unittest.TestCase):
 
     def test_all_implementations_rejects_empty_complete_population(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
+            hsb_run = Path(temporary_directory) / "hsb_run"
             for implementation in EXPECTED_IMPLEMENTATIONS[:-1]:
-                _write_results(campaign, implementation, [1.0, 2.0, 3.0])
+                _write_results(hsb_run, implementation, [1.0, 2.0, 3.0])
             with self.assertRaisesRegex(ValueError, "no complete"):
                 compute_daily_pairwise(
                     date(2025, 1, 1),
-                    (campaign,),
+                    (hsb_run,),
                     threads=1,
                     sample_scope="all-implementations",
                 )
@@ -247,23 +247,23 @@ class PairwiseTests(unittest.TestCase):
             )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            _write_results(campaign, "alpha", [1.0])
-            _write_results(campaign, "beta", [2.0])
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            _write_results(hsb_run, "alpha", [1.0])
+            _write_results(hsb_run, "beta", [2.0])
             with self.assertRaisesRegex(ValueError, "Overlapping result scope"):
                 compute_daily_pairwise(
                     date(2025, 1, 1),
-                    (campaign, campaign),
+                    (hsb_run, hsb_run),
                     1,
                 )
 
     def test_query_plan_has_one_source_scan_self_join_and_aggregate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            campaign = Path(temporary_directory) / "campaign"
-            second_campaign = Path(temporary_directory) / "second-campaign"
-            _write_results(campaign, "alpha", [1.0])
-            _write_results(campaign, "beta", [2.0])
-            _write_results(second_campaign, "gamma", [3.0])
+            hsb_run = Path(temporary_directory) / "hsb_run"
+            second_hsb_run = Path(temporary_directory) / "second-hsb_run"
+            _write_results(hsb_run, "alpha", [1.0])
+            _write_results(hsb_run, "beta", [2.0])
+            _write_results(second_hsb_run, "gamma", [3.0])
             with duckdb.connect() as connection:
                 connection.register(
                     "_era5_latitude_weights",
@@ -271,7 +271,7 @@ class PairwiseTests(unittest.TestCase):
                 )
                 results = _combined_results(
                     date(2025, 1, 1),
-                    (campaign, second_campaign),
+                    (hsb_run, second_hsb_run),
                     connection,
                 )
                 plan = results.query(
