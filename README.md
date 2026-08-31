@@ -212,9 +212,25 @@ uv run python scripts/analyze_cellwise_iso7243_classification.py \
 `n_same = n_compared - n_changed` when needed. It is written one implementation
 pair at a time, without DuckDB, a cross join, or materializing the output.
 
+### Cellwise ISO 7243 non-consensus percentage
+
+The separate non-consensus ETL scans the raw daily result rows. For each cell,
+it records the percentage of joint-valid annual rows where the seven ISO 7243
+WBGT classes are not unanimous:
+
+```bash
+uv run python scripts/analyze_cellwise_iso7243_non_consensus.py \
+  --thresholds-c 25 26 28 30 33
+uv run python scripts/plot_cellwise_iso7243_non_consensus.py
+```
+
+The default HSB input is the same run used by daily pairwise analysis. The
+output is `data/cellwise_iso7243_non_consensus/cellwise_non_consensus.parquet`,
+with `n_joint`, `n_non_consensus`, and `non_consensus_percent`.
+
 Render 21 implementation-pair maps (each `n_changed / 4`, using a shared
-dynamic P99 color scale) plus the supplementary aggregate map and unweighted, geometric-weighted, and
-population-weighted `n_changed` distributions:
+dynamic P99 color scale) plus the supplementary aggregate map and unweighted,
+geometric-weighted, and population-weighted `n_changed` distributions:
 
 ```bash
 uv run python scripts/plot_cellwise_iso7243_classification.py
