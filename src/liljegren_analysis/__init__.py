@@ -20,6 +20,7 @@ from .cellwise import (
     analyze_cellwise_quantile_spread,
     compute_cellwise_wbgt_quantiles,
     compute_joint_cellwise_temperature_quantiles,
+    compute_era5_population_weights,
 )
 from .classification import (
     ClassificationAnalysis,
@@ -57,6 +58,7 @@ __all__ = [
     "compute_daily_pairwise",
     "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",
+    "compute_era5_population_weights",
     "analyze_cellwise_quantile_spread",
     "extract_countries_observations",
     "extract_country_observations",

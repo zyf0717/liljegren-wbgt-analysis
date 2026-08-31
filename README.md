@@ -150,6 +150,21 @@ idempotent; compatible masks and finalized implementation files resume after
 interruption, and `.work/` is
 removed after all seven wide files and metadata are committed atomically.
 
+### Global ERA5 population weights
+
+Aggregate LandScan Global 2024 population counts onto every 0.25-degree ERA5
+cell and normalize them to global population shares:
+
+```bash
+uv run python scripts/compute_era5_population_weights.py
+```
+
+The output is `data/cellwise_population_weight/population.parquet`, with stable
+`source_cell_id`, coordinates, integer `population`, and `population_weight`.
+The LandScan 30-arc-second grid aligns exactly with each regular 0.25-degree
+ERA5 cell; the two polar rows use their physically clipped half-height bands.
+Use `--force` to replace an existing output.
+
 Matching log paths are derived automatically. `--database` and `--log-file`
 override the defaults. Each date uses a fresh worker process; the controller is
 the only database writer.
@@ -158,9 +173,10 @@ the only database writer.
 
 The reference-free analysis joins the persisted implementation quantiles by
 `cell_id`; it does not read daily HSB result shards. It reports P50/P90/P95/P99
-cross-implementation spreads using the retained-grid area weights, the
-Liljegren-C diagnostic, extrema frequencies, a comparison chart, and one map
-per quantile:
+cross-implementation spreads, the Liljegren-C diagnostic, extrema frequencies,
+a comparison chart, and one map per quantile. Weight global statistics by equal
+cell (`none`), ERA5 cell geometry (`geometry`, the default), or LandScan
+population (`population`):
 
 ```bash
 uv run python scripts/analyze_cellwise_quantile_spread.py \
@@ -168,6 +184,10 @@ uv run python scripts/analyze_cellwise_quantile_spread.py \
   --output-root data/cellwise_temperature_quantiles/analysis/wbgt \
   --quantity wbgt
 ```
+
+For population weighting, generate the population table first and then add
+`--weighting population`; use `--population-weights-path` to override the
+default `data/cellwise_population_weight/population.parquet`.
 
 Use `--quantity tg` or `--quantity tnwb` with a distinct output directory to
 analyze the other wide-product temperatures. Legacy WBGT-only products remain

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pyarrow as pa
@@ -17,6 +18,7 @@ import pyarrow.parquet as pq
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..comparison.sql import EXPECTED_IMPLEMENTATIONS
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
+from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 
 PERCENTILES = ("p50", "p90", "p95", "p99")
 SPREAD_METRICS = (
@@ -25,8 +27,9 @@ SPREAD_METRICS = (
     "spread_p95_c",
     "spread_p99_c",
 )
-ANALYSIS_SCHEMA_VERSION = 3
+ANALYSIS_SCHEMA_VERSION = 4
 SPREAD_MAP_COLOR_LIMITS_C = (0.0, 8.0)
+Weighting = Literal["none", "geometry", "population"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,8 @@ def analyze_cellwise_quantile_spread(
     quantity: ResultQuantity = "wbgt",
     sample_size: int = 100,
     sample_seed: int = 0,
+    weighting: Weighting = "geometry",
+    population_weights_path: str | Path = DEFAULT_POPULATION_OUTPUT_ROOT / "population.parquet",
 ) -> QuantileSpreadOutputs:
     """Analyze one temperature's cross-implementation spread from Parquet only."""
 
@@ -61,6 +66,8 @@ def analyze_cellwise_quantile_spread(
         raise ValueError(f"Unsupported result quantity: {quantity}")
     if sample_size < 1:
         raise ValueError("sample_size must be positive")
+    if weighting not in ("none", "geometry", "population"):
+        raise ValueError(f"Unsupported weighting: {weighting}")
     source_metadata = _load_source_metadata(source_root)
     joint_schema = source_metadata.get("schema_version") == 2
     if not joint_schema and quantity != "wbgt":
@@ -72,7 +79,10 @@ def analyze_cellwise_quantile_spread(
     longitude = _float_column(grid, "longitude")
     if not np.array_equal(cell_ids, np.arange(len(cell_ids), dtype=cell_ids.dtype)):
         raise ValueError("Canonical grid cell_id values are not contiguous")
-    area_weight = _area_weights(grid["source_cell_id"].combine_chunks().to_pylist())
+    source_cell_ids = grid["source_cell_id"].combine_chunks().to_pylist()
+    canonical_weights, weight_source = _weights(
+        weighting, source_cell_ids, population_weights_path
+    )
     source_tables, common = _load_quantile_tables(
         source_root,
         cell_ids,
@@ -84,9 +94,9 @@ def analyze_cellwise_quantile_spread(
     if not common.any():
         raise ValueError("No complete-case cells across all implementations")
     if not joint_schema and not np.isclose(
-        area_weight[common].sum(), area_weight.sum(), rtol=1e-12
+        canonical_weights[common].sum(), canonical_weights.sum(), rtol=1e-12
     ):
-        raise ValueError("Complete-case area differs from the canonical retained grid")
+        raise ValueError("Complete-case weight differs from the canonical retained grid")
     _spot_check_sources(
         source_root,
         source_tables,
@@ -101,7 +111,9 @@ def analyze_cellwise_quantile_spread(
     ids = cell_ids[common]
     latitudes = latitude[common]
     longitudes = longitude[common]
-    weights = area_weight[common]
+    weights = canonical_weights[common]
+    if not weights.sum() > 0.0:
+        raise ValueError("Complete-case cells have zero total weight")
     values = {
         implementation: {
             percentile: source_tables[implementation][percentile][common]
@@ -117,7 +129,7 @@ def analyze_cellwise_quantile_spread(
     target_root.mkdir(parents=True, exist_ok=True)
     figure_directory = target_root / "figures"
     figure_directory.mkdir(exist_ok=True)
-    _write_figures(summary, cellwise, figure_directory, quantity)
+    _write_figures(summary, cellwise, figure_directory, quantity, weighting)
     cellwise_path = target_root / "cellwise_quantile_spread.parquet"
     summary_path = target_root / "global_quantile_spread_summary.parquet"
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
@@ -144,9 +156,22 @@ def analyze_cellwise_quantile_spread(
             "implementations": list(EXPECTED_IMPLEMENTATIONS),
             "complete_case_cell_count": len(ids),
             "canonical_cell_count": len(cell_ids),
-            "area_weight_sum": float(weights.sum()),
-            "canonical_area_weight_sum": float(area_weight.sum()),
-            "complete_case_area_fraction": float(weights.sum() / area_weight.sum()),
+            "weighting": weighting,
+            "weight_source": weight_source,
+            "weight_sum": float(weights.sum()),
+            "canonical_weight_sum": float(canonical_weights.sum()),
+            "complete_case_weight_fraction": float(weights.sum() / canonical_weights.sum()),
+            **(
+                {
+                    "area_weight_sum": float(weights.sum()),
+                    "canonical_area_weight_sum": float(canonical_weights.sum()),
+                    "complete_case_area_fraction": float(
+                        weights.sum() / canonical_weights.sum()
+                    ),
+                }
+                if weighting == "geometry"
+                else {}
+            ),
             "sample_size": min(sample_size, len(ids)),
             "sample_seed": sample_seed,
             "primary_map_metric": _primary_map_metric(summary),
@@ -264,6 +289,33 @@ def _area_weights(source_cell_ids: list[str]) -> np.ndarray:
     return result
 
 
+def _weights(
+    weighting: Weighting,
+    source_cell_ids: list[str],
+    population_weights_path: str | Path,
+) -> tuple[np.ndarray, str | None]:
+    if weighting == "none":
+        return np.ones(len(source_cell_ids), dtype=np.float64), None
+    if weighting == "geometry":
+        return _area_weights(source_cell_ids), "era5-cell-area-v1"
+    path = Path(population_weights_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Population weights do not exist: {path}; run "
+            "scripts/compute_era5_population_weights.py first"
+        )
+    table = pq.read_table(path, columns=["source_cell_id", "population"])
+    population_ids = table["source_cell_id"].combine_chunks().to_pylist()
+    population = _integer_column(table, "population").astype(np.float64)
+    if len(population_ids) != len(set(population_ids)):
+        raise ValueError("Population weights contain duplicate source_cell_id values")
+    lookup = dict(zip(population_ids, population, strict=True))
+    weights = np.asarray([lookup.get(cell_id, np.nan) for cell_id in source_cell_ids])
+    if not np.isfinite(weights).all() or (weights < 0.0).any():
+        raise ValueError("Population weights are missing or invalid for the analysis grid")
+    return weights, str(path)
+
+
 def _spot_check_sources(
     root: Path,
     tables: dict[str, dict[str, np.ndarray]],
@@ -295,12 +347,12 @@ def _spot_check_sources(
 
 
 def _cellwise_table(
-    cell_ids: np.ndarray, latitude: np.ndarray, longitude: np.ndarray, area_weight: np.ndarray,
+    cell_ids: np.ndarray, latitude: np.ndarray, longitude: np.ndarray, weights: np.ndarray,
     values: dict[str, dict[str, np.ndarray]],
 ) -> tuple[pa.Table, dict[str, np.ndarray]]:
     columns: dict[str, pa.Array] = {
         "cell_id": pa.array(cell_ids, type=pa.int64()), "latitude": pa.array(latitude),
-        "longitude": pa.array(longitude), "area_weight": pa.array(area_weight),
+        "longitude": pa.array(longitude), "weight": pa.array(weights),
     }
     metrics: dict[str, np.ndarray] = {}
     for implementation in EXPECTED_IMPLEMENTATIONS:
@@ -327,18 +379,18 @@ def _global_summary(metrics: dict[str, np.ndarray], weights: np.ndarray) -> pa.T
         row: dict[str, object] = {"metric": metric, **_weighted_statistics(values, weights)}
         if metric.startswith("spread_"):
             for threshold in (0.1, 0.2, 0.5, 1.0):
-                row[f"area_fraction_gt_{str(threshold).replace('.', '_')}_c"] = float(weights[values > threshold].sum() / weights.sum())
+                row[f"weight_fraction_gt_{str(threshold).replace('.', '_')}_c"] = float(weights[values > threshold].sum() / weights.sum())
         rows.append(row)
     return pa.Table.from_pylist(rows)
 
 
 def _weighted_statistics(values: np.ndarray, weights: np.ndarray) -> dict[str, float]:
     return {
-        "area_weighted_mean_c": float(np.average(values, weights=weights)),
-        "area_weighted_median_c": _weighted_quantile(values, weights, 0.5),
-        "area_weighted_p90_c": _weighted_quantile(values, weights, 0.9),
-        "area_weighted_p95_c": _weighted_quantile(values, weights, 0.95),
-        "area_weighted_p99_c": _weighted_quantile(values, weights, 0.99),
+        "weighted_mean_c": float(np.average(values, weights=weights)),
+        "weighted_median_c": _weighted_quantile(values, weights, 0.5),
+        "weighted_p90_c": _weighted_quantile(values, weights, 0.9),
+        "weighted_p95_c": _weighted_quantile(values, weights, 0.95),
+        "weighted_p99_c": _weighted_quantile(values, weights, 0.99),
         "maximum_c": float(values.max()),
     }
 
@@ -359,10 +411,10 @@ def _c_anchor_summary(values: dict[str, dict[str, np.ndarray]], weights: np.ndar
             absolute = np.abs(difference)
             rows.append({
                 "implementation": implementation, "anchor_implementation": "liljegren-c", "percentile": percentile,
-                "area_weighted_bias_c": float(np.average(difference, weights=weights)),
-                "area_weighted_mae_c": float(np.average(absolute, weights=weights)),
-                "area_weighted_rmse_c": float(np.sqrt(np.average(np.square(difference), weights=weights))),
-                "area_weighted_p95_absolute_difference_c": _weighted_quantile(absolute, weights, 0.95),
+                "weighted_bias_c": float(np.average(difference, weights=weights)),
+                "weighted_mae_c": float(np.average(absolute, weights=weights)),
+                "weighted_rmse_c": float(np.sqrt(np.average(np.square(difference), weights=weights))),
+                "weighted_p95_absolute_difference_c": _weighted_quantile(absolute, weights, 0.95),
                 "maximum_absolute_difference_c": float(absolute.max()),
             })
     return pa.Table.from_pylist(rows)
@@ -375,15 +427,15 @@ def _extrema_frequency(cellwise: pa.Table, weights: np.ndarray) -> pa.Table:
         maximum = cellwise[f"max_implementation_{percentile}"].to_pylist()
         for implementation in EXPECTED_IMPLEMENTATIONS:
             rows.append({"percentile": percentile, "implementation": implementation,
-                         "area_fraction_argmin": float(weights[np.asarray(minimum) == implementation].sum() / weights.sum()),
-                         "area_fraction_argmax": float(weights[np.asarray(maximum) == implementation].sum() / weights.sum())})
+                         "weight_fraction_argmin": float(weights[np.asarray(minimum) == implementation].sum() / weights.sum()),
+                         "weight_fraction_argmax": float(weights[np.asarray(maximum) == implementation].sum() / weights.sum())})
     return pa.Table.from_pylist(rows)
 
 
 def _primary_map_metric(summary: pa.Table) -> str:
     metrics = summary["metric"].to_pylist()
-    p95 = summary["area_weighted_p95_c"][metrics.index("spread_p95_c")].as_py()
-    p99 = summary["area_weighted_p95_c"][metrics.index("spread_p99_c")].as_py()
+    p95 = summary["weighted_p95_c"][metrics.index("spread_p95_c")].as_py()
+    p99 = summary["weighted_p95_c"][metrics.index("spread_p99_c")].as_py()
     return "spread_p99_c" if p99 >= p95 else "spread_p95_c"
 
 
@@ -392,6 +444,7 @@ def _write_figures(
     cellwise: pa.Table,
     directory: Path,
     quantity: ResultQuantity,
+    weighting: Weighting,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -402,7 +455,16 @@ def _write_figures(
     rows = [metric_names.index(f"spread_{p}_c") for p in percentiles]
     x = np.asarray([50, 90, 95, 99])
     figure, axis = plt.subplots(figsize=(6.4, 4.0), layout="constrained")
-    for column, label in (("area_weighted_median_c", "Area-weighted median"), ("area_weighted_mean_c", "Area-weighted mean"), ("area_weighted_p95_c", "Area-weighted P95")):
+    weight_label = {
+        "none": "Unweighted",
+        "geometry": "Geometric-weighted",
+        "population": "Population-weighted",
+    }[weighting]
+    for column, label in (
+        ("weighted_median_c", f"{weight_label} median"),
+        ("weighted_mean_c", f"{weight_label} mean"),
+        ("weighted_p95_c", f"{weight_label} P95"),
+    ):
         axis.plot(x, [summary[column][row].as_py() for row in rows], marker="o", label=label)
     label = RESULT_QUANTITY_SPECS[quantity].label
     axis.set(
