@@ -203,19 +203,33 @@ columns, including failed results. Use `--start-date`, `--end-date`, repeatable
 `--run`, and `--threads` to change extraction scope; existing caches require
 explicit `--force` replacement.
 
-For raw country classification-transition analysis with editable thresholds,
-open `notebooks/20-era5-country-classification-changes.ipynb`. It reads the cached
-country observations rather than rescanning HSB run Parquet. Edit the
-parameters cell immediately after the imports: `COUNTRY_CODE` accepts ISO
-alpha-2 or alpha-3
-(default `JPN`), while the dates, thresholds, and DuckDB
-thread count are also declared there. Setting `DUCKDB_THREADS` to zero keeps
-DuckDB's default. DuckDB filters country cells from Parquet,
-then the bounded observations and all subsequent analysis remain inspectable
-pandas DataFrames. It does not compute global agreement statistics. For large
-countries, narrow `ANALYSIS_START_DATE` and `ANALYSIS_END_DATE` to keep the
-pandas working set manageable. The notebook reports Tg/Tnwb availability but
-applies heat-risk thresholds only to rows with valid WBGT.
+Classify the cached ERA5 country observations with any ordered WBGT threshold
+profile; this step never selects cells or rescans source results:
+
+```bash
+uv run python scripts/analyze_era5_country_classification.py \
+  --cache data/country/jpn/observations.parquet \
+  --output-root data/country_classification/jpn \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 21 25 28 31
+```
+
+For NASA POWER workloads, use the equivalent run-oriented command with optional
+repeatable `--country` and `--location` filters:
+
+```bash
+uv run python scripts/analyze_nasa_power_classification.py \
+  --run .hsb/runs/<run> \
+  --output-root data/country_classification/sg \
+  --start-date 2001-01-01 --end-date 2025-12-31 \
+  --country SG --location singapore \
+  --thresholds-c 31 32 33
+```
+
+Both commands write class definitions, pair and monthly transition summaries,
+transition counts, and the 100 largest changed observations. The corresponding
+notebooks are thin editable frontends over these same APIs; the ERA5 notebook
+consumes only the pre-extracted cache.
 
 To select all 0.25-degree ERA5 cell footprints intersecting one or more ADM0
 countries, pass ISO alpha-2 or alpha-3 codes:

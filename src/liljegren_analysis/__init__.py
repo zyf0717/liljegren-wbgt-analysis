@@ -21,6 +21,14 @@ from .cellwise import (
     compute_cellwise_wbgt_quantiles,
     compute_joint_cellwise_temperature_quantiles,
 )
+from .classification import (
+    ClassificationAnalysis,
+    Era5ClassificationAnalysis,
+    NasaPowerClassificationAnalysis,
+    analyze_era5_country_cache,
+    analyze_nasa_power_run,
+    analyze_wbgt_classification,
+)
 from .results import (
     RESULT_QUANTITIES,
     RESULT_QUANTITY_SPECS,
@@ -34,12 +42,18 @@ __all__ = [
     "HSBRunResults",
     "CountryExtraction",
     "CountryExtractionProgress",
+    "ClassificationAnalysis",
     "DailyPairwiseSummaries",
+    "Era5ClassificationAnalysis",
     "RESULT_QUANTITIES",
     "RESULT_QUANTITY_SPECS",
     "RESULT_SCHEMA_ID",
     "ResultQuantity",
     "ResultQuantitySpec",
+    "NasaPowerClassificationAnalysis",
+    "analyze_era5_country_cache",
+    "analyze_nasa_power_run",
+    "analyze_wbgt_classification",
     "compute_daily_pairwise",
     "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",
