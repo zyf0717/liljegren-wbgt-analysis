@@ -1,4 +1,4 @@
-"""Expose HeatStressBench campaign results as lazy DuckDB relations."""
+"""Expose HeatStressBench run results as lazy DuckDB relations."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ RESULT_SCHEMA_ID = "hsb-wbgt-comparison-results-csv-v3"
 _IDENTITY_COLUMNS = ("cycle_ordinal", "row_id", "row_ordinal")
 
 
-class CampaignResults:
+class HSBRunResults:
     """Scan ``results/<date>/<run>/<implementation>/results.parquet``."""
 
     def __init__(
@@ -57,15 +57,15 @@ class CampaignResults:
         self.connection = connection or duckdb.connect()
 
     @classmethod
-    def from_campaign(
+    def from_hsb_run(
         cls,
-        campaign: str | Path,
+        hsb_run: str | Path,
         *,
         connection: duckdb.DuckDBPyConnection | None = None,
     ) -> Self:
         """Create a scanner from a directory containing ``results``."""
 
-        return cls(Path(campaign) / "results", connection=connection)
+        return cls(Path(hsb_run) / "results", connection=connection)
 
     def scan(
         self,

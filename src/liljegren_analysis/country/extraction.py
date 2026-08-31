@@ -259,7 +259,7 @@ def _extract_countries_observations(
         raise ValueError("runs is empty")
     missing_runs = [run for run in resolved_runs if not (run / "results").is_dir()]
     if missing_runs:
-        raise FileNotFoundError(f"Missing campaign result roots: {missing_runs}")
+        raise FileNotFoundError(f"Missing HSB run result roots: {missing_runs}")
 
     boundary_path = _resolve_boundaries(
         boundaries,

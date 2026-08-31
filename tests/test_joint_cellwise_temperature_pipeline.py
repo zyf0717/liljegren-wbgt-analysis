@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from liljegren_analysis.cellwise import (
+    analyze_cellwise_quantile_spread,
+    compute_joint_cellwise_temperature_quantiles,
+    joint_pipeline,
+)
+from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
+from liljegren_analysis.comparison.sql import EXPECTED_IMPLEMENTATIONS
+
+_CELLS = (
+    "era5-global-n000000-e0000000",
+    "era5-global-n002500-e0000000",
+    "era5-global-n005000-e0000000",
+)
+
+
+def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
+    for implementation_index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+        path = (
+            hsb_run
+            / "results"
+            / result_date
+            / "0001"
+            / implementation
+            / "results.parquet"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wbgt_status = ["ok", "ok", "ok"]
+        if implementation == "heatstress-jl":
+            wbgt_status[2] = "invalid"
+        offset = implementation_index / 10
+        tnwb_values: list[float | None] = [
+            10.0 + day + offset,
+            20.0 + day + offset,
+            30.0 + day + offset,
+        ]
+        if implementation == "heatstress-r" and day == 2:
+            tnwb_values[1] = None
+        pq.write_table(
+            pa.table(
+                {
+                    "cycle_ordinal": pa.array([1, 1, 1], type=pa.uint32()),
+                    "row_id": [
+                        f"{cell}-{result_date.replace('-', '')}00" for cell in _CELLS
+                    ],
+                    "row_ordinal": pa.array([0, 1, 2], type=pa.uint32()),
+                    "wbgt_status": wbgt_status,
+                    "wbgt_c": [20.0 + day + offset, 30.0 + day + offset, 40.0 + day + offset],
+                    "tg_status": ["ok", "ok", "ok"],
+                    "tg_c": [30.0 + day + offset, 40.0 + day + offset, 50.0 + day + offset],
+                    "tnwb_status": ["ok", "ok", "ok"],
+                    "tnwb_c": pa.array(tnwb_values, type=pa.float64()),
+                }
+            ),
+            path,
+        )
+
+
+class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
+    def test_all_implementation_all_quantity_support_is_shared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hsb_run = root / "hsb-run"
+            output = root / "output"
+            _write_joint_day(hsb_run, "2025-01-01", 1)
+            _write_joint_day(hsb_run, "2025-01-02", 2)
+
+            with mock.patch.object(
+                joint_pipeline,
+                "_scan_native_valid_day",
+                wraps=joint_pipeline._scan_native_valid_day,
+            ) as scan:
+                result_root = compute_joint_cellwise_temperature_quantiles(
+                    hsb_run,
+                    start_date="2025-01-01",
+                    end_date="2025-01-02",
+                    output_root=output,
+                    histogram_spec=WBGTHistogramSpec(
+                        minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
+                    ),
+                    exact_validation_cells=3,
+                )
+            self.assertEqual(scan.call_count, len(EXPECTED_IMPLEMENTATIONS) * 2)
+
+            self.assertEqual(result_root, output.resolve())
+            for implementation in EXPECTED_IMPLEMENTATIONS:
+                table = pq.read_table(
+                    output / "implementations" / f"{implementation}.parquet"
+                )
+                self.assertEqual(table["n_joint"].to_pylist(), [2, 1, 0])
+                self.assertEqual(table["n_expected"].to_pylist(), [48, 48, 48])
+                for quantity in ("wbgt", "tg", "tnwb"):
+                    self.assertEqual(table[f"{quantity}_p50_c"].null_count, 1)
+                    native = table[f"{quantity}_native_valid_n"].to_pylist()
+                    self.assertTrue(all(a >= b for a, b in zip(native, [2, 1, 0])))
+
+            heatstress = pq.read_table(
+                output / "implementations" / "heatstress.parquet"
+            )
+            heatstress_jl = pq.read_table(
+                output / "implementations" / "heatstress-jl.parquet"
+            )
+            self.assertEqual(heatstress["wbgt_native_valid_n"].to_pylist(), [2, 2, 2])
+            self.assertEqual(heatstress_jl["wbgt_native_valid_n"].to_pylist(), [2, 2, 0])
+            self.assertEqual(heatstress_jl["tg_native_valid_n"].to_pylist(), [2, 2, 2])
+            heatstress_r = pq.read_table(
+                output / "implementations" / "heatstress-r.parquet"
+            )
+            self.assertEqual(heatstress_r["tnwb_native_valid_n"].to_pylist(), [2, 1, 2])
+            self.assertEqual(heatstress["wbgt_p50_c"].to_pylist(), [21.5, 31.5, None])
+            self.assertEqual(heatstress["tg_p90_c"].to_pylist(), [32.5, 41.5, None])
+
+            metadata = json.loads((output / "metadata.json").read_text())
+            self.assertEqual(metadata["schema_version"], 2)
+            self.assertEqual(
+                metadata["support_scope"], "all-implementations-all-quantities"
+            )
+            self.assertEqual(metadata["quantities"], ["wbgt", "tg", "tnwb"])
+            self.assertEqual(
+                metadata["replay_strategy"], "implementation-all-quantities-in-memory-v3"
+            )
+            self.assertEqual(metadata["joint_observation_count"], 3)
+            self.assertEqual(metadata["cells_with_joint_observations"], 2)
+            self.assertEqual(
+                set(metadata["unit_provenance"]), set(EXPECTED_IMPLEMENTATIONS)
+            )
+            first_provenance = metadata["unit_provenance"]["heatstress"]
+            self.assertEqual(
+                first_provenance["concurrent_histogram_memmap_bytes"],
+                3 * first_provenance["histogram_memmap_bytes_each"],
+            )
+            self.assertFalse((output / ".work").exists())
+
+            spread = analyze_cellwise_quantile_spread(
+                output,
+                output_root=root / "tg-analysis",
+                quantity="tg",
+                sample_size=2,
+            )
+            spread_metadata = json.loads(spread.metadata.read_text())
+            self.assertEqual(spread_metadata["quantity"], "tg")
+            self.assertEqual(spread_metadata["complete_case_cell_count"], 2)
+            self.assertLess(spread_metadata["complete_case_area_fraction"], 1.0)
+
+            # A completed compatible run is idempotent and does not rebuild masks.
+            self.assertEqual(
+                compute_joint_cellwise_temperature_quantiles(
+                    hsb_run,
+                    start_date="2025-01-01",
+                    end_date="2025-01-02",
+                    output_root=output,
+                    histogram_spec=WBGTHistogramSpec(
+                        minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
+                    ),
+                ),
+                output.resolve(),
+            )
+
+    def test_duplicate_target_identity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hsb_run = root / "hsb-run"
+            _write_joint_day(hsb_run, "2025-01-01", 1)
+            path = (
+                hsb_run
+                / "results/2025-01-01/0001/heatstress/results.parquet"
+            )
+            table = pq.read_table(path)
+            pq.write_table(pa.concat_tables([table, table.slice(0, 1)]), path)
+
+            with self.assertRaisesRegex(ValueError, "Duplicate or inconsistent"):
+                compute_joint_cellwise_temperature_quantiles(
+                    hsb_run,
+                    start_date="2025-01-01",
+                    end_date="2025-01-01",
+                    output_root=root / "output",
+                    histogram_spec=WBGTHistogramSpec(
+                        minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
+                    ),
+                    exact_validation_cells=0,
+                )
+
+    def test_reported_open_edge_quantile_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hsb_run = root / "hsb-run"
+            _write_joint_day(hsb_run, "2025-01-01", 1)
+
+            with self.assertRaisesRegex(ValueError, "open histogram edge bin"):
+                compute_joint_cellwise_temperature_quantiles(
+                    hsb_run,
+                    start_date="2025-01-01",
+                    end_date="2025-01-01",
+                    output_root=root / "output",
+                    histogram_spec=WBGTHistogramSpec(
+                        minimum_c=-10.0, maximum_c=10.0, width_c=1.0, version=99
+                    ),
+                    exact_validation_cells=0,
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

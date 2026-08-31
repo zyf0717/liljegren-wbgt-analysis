@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from liljegren_analysis import (
+    histogram_quantiles,
     histogram_quantile_statistics,
     pooled_area_weighted_difference_statistics,
     pooled_difference_statistics,
@@ -294,6 +295,16 @@ class StatisticsTests(unittest.TestCase):
                 expected_count=100,
                 expected_area_weight_sum=100.0,
             )
+
+    def test_generic_histogram_quantiles_support_p90_and_fractional_mass(self) -> None:
+        result = histogram_quantiles(
+            bin_lowers=[0.0, 1.0, 2.0],
+            bin_uppers=[1.0, 2.0, 3.0],
+            counts=[0.25, 0.25, 1.5],
+            probabilities=(0.50, 0.90),
+        )
+        self.assertEqual(result[0.50], (2.5, 2.0, 3.0))
+        self.assertEqual(result[0.90], (2.5, 2.0, 3.0))
 
 
 if __name__ == "__main__":

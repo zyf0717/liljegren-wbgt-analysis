@@ -1,6 +1,6 @@
-# Campaign result relations
+# HSB run result relations
 
-`CampaignResults` maps this filesystem structure to a lazy DuckDB relation:
+`HSBRunResults` maps this filesystem structure to a lazy DuckDB relation:
 
 ```text
 results/<result_date>/<run_id>/<implementation>/results.parquet
@@ -11,22 +11,22 @@ From a notebook under `notebooks/`:
 ```python
 from pathlib import Path
 
-from liljegren_analysis import CampaignResults
+from liljegren_analysis import HSBRunResults
 
 repository = Path("..").resolve()
 ```
 
-Open a campaign and construct a scoped relation:
+Open an HSB run and construct a scoped relation:
 
 ```python
-campaign = (
+hsb_run = (
     repository
     / ".hsb"
     / "runs"
     / "wbgt-comparison-20260823-181813"
 )
 
-results = CampaignResults.from_campaign(campaign)
+results = HSBRunResults.from_hsb_run(hsb_run)
 relation = results.scan(result_date="2025-01-01", run_id=1)
 ```
 
@@ -139,7 +139,7 @@ runs = [
 
 con = duckdb.connect()
 relations = [
-    CampaignResults.from_campaign(run, connection=con).scan(
+    HSBRunResults.from_hsb_run(run, connection=con).scan(
         start_date="2025-01-01",
         end_date="2025-01-07",
     )

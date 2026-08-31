@@ -28,7 +28,7 @@ from .sql import (
     SampleScope,
     build_daily_pairwise_sql,
 )
-from ..results import RESULT_QUANTITIES, RESULT_SCHEMA_ID, CampaignResults
+from ..results import HSBRunResults, RESULT_QUANTITIES, RESULT_SCHEMA_ID
 
 
 PAIRWISE_COLUMNS = (
@@ -255,7 +255,7 @@ def _combined_results(
 ) -> duckdb.DuckDBPyRelation:
     _validate_nonoverlapping_scopes(result_date, runs)
     relations = [
-        CampaignResults.from_campaign(run, connection=connection).scan(
+        HSBRunResults.from_hsb_run(run, connection=connection).scan(
             result_date=result_date,
         )
         for run in runs

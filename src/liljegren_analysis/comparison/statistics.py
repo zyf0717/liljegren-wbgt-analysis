@@ -8,6 +8,92 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
+def histogram_quantile_bin_indices(
+    counts: ArrayLike,
+    probabilities: tuple[float, ...] = (0.50, 0.95, 0.99),
+) -> np.ndarray:
+    """Return containing-bin indices for 1-D or row-wise histogram counts.
+
+    The rank convention is the existing one: the first bin whose cumulative
+    mass is at least ``probability * total_mass``.  A ``-1`` result represents
+    an all-zero histogram row.  Callers processing large dense histograms can
+    invoke this helper in row chunks to bound the temporary cumulative array.
+    """
+
+    masses = np.asarray(counts)
+    if masses.ndim not in (1, 2):
+        raise ValueError("counts must be a one- or two-dimensional array")
+    if not np.issubdtype(masses.dtype, np.number):
+        raise ValueError("counts must be numeric")
+    if not np.isfinite(masses).all() or (masses < 0).any():
+        raise ValueError("counts must be finite and nonnegative")
+    probabilities_array = np.asarray(probabilities, dtype=np.float64)
+    if (
+        probabilities_array.ndim != 1
+        or not len(probabilities_array)
+        or not np.isfinite(probabilities_array).all()
+        or (probabilities_array <= 0.0).any()
+        or (probabilities_array > 1.0).any()
+    ):
+        raise ValueError("probabilities must be finite values in (0, 1]")
+
+    if masses.ndim == 1:
+        # Preserve the historical scalar accumulation semantics used by the
+        # pairwise public API, including ``math.fsum`` for fractional area
+        # mass.  Dense cellwise extraction uses the 2-D vectorized branch.
+        total = math.fsum(float(value) for value in masses)
+        result = np.full(len(probabilities_array), -1, dtype=np.int64)
+        if total == 0.0:
+            return result
+        for probability_index, probability in enumerate(probabilities_array):
+            cumulative = 0.0
+            for bin_index, mass in enumerate(masses):
+                cumulative += float(mass)
+                if cumulative >= probability * total:
+                    result[probability_index] = bin_index
+                    break
+        return result
+
+    rows = masses
+    cumulative_dtype = np.uint64 if np.issubdtype(rows.dtype, np.integer) else np.float64
+    cumulative = np.cumsum(rows, axis=1, dtype=cumulative_dtype)
+    totals = cumulative[:, -1]
+    result = np.full((len(rows), len(probabilities_array)), -1, dtype=np.int64)
+    nonzero = totals > 0
+    for index, probability in enumerate(probabilities_array):
+        reached = cumulative >= probability * totals[:, np.newaxis]
+        result[nonzero, index] = reached[nonzero].argmax(axis=1)
+    return result
+
+
+def histogram_quantiles(
+    *,
+    bin_lowers: ArrayLike,
+    bin_uppers: ArrayLike,
+    counts: ArrayLike,
+    probabilities: tuple[float, ...] = (0.50, 0.95, 0.99),
+) -> dict[float, tuple[float | None, float | None, float | None]]:
+    """Return midpoint and containing bounds for generic fixed-bin counts."""
+
+    lowers = _array(bin_lowers, "bin_lowers")
+    uppers = _array(bin_uppers, "bin_uppers", length=len(lowers))
+    masses = _array(counts, "counts")
+    if not np.isfinite(masses).all() or (masses < 0).any():
+        raise ValueError("counts must contain finite nonnegative mass")
+    if len(masses) != len(lowers):
+        raise ValueError("counts length does not match bin_lowers")
+    if math.fsum(float(value) for value in masses) == 0.0:
+        raise ValueError("counts must contain positive total mass")
+    indices = histogram_quantile_bin_indices(masses, probabilities)
+    result: dict[float, tuple[float | None, float | None, float | None]] = {}
+    for probability, index in zip(probabilities, indices, strict=True):
+        lower = None if np.isnan(lowers[index]) else float(lowers[index])
+        upper = None if np.isnan(uppers[index]) else float(uppers[index])
+        estimate = None if lower is None or upper is None else (lower + upper) / 2.0
+        result[probability] = estimate, lower, upper
+    return result
+
+
 def pooled_sufficient_statistics(
     counts: ArrayLike,
     *,
@@ -221,24 +307,8 @@ def histogram_quantile_statistics(
 
     result: dict[str, float] = {}
     for label, probability in (("median", 0.50), ("p95", 0.95), ("p99", 0.99)):
-        _add_histogram_quantile(
-            result,
-            label,
-            probability,
-            ordered,
-            mass_index=3,
-            total_mass=float(total_count),
-            prefix="",
-        )
-        _add_histogram_quantile(
-            result,
-            label,
-            probability,
-            ordered,
-            mass_index=4,
-            total_mass=total_weight,
-            prefix="area_weighted_",
-        )
+        _add_histogram_quantile(result, label, probability, ordered, 3, "")
+        _add_histogram_quantile(result, label, probability, ordered, 4, "area_weighted_")
     return result
 
 
@@ -247,26 +317,21 @@ def _add_histogram_quantile(
     label: str,
     probability: float,
     bins: list[tuple[int, float, float | None, int, float]],
-    *,
     mass_index: int,
-    total_mass: float,
     prefix: str,
 ) -> None:
-    cumulative = 0.0
-    for row in bins:
-        cumulative += float(row[mass_index])
-        if cumulative >= probability * total_mass:
-            lower, upper = row[1], row[2]
-            if upper is None:
-                raise ValueError(
-                    f"{prefix}{label} absolute difference falls in overflow bin"
-                )
-            stem = f"{prefix}{label}_absolute_difference"
-            result[f"{stem}_c"] = (lower + upper) / 2.0
-            result[f"{stem}_lower_c"] = lower
-            result[f"{stem}_upper_c"] = upper
-            return
-    raise ValueError(f"Could not locate {prefix}{label} histogram quantile")
+    estimate, lower, upper = histogram_quantiles(
+        bin_lowers=[row[1] for row in bins],
+        bin_uppers=[np.nan if row[2] is None else row[2] for row in bins],
+        counts=[row[mass_index] for row in bins],
+        probabilities=(probability,),
+    )[probability]
+    if upper is None or estimate is None:
+        raise ValueError(f"{prefix}{label} absolute difference falls in overflow bin")
+    stem = f"{prefix}{label}_absolute_difference"
+    result[f"{stem}_c"] = estimate
+    result[f"{stem}_lower_c"] = lower
+    result[f"{stem}_upper_c"] = upper
 
 
 def _nonnegative_roundoff(

@@ -28,13 +28,13 @@ def _weight(latitude: float) -> float:
 
 
 def _write(
-    campaign: Path,
+    hsb_run: Path,
     implementation: str,
     row_ids: list[str],
     values: list[float],
 ) -> None:
     path = (
-        campaign
+        hsb_run
         / "results"
         / "2025-01-01"
         / "0001"
