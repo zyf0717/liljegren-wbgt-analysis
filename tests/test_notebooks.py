@@ -22,32 +22,26 @@ class NotebookMigrationTests(unittest.TestCase):
         for name in (
             "10-daily-pairwise.ipynb",
             "11-cellwise-temperature-quantiles.ipynb",
-            "20-era5-country-classification-changes.ipynb",
-            "21-nasa-power-classification-changes.ipynb",
+            "20-era5-jpn-classification-changes.ipynb",
+            "21-nasa-power-sg-classification-changes.ipynb",
             "30-yearly-pairwise.ipynb",
             "31-cellwise-quantile-spread.ipynb",
         ):
             with self.subTest(notebook=name):
                 compile(_code(name), name, "exec")
 
-    def test_era5_country_classification_uses_native_wbgt_columns(self) -> None:
-        code = _code("20-era5-country-classification-changes.ipynb")
+    def test_era5_country_classification_uses_shared_cache_analysis(self) -> None:
+        code = _code("20-era5-jpn-classification-changes.ipynb")
 
-        self.assertIn("WHERE wbgt_status = 'ok' AND wbgt_c IS NOT NULL", code)
-        self.assertIn("a.wbgt_c AS wbgt_c_a", code)
-        self.assertIn("AS wbgt_difference_c", code)
-        self.assertNotIn("value_c", code)
-        self.assertNotIn(" AS difference_c", code)
+        self.assertIn("analyze_era5_country_cache", code)
+        self.assertIn("observations.parquet", code)
+        self.assertNotIn("country_cells(", code)
 
-    def test_nasa_power_classification_uses_native_wbgt_columns(self) -> None:
-        code = _code("21-nasa-power-classification-changes.ipynb")
+    def test_nasa_power_classification_uses_shared_analysis(self) -> None:
+        code = _code("21-nasa-power-sg-classification-changes.ipynb")
 
-        self.assertIn('results["wbgt_status"].eq("ok")', code)
-        self.assertIn('classified["wbgt_c"]', code)
-        self.assertIn('paired_classifications["wbgt_c_a"]', code)
-        self.assertIn('paired_classifications["wbgt_difference_c"]', code)
-        self.assertNotIn("value_c", code)
-        self.assertNotIn('results["status"]', code)
+        self.assertIn("analyze_nasa_power_run", code)
+        self.assertIn("write_outputs", code)
 
 
 if __name__ == "__main__":

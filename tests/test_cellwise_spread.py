@@ -76,6 +76,39 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(pq.read_table(output.c_anchor_differences).num_rows, 24)
             self.assertEqual(pq.read_table(output.extrema_frequency).num_rows, 28)
 
+            unweighted = analyze_cellwise_quantile_spread(
+                root,
+                output_root=Path(temporary) / "analysis-unweighted",
+                sample_size=2,
+                weighting="none",
+            )
+            self.assertEqual(
+                pq.read_table(unweighted.cellwise_spread)["weight"].to_pylist(),
+                [1.0, 1.0],
+            )
+
+            population_path = Path(temporary) / "population.parquet"
+            pq.write_table(
+                pa.table(
+                    {
+                        "source_cell_id": grid["source_cell_id"],
+                        "population": pa.array([1, 3], type=pa.int64()),
+                    }
+                ),
+                population_path,
+            )
+            population_weighted = analyze_cellwise_quantile_spread(
+                root,
+                output_root=Path(temporary) / "analysis-population",
+                sample_size=2,
+                weighting="population",
+                population_weights_path=population_path,
+            )
+            population_cellwise = pq.read_table(population_weighted.cellwise_spread)
+            self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
+            population_metadata = json.loads(population_weighted.metadata.read_text())
+            self.assertEqual(population_metadata["weighting"], "population")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,12 +23,22 @@ def main() -> None:
     )
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--quantity", choices=("wbgt", "tg", "tnwb"), default="wbgt")
+    parser.add_argument(
+        "--weighting", choices=("none", "geometry", "population"), default="geometry"
+    )
+    parser.add_argument("--population-weights-path", type=Path)
     arguments = parser.parse_args()
     outputs = analyze_cellwise_quantile_spread(
         arguments.input_root,
         output_root=arguments.output_root,
         quantity=arguments.quantity,
         sample_size=arguments.sample_size,
+        weighting=arguments.weighting,
+        **(
+            {"population_weights_path": arguments.population_weights_path}
+            if arguments.population_weights_path is not None
+            else {}
+        ),
     )
     print(outputs.cellwise_spread)
 

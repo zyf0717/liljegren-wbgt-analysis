@@ -150,6 +150,21 @@ idempotent; compatible masks and finalized implementation files resume after
 interruption, and `.work/` is
 removed after all seven wide files and metadata are committed atomically.
 
+### Global ERA5 population weights
+
+Aggregate LandScan Global 2024 population counts onto every 0.25-degree ERA5
+cell and normalize them to global population shares:
+
+```bash
+uv run python scripts/compute_era5_population_weights.py
+```
+
+The output is `data/cellwise_population_weight/population.parquet`, with stable
+`source_cell_id`, coordinates, integer `population`, and `population_weight`.
+The LandScan 30-arc-second grid aligns exactly with each regular 0.25-degree
+ERA5 cell; the two polar rows use their physically clipped half-height bands.
+Use `--force` to replace an existing output.
+
 Matching log paths are derived automatically. `--database` and `--log-file`
 override the defaults. Each date uses a fresh worker process; the controller is
 the only database writer.
@@ -158,9 +173,10 @@ the only database writer.
 
 The reference-free analysis joins the persisted implementation quantiles by
 `cell_id`; it does not read daily HSB result shards. It reports P50/P90/P95/P99
-cross-implementation spreads using the retained-grid area weights, the
-Liljegren-C diagnostic, extrema frequencies, a comparison chart, and one map
-per quantile:
+cross-implementation spreads, the Liljegren-C diagnostic, extrema frequencies,
+a comparison chart, and one map per quantile. Weight global statistics by equal
+cell (`none`), ERA5 cell geometry (`geometry`, the default), or LandScan
+population (`population`):
 
 ```bash
 uv run python scripts/analyze_cellwise_quantile_spread.py \
@@ -169,9 +185,56 @@ uv run python scripts/analyze_cellwise_quantile_spread.py \
   --quantity wbgt
 ```
 
+For population weighting, generate the population table first and then add
+`--weighting population`; use `--population-weights-path` to override the
+default `data/cellwise_population_weight/population.parquet`.
+
 Use `--quantity tg` or `--quantity tnwb` with a distinct output directory to
 analyze the other wide-product temperatures. Legacy WBGT-only products remain
 readable and the original extraction API is unchanged.
+
+### Global ISO 7243 cell-pair classification changes
+
+Classify four annual joint-support WBGT summary values and emit the 21 ordered
+implementation pairs for every complete-case cell. The product is
+deliberately unweighted: join `cell_lookup.parquet` downstream to geometric or
+LandScan population weights when calculating aggregate shares.
+
+```bash
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --input-root data/cellwise_temperature_quantiles/2025-joint-v1 \
+  --output-root data/cellwise_iso7243_classification_changes \
+  --thresholds-c 25 26 28 30 33
+```
+
+`cell_pair_differences.parquet` stores only `n_higher` and `n_lower`; derive
+`n_changed = n_higher + n_lower` and
+`n_same = n_compared - n_changed` when needed. It is written one implementation
+pair at a time, without DuckDB, a cross join, or materializing the output.
+
+### Cellwise ISO 7243 non-consensus percentage
+
+The separate non-consensus ETL scans the raw daily result rows. For each cell,
+it records the percentage of joint-valid annual rows where the seven ISO 7243
+WBGT classes are not unanimous:
+
+```bash
+uv run python scripts/analyze_cellwise_iso7243_non_consensus.py \
+  --thresholds-c 25 26 28 30 33
+uv run python scripts/plot_cellwise_iso7243_non_consensus.py
+```
+
+The default HSB input is the same run used by daily pairwise analysis. The
+output is `data/cellwise_iso7243_non_consensus/cellwise_non_consensus.parquet`,
+with `n_joint`, `n_non_consensus`, and `non_consensus_percent`.
+
+Render 21 implementation-pair maps (each `n_changed / 4`, using a shared
+dynamic P99 color scale) plus the supplementary aggregate map and unweighted,
+geometric-weighted, and population-weighted `n_changed` distributions:
+
+```bash
+uv run python scripts/plot_cellwise_iso7243_classification.py
+```
 
 Open `notebooks/11-cellwise-temperature-quantiles.ipynb` to configure and run
 the persisted quantile generation, then
@@ -203,19 +266,33 @@ columns, including failed results. Use `--start-date`, `--end-date`, repeatable
 `--run`, and `--threads` to change extraction scope; existing caches require
 explicit `--force` replacement.
 
-For raw country classification-transition analysis with editable thresholds,
-open `notebooks/20-era5-country-classification-changes.ipynb`. It reads the cached
-country observations rather than rescanning HSB run Parquet. Edit the
-parameters cell immediately after the imports: `COUNTRY_CODE` accepts ISO
-alpha-2 or alpha-3
-(default `JPN`), while the dates, thresholds, and DuckDB
-thread count are also declared there. Setting `DUCKDB_THREADS` to zero keeps
-DuckDB's default. DuckDB filters country cells from Parquet,
-then the bounded observations and all subsequent analysis remain inspectable
-pandas DataFrames. It does not compute global agreement statistics. For large
-countries, narrow `ANALYSIS_START_DATE` and `ANALYSIS_END_DATE` to keep the
-pandas working set manageable. The notebook reports Tg/Tnwb availability but
-applies heat-risk thresholds only to rows with valid WBGT.
+Classify the cached ERA5 country observations with any ordered WBGT threshold
+profile; this step never selects cells or rescans source results:
+
+```bash
+uv run python scripts/analyze_era5_country_classification.py \
+  --cache data/country/jpn/observations.parquet \
+  --output-root data/country_classification/jpn \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 21 25 28 31
+```
+
+For NASA POWER workloads, use the equivalent run-oriented command with optional
+repeatable `--country` and `--location` filters:
+
+```bash
+uv run python scripts/analyze_nasa_power_classification.py \
+  --run .hsb/runs/<run> \
+  --output-root data/country_classification/sg \
+  --start-date 2001-01-01 --end-date 2025-12-31 \
+  --country SG --location singapore \
+  --thresholds-c 31 32 33
+```
+
+Both commands write class definitions, pair and monthly transition summaries,
+transition counts, and the 100 largest changed observations. The corresponding
+notebooks are thin editable frontends over these same APIs; the ERA5 notebook
+consumes only the pre-extracted cache.
 
 To select all 0.25-degree ERA5 cell footprints intersecting one or more ADM0
 countries, pass ISO alpha-2 or alpha-3 codes:
