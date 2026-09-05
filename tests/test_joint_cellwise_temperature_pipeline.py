@@ -74,6 +74,9 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             output = root / "output"
             _write_joint_day(hsb_run, "2025-01-01", 1)
             _write_joint_day(hsb_run, "2025-01-02", 2)
+            output.mkdir()
+            stale = output / "stale"
+            stale.write_text("old product")
 
             with mock.patch.object(
                 joint_pipeline,
@@ -89,7 +92,9 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                         minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
                     ),
                     exact_validation_cells=3,
+                    overwrite=True,
                 )
+            self.assertFalse(stale.exists())
             self.assertEqual(scan.call_count, len(EXPECTED_IMPLEMENTATIONS) * 2)
 
             self.assertEqual(result_root, output.resolve())

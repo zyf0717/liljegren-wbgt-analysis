@@ -39,6 +39,7 @@ from .pipeline import (
     _hsb_run_paths,
     _input_files,
     _input_fingerprint,
+    _validate_canonical_run_inventory,
 )
 from .quantiles import quantile_table
 
@@ -72,10 +73,11 @@ def compute_joint_cellwise_temperature_quantiles(
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
     exact_validation_seed: int = 0,
+    overwrite: bool = False,
 ) -> Path:
     """Compute WBGT, Tg and Tnwb quantiles on one strict common support.
 
-    A daily bit-packed mask is first derived by reading all seven
+    A daily bit-packed mask is first derived by reading all canonical
     implementations and all three quantities together. Replay then scans one
     implementation's three quantities together while updating three concurrent
     sparse disk-backed histograms.
@@ -83,8 +85,12 @@ def compute_joint_cellwise_temperature_quantiles(
 
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
+    _validate_canonical_run_inventory(hsb_runs, dates, EXPECTED_IMPLEMENTATIONS)
     _validate_options(probabilities, exact_validation_cells)
     root = Path(output_root).expanduser().resolve()
+    if overwrite and root.exists():
+        _validate_reset_target(root)
+        shutil.rmtree(root)
     work = root / ".work"
     mask_directory = work / "joint_mask"
     for directory in (root, work, mask_directory):
@@ -195,6 +201,12 @@ def compute_joint_cellwise_temperature_quantiles(
     _atomic_json(metadata, root / "metadata.json")
     shutil.rmtree(work)
     return root
+
+
+def _validate_reset_target(path: Path) -> None:
+    protected = {Path(path.anchor), Path.home().resolve(), Path.cwd().resolve()}
+    if path in protected or path.parent == path:
+        raise ValueError(f"Refusing to reset broad output path: {path}")
 
 
 def _validate_options(

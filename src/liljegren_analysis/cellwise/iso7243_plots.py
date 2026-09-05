@@ -122,7 +122,10 @@ def summarize_cellwise_iso7243_classification(
         positions = np.full(len(batch_ids), -1, dtype=np.int32)
         in_range = (batch_ids >= 0) & (batch_ids <= max_cell_id)
         positions[in_range] = lookup_positions[batch_ids[in_range]]
-        pair_indices = pair_index_by_code[implementation_a * 7 + implementation_b]
+        implementation_count = len(metadata["implementation_ids"])
+        pair_indices = pair_index_by_code[
+            implementation_a * implementation_count + implementation_b
+        ]
         if (
             (batch_ids < 0).any()
             or (batch_ids > max_cell_id).any()
@@ -182,13 +185,13 @@ def _load_metadata(path: Path) -> dict[str, object]:
 
 def _implementation_pairs(metadata: dict[str, object]) -> tuple[tuple[str, str], ...]:
     ids = metadata["implementation_ids"]
-    if not isinstance(ids, dict) or set(ids.values()) != set(range(7)):
+    if not isinstance(ids, dict) or len(ids) < 2 or set(ids.values()) != set(range(len(ids))):
         raise ValueError("ISO 7243 implementation-ID mapping is invalid")
     implementations = tuple(name for name, _ in sorted(ids.items(), key=lambda item: item[1]))
     pairs = tuple(
         (implementations[implementation_a], implementations[implementation_b])
-        for implementation_a in range(7)
-        for implementation_b in range(implementation_a + 1, 7)
+        for implementation_a in range(len(implementations))
+        for implementation_b in range(implementation_a + 1, len(implementations))
     )
     if len(pairs) != int(metadata["implementation_pair_count"]):
         raise ValueError("ISO 7243 implementation pair count is invalid")
@@ -200,9 +203,13 @@ def _pair_index_by_code(
 ) -> np.ndarray:
     ids = metadata["implementation_ids"]
     assert isinstance(ids, dict)
-    result = np.full(49, -1, dtype=np.int8)
+    implementation_count = len(ids)
+    result = np.full(implementation_count**2, -1, dtype=np.int32)
     for pair_index, (implementation_a, implementation_b) in enumerate(implementation_pairs):
-        result[int(ids[implementation_a]) * 7 + int(ids[implementation_b])] = pair_index
+        result[
+            int(ids[implementation_a]) * implementation_count
+            + int(ids[implementation_b])
+        ] = pair_index
     return result
 
 
@@ -298,13 +305,22 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
     color_upper_percent = _dynamic_color_upper_percent(
         100.0 * summary.pair_changed_fraction
     )
-    figure, axes = plt.subplots(7, 3, figsize=(12.5, 17.5), layout="constrained")
+    column_count = min(3, len(summary.implementation_pairs))
+    row_count = (
+        len(summary.implementation_pairs) + column_count - 1
+    ) // column_count
+    figure, axes = plt.subplots(
+        row_count,
+        column_count,
+        figsize=(4.2 * column_count, 2.5 * row_count),
+        layout="constrained",
+        squeeze=False,
+    )
     image = None
     for axis, (implementation_a, implementation_b), values in zip(
         axes.flat,
         summary.implementation_pairs,
         summary.pair_changed_fraction,
-        strict=True,
     ):
         image = axis.scatter(
             summary.longitude,
@@ -325,6 +341,8 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             xticks=(-180, 0, 180),
             yticks=(-90, 0, 90),
         )
+    for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
+        axis.set_visible(False)
     assert image is not None
     figure.colorbar(
         image,

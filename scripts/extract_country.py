@@ -16,7 +16,11 @@ from liljegren_analysis import (
 
 REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (
-    REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813",
+    REPOSITORY.parent
+    / "HeatStressBench"
+    / ".hsb"
+    / "runs"
+    / "wbgt-comparison-20260902-150355",
 )
 
 

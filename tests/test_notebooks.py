@@ -50,6 +50,25 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertIn("pairwise_root", code)
         self.assertNotIn("duckdb", code.casefold())
 
+    def test_era5_notebooks_use_current_run_contract(self) -> None:
+        code = "\n".join(
+            _code(name)
+            for name in (
+                "10-daily-pairwise.ipynb",
+                "11-cellwise-temperature-quantiles.ipynb",
+                "30-yearly-pairwise.ipynb",
+                "31-cellwise-quantile-spread.ipynb",
+            )
+        )
+        self.assertIn("wbgt-comparison-20260902-150355", code)
+        for obsolete in (
+            "wbgt-comparison-20260823-181813",
+            "hsb-wbgt-comparison-results-csv-v3",
+            "'liljegren-c'",
+            "'pywbgt'",
+        ):
+            self.assertNotIn(obsolete, code)
+
 
 if __name__ == "__main__":
     unittest.main()

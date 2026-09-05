@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from ..results import validate_result_schema
+from ..results import HSBRunResults, validate_result_schema
 from .cells import Country, cached_natural_earth_boundaries, country_cells, load_countries
 
 
@@ -109,6 +109,8 @@ def _extract(country_codes: Sequence[str], runs: Sequence[str | Path], start_dat
     resolved_runs = tuple(Path(run).expanduser().resolve() for run in runs)
     if not resolved_runs or any(not (run / "results").is_dir() for run in resolved_runs):
         raise FileNotFoundError("Missing HSB run result roots")
+    for run in resolved_runs:
+        HSBRunResults.from_hsb_run(run)
     boundary_path = _resolve_boundaries(boundaries, boundary_cache, explicit_output or output_directory / "xxx" / "observations.parquet")
     countries = _deduplicate_countries(load_countries(boundary_path, country_codes))
     selections = tuple(

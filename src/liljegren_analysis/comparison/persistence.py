@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..results import RESULT_SCHEMA_ID
-from .config import SAMPLE_SCOPES
+from .config import IMPLEMENTATION_SET_VERSION, SAMPLE_SCOPES
 from .distributions import ABS_HISTOGRAM_VERSION
 
 
@@ -38,6 +38,37 @@ _TABLE_COLUMNS = {
         "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
     ),
 }
+PAIRWISE_SCHEMA_VERSION = 5
+PAIRWISE_PRODUCT_VERSION = "v1"
+
+
+def pairwise_metadata(sample_scope: str) -> dict[str, object]:
+    """Return the canonical metadata for one pairwise product scope."""
+
+    if sample_scope not in SAMPLE_SCOPES:
+        raise ValueError(f"Unsupported sample scope: {sample_scope}")
+    return {
+        "schema_version": PAIRWISE_SCHEMA_VERSION,
+        "sample_scope": sample_scope,
+        "result_schema_id": RESULT_SCHEMA_ID,
+        "quantity_scope": "joint",
+        "quantity_set_version": 1,
+        "implementation_set_version": IMPLEMENTATION_SET_VERSION,
+        "abs_histogram_version": ABS_HISTOGRAM_VERSION,
+    }
+
+
+def initialize_pairwise_output(
+    output_root: str | Path, sample_scope: str, *, overwrite: bool = False
+) -> Path:
+    """Validate or explicitly reset one versioned pairwise output scope."""
+
+    root = _pairwise_root(Path(output_root), sample_scope)
+    if overwrite and root.exists():
+        _validate_reset_target(root)
+        shutil.rmtree(root)
+    _write_metadata(root, sample_scope)
+    return root
 
 
 def persist_date_partitions(
@@ -52,7 +83,7 @@ def persist_date_partitions(
     for name, table in tables.items():
         _validate_table(name, table, result_date)
     _validate_cross_table_totals(tables)
-    root = output_root.expanduser().resolve() / sample_scope / "v1"
+    root = _pairwise_root(output_root, sample_scope)
     _write_metadata(root, sample_scope)
     dates = root / "dates"
     dates.mkdir(parents=True, exist_ok=True)
@@ -117,10 +148,7 @@ def _validate_cross_table_totals(tables: dict[str, pa.Table]) -> None:
 
 
 def _write_metadata(root: Path, sample_scope: str) -> None:
-    metadata = {
-        "schema_version": 1, "sample_scope": sample_scope,
-        "result_schema_id": RESULT_SCHEMA_ID, "abs_histogram_version": ABS_HISTOGRAM_VERSION,
-    }
+    metadata = pairwise_metadata(sample_scope)
     path = root / "metadata.json"
     if path.exists():
         if json.loads(path.read_text()) != metadata:
@@ -128,6 +156,18 @@ def _write_metadata(root: Path, sample_scope: str) -> None:
         return
     root.mkdir(parents=True, exist_ok=True)
     _atomic_json(metadata, path)
+
+
+def _pairwise_root(output_root: Path, sample_scope: str) -> Path:
+    if sample_scope not in SAMPLE_SCOPES:
+        raise ValueError(f"Unsupported sample scope: {sample_scope}")
+    return output_root.expanduser().resolve() / sample_scope / PAIRWISE_PRODUCT_VERSION
+
+
+def _validate_reset_target(path: Path) -> None:
+    protected = {Path(path.anchor), Path.home().resolve(), Path.cwd().resolve()}
+    if path in protected or path.parent == path:
+        raise ValueError(f"Refusing to reset broad output path: {path}")
 
 
 def _atomic_json(value: dict[str, object], path: Path) -> None:

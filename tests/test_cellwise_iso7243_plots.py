@@ -13,6 +13,10 @@ from liljegren_analysis.cellwise.iso7243_plots import (
     plot_cellwise_iso7243_classification,
     summarize_cellwise_iso7243_classification,
 )
+from liljegren_analysis.comparison.config import (
+    EXPECTED_IMPLEMENTATION_PAIRS,
+    EXPECTED_IMPLEMENTATIONS,
+)
 
 
 class CellwiseISO7243PlotTests(unittest.TestCase):
@@ -36,8 +40,10 @@ class CellwiseISO7243PlotTests(unittest.TestCase):
                 root / "cell_lookup.parquet",
             )
             rows: list[dict[str, int]] = []
-            for implementation_a in range(7):
-                for implementation_b in range(implementation_a + 1, 7):
+            for implementation_a in range(len(EXPECTED_IMPLEMENTATIONS)):
+                for implementation_b in range(
+                    implementation_a + 1, len(EXPECTED_IMPLEMENTATIONS)
+                ):
                     rows.extend(
                         (
                             {
@@ -62,10 +68,13 @@ class CellwiseISO7243PlotTests(unittest.TestCase):
             (root / "metadata.json").write_text(
                 json.dumps(
                     {
-                        "row_count": 42,
-                        "implementation_pair_count": 21,
+                        "row_count": 2 * EXPECTED_IMPLEMENTATION_PAIRS,
+                        "implementation_pair_count": EXPECTED_IMPLEMENTATION_PAIRS,
                         "quantiles": ["p50", "p90", "p95", "p99"],
-                        "implementation_ids": {f"implementation-{index}": index for index in range(7)},
+                        "implementation_ids": {
+                            name: index
+                            for index, name in enumerate(EXPECTED_IMPLEMENTATIONS)
+                        },
                     }
                 )
             )
@@ -83,12 +92,31 @@ class CellwiseISO7243PlotTests(unittest.TestCase):
             summary = summarize_cellwise_iso7243_classification(
                 root, population_weights_path=population_path
             )
-            np.testing.assert_allclose(summary.changed_fraction, [1.0 / 42.0, 0.0])
             np.testing.assert_allclose(
-                summary.histogram_shares[0], [41.0 / 42.0, 0.0, 1.0 / 42.0, 0.0, 0.0]
+                summary.changed_fraction,
+                [1.0 / (2 * EXPECTED_IMPLEMENTATION_PAIRS), 0.0],
             )
             np.testing.assert_allclose(
-                summary.histogram_shares[2], [20.0 / 21.0, 0.0, 1.0 / 21.0, 0.0, 0.0]
+                summary.histogram_shares[0],
+                [
+                    (2 * EXPECTED_IMPLEMENTATION_PAIRS - 1)
+                    / (2 * EXPECTED_IMPLEMENTATION_PAIRS),
+                    0.0,
+                    1.0 / (2 * EXPECTED_IMPLEMENTATION_PAIRS),
+                    0.0,
+                    0.0,
+                ],
+            )
+            np.testing.assert_allclose(
+                summary.histogram_shares[2],
+                [
+                    (EXPECTED_IMPLEMENTATION_PAIRS - 1)
+                    / EXPECTED_IMPLEMENTATION_PAIRS,
+                    0.0,
+                    1.0 / EXPECTED_IMPLEMENTATION_PAIRS,
+                    0.0,
+                    0.0,
+                ],
             )
             np.testing.assert_allclose(summary.pair_changed_fraction[0], [0.5, 0.0])
 

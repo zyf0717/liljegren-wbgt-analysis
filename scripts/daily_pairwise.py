@@ -11,7 +11,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from liljegren_analysis import (
+    HSBRunResults,
     compute_daily_pairwise,
+    initialize_pairwise_output,
     persist_daily_pairwise,
 )
 from liljegren_analysis.comparison.config import SAMPLE_SCOPES
@@ -19,7 +21,11 @@ from liljegren_analysis.comparison.config import SAMPLE_SCOPES
 
 REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (
-    REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813",
+    REPOSITORY.parent
+    / "HeatStressBench"
+    / ".hsb"
+    / "runs"
+    / "wbgt-comparison-20260902-150355",
 )
 SGT = ZoneInfo("Asia/Singapore")
 
@@ -61,11 +67,16 @@ def parse_args() -> argparse.Namespace:
         help="Progress log (default: derived from the selected modes).",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace the selected versioned output scope before processing",
+    )
+    parser.add_argument(
         "--sample-scope",
         choices=SAMPLE_SCOPES,
         default="pairwise",
         help=(
-            "Valid rows required per pair or across all seven "
+            "Valid rows required per pair or across all canonical "
             "implementations (default: pairwise)."
         ),
     )
@@ -142,6 +153,11 @@ def run_pipeline() -> int:
     output_root = args.output_root.expanduser().resolve()
     log_file = args.log_file.expanduser().resolve()
     _configure_logging(log_file, logger)
+    for run in runs:
+        HSBRunResults.from_hsb_run(run)
+    initialize_pairwise_output(
+        output_root, args.sample_scope, overwrite=args.force
+    )
 
     days = _days(args.start_date, args.end_date)
     logger.info(
@@ -154,7 +170,10 @@ def run_pipeline() -> int:
     logger.info("Output: %s", output_root)
     logger.info("Log: %s", log_file)
 
-    executor = ProcessPoolExecutor(max_workers=args.workers)
+    executor = ProcessPoolExecutor(
+        max_workers=args.workers,
+        max_tasks_per_child=1,
+    )
     try:
         futures = [
             executor.submit(

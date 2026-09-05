@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
-from ..comparison.config import EXPECTED_IMPLEMENTATIONS
+from ..comparison.config import EXPECTED_IMPLEMENTATIONS, REFERENCE_IMPLEMENTATION
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 
@@ -404,13 +404,18 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, probability: flo
 def _c_anchor_summary(values: dict[str, dict[str, np.ndarray]], weights: np.ndarray) -> pa.Table:
     rows: list[dict[str, object]] = []
     for implementation in EXPECTED_IMPLEMENTATIONS:
-        if implementation == "liljegren-c":
+        if implementation == REFERENCE_IMPLEMENTATION:
             continue
         for percentile in PERCENTILES:
-            difference = values[implementation][percentile] - values["liljegren-c"][percentile]
+            difference = (
+                values[implementation][percentile]
+                - values[REFERENCE_IMPLEMENTATION][percentile]
+            )
             absolute = np.abs(difference)
             rows.append({
-                "implementation": implementation, "anchor_implementation": "liljegren-c", "percentile": percentile,
+                "implementation": implementation,
+                "anchor_implementation": REFERENCE_IMPLEMENTATION,
+                "percentile": percentile,
                 "weighted_bias_c": float(np.average(difference, weights=weights)),
                 "weighted_mae_c": float(np.average(absolute, weights=weights)),
                 "weighted_rmse_c": float(np.sqrt(np.average(np.square(difference), weights=weights))),

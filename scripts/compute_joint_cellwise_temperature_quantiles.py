@@ -20,6 +20,11 @@ def main() -> None:
         default=Path("data/cellwise_temperature_quantiles"),
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing incompatible output product",
+    )
+    parser.add_argument(
         "--exact-validation-cells",
         type=int,
         default=100,
@@ -32,6 +37,7 @@ def main() -> None:
         end_date=arguments.end_date,
         output_root=arguments.output_root,
         exact_validation_cells=arguments.exact_validation_cells,
+        overwrite=arguments.force,
     )
     print(output)
 
