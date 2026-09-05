@@ -12,12 +12,12 @@ from datetime import date, timedelta
 from pathlib import Path
 from time import monotonic
 
-import duckdb
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
+from ..io.results import iter_result_batches
 from ..results import HSBRunResults, RESULT_SCHEMA_ID
 from .accumulator import CellwiseHistogramAccumulator, counter_dtype
 from .grid import CellGrid, grid_from_source_cell_ids, load_grid
@@ -36,7 +36,6 @@ def compute_cellwise_wbgt_quantiles(
     end_date: str | date,
     output_root: str | Path = Path("data/cellwise_wbgt_quantiles"),
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
-    threads: int = 1,
     expected_observations_per_cell_per_day: int = 24,
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
@@ -52,8 +51,6 @@ def compute_cellwise_wbgt_quantiles(
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     _validate_implementation(implementation)
     dates = _date_range(start_date, end_date)
-    if threads < 1:
-        raise ValueError("threads must be positive")
     if expected_observations_per_cell_per_day < 1:
         raise ValueError("expected_observations_per_cell_per_day must be positive")
     if probabilities != tuple(sorted(set(probabilities))):
@@ -74,7 +71,7 @@ def compute_cellwise_wbgt_quantiles(
     grid = (
         load_grid(grid_path)
         if grid_path.exists()
-        else _build_grid(hsb_runs, dates[0], implementation, threads)
+        else _build_grid(hsb_runs, dates[0], implementation)
     )
     if not grid_path.exists():
         _atomic_parquet(grid.table, grid_path)
@@ -118,19 +115,14 @@ def compute_cellwise_wbgt_quantiles(
                 {**expected_progress, "in_progress_date": current_date.isoformat()},
                 progress_path,
             )
-            cell_ids, values = _scan_valid_day(
+            day_dirty = True
+            processed_rows += _scan_valid_day(
                 hsb_runs,
                 current_date,
                 implementation,
                 grid,
-                threads,
+                accumulator,
             )
-            # After this point a failed day can have modified the memmaps and
-            # must not be resumed.  Before this point the previous completed
-            # checkpoint is still exact and is retained below.
-            day_dirty = True
-            accumulator.update(cell_ids, values)
-            processed_rows += len(values)
             accumulator.flush()
             completed = dates.index(current_date)
             _atomic_json(
@@ -164,7 +156,6 @@ def compute_cellwise_wbgt_quantiles(
                 result,
                 histogram_spec,
                 probabilities,
-                threads,
                 exact_validation_cells,
                 exact_validation_seed,
             )
@@ -275,45 +266,34 @@ def _input_fingerprint(paths: tuple[Path, ...]) -> str:
     return digest.hexdigest()
 
 
-def _combined_day_results(
+def _day_files(
     hsb_runs: tuple[Path, ...],
     current_date: date,
     implementation: str,
-    connection: duckdb.DuckDBPyConnection,
-) -> duckdb.DuckDBPyRelation:
-    relations = [
-        HSBRunResults.from_hsb_run(hsb_run, connection=connection).scan(
-            result_date=current_date,
-            implementation=implementation,
-            quantity="wbgt",
-        )
+):
+    files = tuple(
+        item
         for hsb_run in hsb_runs
-    ]
-    combined = relations[0]
-    for relation in relations[1:]:
-        combined = combined.union(relation)
-    return combined
+        for item in HSBRunResults.from_hsb_run(hsb_run).files(
+            result_date=current_date, implementation=implementation
+        )
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No {implementation} result shards found for {current_date.isoformat()}"
+        )
+    return files
 
 
 def _build_grid(
     hsb_runs: tuple[Path, ...],
     current_date: date,
     implementation: str,
-    threads: int,
 ) -> CellGrid:
-    with duckdb.connect() as connection:
-        connection.execute(f"SET threads = {threads}")
-        source_ids = _combined_day_results(
-            hsb_runs, current_date, implementation, connection
-        ).query(
-            "results",
-            """
-            SELECT DISTINCT substring(row_id, 1, 28) AS source_cell_id
-            FROM results
-            ORDER BY source_cell_id
-            """,
-        ).fetchall()
-    return grid_from_source_cell_ids([row[0] for row in source_ids])
+    source_ids: set[str] = set()
+    for batch in iter_result_batches(_day_files(hsb_runs, current_date, implementation), ("row_id",)):
+        source_ids.update(row_id[:28] for row_id in batch.column(0).to_pylist())
+    return grid_from_source_cell_ids(sorted(source_ids))
 
 
 def _scan_valid_day(
@@ -321,46 +301,40 @@ def _scan_valid_day(
     current_date: date,
     implementation: str,
     grid: CellGrid,
-    threads: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    with duckdb.connect() as connection:
-        connection.execute(f"SET threads = {threads}")
-        connection.register("_cellwise_grid", grid.lookup_table)
-        results = _combined_day_results(hsb_runs, current_date, implementation, connection)
-        source_cells, matched_cells, unknown_cells = results.query(
-            "results",
-            """
-            SELECT
-                count(DISTINCT substring(row_id, 1, 28)),
-                count(DISTINCT grid.cell_id),
-                count(DISTINCT CASE WHEN grid.cell_id IS NULL THEN substring(row_id, 1, 28) END)
-            FROM results
-            LEFT JOIN _cellwise_grid AS grid
-                ON substring(results.row_id, 1, 28) = grid.source_cell_id
-            """,
-        ).fetchone()
-        if source_cells != grid.cell_count or matched_cells != grid.cell_count or unknown_cells:
-            raise ValueError(
-                f"Cell identity coverage mismatch for {implementation} {current_date}: "
-                f"source={source_cells}, matched={matched_cells}, "
-                f"expected={grid.cell_count}, unknown={unknown_cells}"
-            )
-        table = results.query(
-            "results",
-            """
-            SELECT grid.cell_id, results.wbgt_c
-            FROM results
-            INNER JOIN _cellwise_grid AS grid
-                ON substring(results.row_id, 1, 28) = grid.source_cell_id
-            WHERE results.wbgt_status = 'ok'
-              AND results.wbgt_c IS NOT NULL
-              AND isfinite(results.wbgt_c)
-            """,
-        ).arrow().read_all()
-    return (
-        table["cell_id"].combine_chunks().to_numpy(zero_copy_only=False),
-        table["wbgt_c"].combine_chunks().to_numpy(zero_copy_only=False),
+    accumulator: CellwiseHistogramAccumulator,
+) -> int:
+    """Validate grid coverage and update the disk-backed histogram per batch."""
+
+    lookup = dict(
+        zip(grid.lookup_table["source_cell_id"].to_pylist(), grid.lookup_table["cell_id"].to_pylist(), strict=True)
     )
+    source_cells: set[str] = set()
+    matched_cells: set[int] = set()
+    unknown_cells: set[str] = set()
+    valid_rows = 0
+    for batch in iter_result_batches(
+        _day_files(hsb_runs, current_date, implementation),
+        ("row_id", "wbgt_status", "wbgt_c"),
+    ):
+        row_ids = batch.column(0).to_pylist()
+        cells = [row_id[:28] for row_id in row_ids]
+        source_cells.update(cells)
+        cell_ids = np.asarray([lookup.get(cell, -1) for cell in cells], dtype=np.int64)
+        matched_cells.update(cell_ids[cell_ids >= 0])
+        unknown_cells.update(cell for cell, cell_id in zip(cells, cell_ids, strict=True) if cell_id < 0)
+        statuses = np.asarray(batch.column(1).to_pylist(), dtype=object)
+        values = np.asarray(batch.column(2).to_pylist(), dtype=np.float64)
+        valid = (statuses == "ok") & np.isfinite(values) & (cell_ids >= 0)
+        if valid.any():
+            accumulator.update(cell_ids[valid], values[valid])
+            valid_rows += int(valid.sum())
+    if len(source_cells) != grid.cell_count or len(matched_cells) != grid.cell_count or unknown_cells:
+        raise ValueError(
+            f"Cell identity coverage mismatch for {implementation} {current_date}: "
+            f"source={len(source_cells)}, matched={len(matched_cells)}, "
+            f"expected={grid.cell_count}, unknown={len(unknown_cells)}"
+        )
+    return valid_rows
 
 
 def _validate_exact_quantile_sample(
@@ -371,7 +345,6 @@ def _validate_exact_quantile_sample(
     result: pa.Table,
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
-    threads: int,
     sample_size: int,
     seed: int,
 ) -> dict[str, float | int]:
@@ -392,32 +365,20 @@ def _validate_exact_quantile_sample(
     selected = np.random.default_rng(seed).choice(
         eligible, size=min(sample_size, len(eligible)), replace=False
     )
-    sampled = pa.table({"cell_id": pa.array(selected, type=pa.int64())})
     values_by_cell = {int(cell_id): [] for cell_id in selected}
+    selected_set = set(values_by_cell)
+    lookup = dict(
+        zip(grid.lookup_table["source_cell_id"].to_pylist(), grid.lookup_table["cell_id"].to_pylist(), strict=True)
+    )
     for current_date in dates:
-        with duckdb.connect() as connection:
-            connection.execute(f"SET threads = {threads}")
-            connection.register("_cellwise_grid", grid.lookup_table)
-            connection.register("_cellwise_sample", sampled)
-            table = _combined_day_results(
-                hsb_runs, current_date, implementation, connection
-            ).query(
-                "results",
-                """
-                SELECT grid.cell_id, results.wbgt_c
-                FROM results
-                INNER JOIN _cellwise_grid AS grid
-                    ON substring(results.row_id, 1, 28) = grid.source_cell_id
-                INNER JOIN _cellwise_sample AS sample USING (cell_id)
-                WHERE results.wbgt_status = 'ok'
-                  AND results.wbgt_c IS NOT NULL
-                  AND isfinite(results.wbgt_c)
-                """,
-            ).arrow().read_all()
-        for cell_id, value in zip(
-            table["cell_id"].to_pylist(), table["wbgt_c"].to_pylist(), strict=True
+        for batch in iter_result_batches(
+            _day_files(hsb_runs, current_date, implementation),
+            ("row_id", "wbgt_status", "wbgt_c"),
         ):
-            values_by_cell[int(cell_id)].append(float(value))
+            for row_id, status, value in zip(*[batch.column(index).to_pylist() for index in range(3)], strict=True):
+                cell_id = lookup.get(row_id[:28])
+                if cell_id in selected_set and status == "ok" and value is not None and np.isfinite(value):
+                    values_by_cell[cell_id].append(float(value))
 
     result_ids = result["cell_id"].to_pylist()
     result_index = {cell_id: index for index, cell_id in enumerate(result_ids)}

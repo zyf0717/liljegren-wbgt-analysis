@@ -43,6 +43,13 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertIn("analyze_nasa_power_run", code)
         self.assertIn("write_outputs", code)
 
+    def test_yearly_pairwise_reads_partitioned_parquet(self) -> None:
+        code = _code("30-yearly-pairwise.ipynb")
+
+        self.assertIn("pyarrow.parquet", code)
+        self.assertIn("pairwise_root", code)
+        self.assertNotIn("duckdb", code.casefold())
+
 
 if __name__ == "__main__":
     unittest.main()

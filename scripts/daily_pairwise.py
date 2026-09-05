@@ -10,14 +10,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import duckdb
-
-
 from liljegren_analysis import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )
-from liljegren_analysis.comparison.sql import SAMPLE_SCOPES
+from liljegren_analysis.comparison.config import SAMPLE_SCOPES
 
 
 REPOSITORY = Path(__file__).parents[1]
@@ -25,10 +22,6 @@ DEFAULT_RUNS = (
     REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813",
 )
 SGT = ZoneInfo("Asia/Singapore")
-_OUTPUT_STEMS = {
-    "pairwise": "daily_pairwise_v5",
-    "all-implementations": "daily_pairwise_all_implementations_v5",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,9 +50,10 @@ def parse_args() -> argparse.Namespace:
         help="HSB run root; repeat for multiple roots.",
     )
     parser.add_argument(
-        "--database",
+        "--output-root",
         type=Path,
-        help="Output DuckDB file (default: derived from the selected modes).",
+        default=REPOSITORY / "data" / "pairwise",
+        help="Root directory for versioned Parquet date partitions.",
     )
     parser.add_argument(
         "--log-file",
@@ -81,20 +75,11 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Concurrent date workers (default: 4).",
     )
-    parser.add_argument(
-        "--threads-per-worker",
-        type=_positive_int,
-        default=4,
-        help="DuckDB threads per worker (default: 4).",
-    )
     args = parser.parse_args()
     if args.start_date > args.end_date:
         parser.error("--start-date must not be after --end-date")
-    stem = _OUTPUT_STEMS[args.sample_scope]
-    if args.database is None:
-        args.database = REPOSITORY / "data" / f"{stem}.duckdb"
     if args.log_file is None:
-        args.log_file = REPOSITORY / "data" / f"{stem}.log"
+        args.log_file = REPOSITORY / "data" / f"daily_pairwise_{args.sample_scope}.log"
     return args
 
 
@@ -154,66 +139,41 @@ def run_pipeline() -> int:
     if not runs:
         raise ValueError("runs is empty")
 
-    database = args.database.expanduser().resolve()
-    database.parent.mkdir(parents=True, exist_ok=True)
+    output_root = args.output_root.expanduser().resolve()
     log_file = args.log_file.expanduser().resolve()
     _configure_logging(log_file, logger)
 
     days = _days(args.start_date, args.end_date)
     logger.info(
         "Processing %d dates quantities=wbgt,tg,tnwb quantity_scope=joint "
-        "sample_scope=%s with %d workers "
-        "and %d threads per worker",
+        "sample_scope=%s with %d workers",
         len(days),
         args.sample_scope,
         args.workers,
-        args.threads_per_worker,
     )
-    logger.info("Output: %s", database)
+    logger.info("Output: %s", output_root)
     logger.info("Log: %s", log_file)
 
-    # A fresh PID per date prevents the DuckDB process-state slowdown observed
-    # when a worker handled successive dates.
-    executor = ProcessPoolExecutor(
-        max_workers=args.workers,
-        max_tasks_per_child=1,
-    )
+    executor = ProcessPoolExecutor(max_workers=args.workers)
     try:
         futures = [
             executor.submit(
                 compute_daily_pairwise,
                 result_date,
                 runs,
-                args.threads_per_worker,
                 args.sample_scope,
             )
             for result_date in days
         ]
 
-        # The controller is the only DuckDB writer; every completed date is
-        # persisted synchronously before the next result is accepted.
-        with duckdb.connect(str(database)) as writer:
-            for completed, future in enumerate(as_completed(futures), start=1):
-                result_date, summaries, worker_pid, compute_seconds = (
-                    future.result()
-                )
-                persist_daily_pairwise(
-                    writer,
-                    result_date,
-                    summaries,
-                    args.sample_scope,
-                )
-                logger.info(
-                    "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
-                    result_date,
-                    worker_pid,
-                    compute_seconds,
-                    completed,
-                    len(days),
-                )
-            writer.execute("CHECKPOINT")
-
-        logger.info("Saved pairwise statistics to %s", database)
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result_date, summaries, worker_pid, compute_seconds = future.result()
+            persist_daily_pairwise(output_root, result_date, summaries, args.sample_scope)
+            logger.info(
+                "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
+                result_date, worker_pid, compute_seconds, completed, len(days),
+            )
+        logger.info("Saved pairwise statistics to %s", output_root)
         return 0
     except Exception:
         logger.exception("Pairwise processing failed")

@@ -23,9 +23,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--thresholds-c", required=True, nargs="+", type=float, metavar="CELSIUS"
     )
-    parser.add_argument("--threads", type=int, default=0)
-    parser.add_argument("--memory-limit", default="8GB")
-    parser.add_argument("--temp-directory", type=Path)
     arguments = parser.parse_args()
     if arguments.start_date > arguments.end_date:
         parser.error("--start-date must not be after --end-date")
@@ -40,9 +37,6 @@ def main() -> int:
             arguments.start_date,
             arguments.end_date,
             arguments.thresholds_c,
-            threads=arguments.threads,
-            memory_limit=arguments.memory_limit,
-            temp_directory=arguments.temp_directory,
         )
         write_outputs(analysis.outputs, arguments.output_root)
     except (OSError, ValueError) as error:

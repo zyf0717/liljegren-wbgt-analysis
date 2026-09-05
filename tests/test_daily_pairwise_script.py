@@ -16,11 +16,8 @@ SPEC.loader.exec_module(MODULE)
 
 
 class DailyPairwiseScriptTests(unittest.TestCase):
-    def test_scope_specific_default_paths(self) -> None:
-        for scope, stem in {
-            "pairwise": "daily_pairwise_v5",
-            "all-implementations": "daily_pairwise_all_implementations_v5",
-        }.items():
+    def test_default_output_is_parquet_root(self) -> None:
+        for scope in ("pairwise", "all-implementations"):
             with (
                 self.subTest(scope=scope),
                 patch.object(
@@ -31,12 +28,12 @@ class DailyPairwiseScriptTests(unittest.TestCase):
             ):
                 args = MODULE.parse_args()
                 self.assertEqual(
-                    args.database,
-                    MODULE.REPOSITORY / "data" / f"{stem}.duckdb",
+                    args.output_root,
+                    MODULE.REPOSITORY / "data" / "pairwise",
                 )
                 self.assertEqual(
                     args.log_file,
-                    MODULE.REPOSITORY / "data" / f"{stem}.log",
+                    MODULE.REPOSITORY / "data" / f"daily_pairwise_{scope}.log",
                 )
 
 

@@ -18,7 +18,6 @@ def main() -> None:
     parser.add_argument(
         "--output-root", type=Path, default=Path("data/cellwise_wbgt_quantiles")
     )
-    parser.add_argument("--threads", type=int, default=1)
     parser.add_argument(
         "--exact-validation-cells",
         type=int,
@@ -32,7 +31,6 @@ def main() -> None:
         start_date=arguments.start_date,
         end_date=arguments.end_date,
         output_root=arguments.output_root,
-        threads=arguments.threads,
         exact_validation_cells=arguments.exact_validation_cells,
     )
     print(output)
