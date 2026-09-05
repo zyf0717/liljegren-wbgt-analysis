@@ -40,6 +40,13 @@ ABS_HISTOGRAM_COLUMNS = (
 QUANTITY_STATUS_COLUMNS = (
     "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
 )
+PAIRWISE_GROUP_COLUMNS = (
+    "result_date", "quantity", "implementation_a", "implementation_b",
+)
+PAIRWISE_MIN_COLUMNS = ("min_difference_c",)
+PAIRWISE_MAX_COLUMNS = (
+    "max_difference_c", "max_absolute_difference_c",
+)
 
 
 @dataclass(frozen=True)
@@ -72,8 +79,10 @@ def compute_daily_pairwise(
     )
     if invalid.height:
         raise ValueError(f"Invalid ERA5 row_id: {invalid.item(0, 0)}")
-    values = _pairwise_values(base, sample_scope)
-    pairwise = _pairwise_summary(values).collect(engine="streaming").sort(
+    enriched_histogram = _enriched_histogram_summary(
+        _pairwise_values(base, sample_scope)
+    ).collect(engine="streaming")
+    pairwise = _pairwise_summary(enriched_histogram).sort(
         ["quantity", "implementation_a", "implementation_b"]
     )
     if sample_scope == "all-implementations":
@@ -83,7 +92,7 @@ def compute_daily_pairwise(
                 f"Expected {expected} implementation pairs for {result_date}, found "
                 f"{pairwise.height}; no complete canonical-implementation population exists"
             )
-    histogram = _histogram_summary(values).collect(engine="streaming").sort(
+    histogram = enriched_histogram.select(ABS_HISTOGRAM_COLUMNS).sort(
         ["quantity", "implementation_a", "implementation_b", "abs_bin_id"]
     )
     status = _status_summary(base).collect(engine="streaming").sort(
@@ -216,11 +225,11 @@ def _pairwise_values(base: pl.LazyFrame, scope: SampleScope) -> pl.LazyFrame:
     ])
 
 
-def _pairwise_summary(values: pl.LazyFrame) -> pl.LazyFrame:
+def _pairwise_aggregations() -> list[pl.Expr]:
     difference = pl.col("difference_c")
     absolute = difference.abs()
     weight = pl.col("area_weight")
-    return values.group_by("result_date", "quantity", "implementation_a", "implementation_b").agg(
+    return [
         pl.len().alias("n"), difference.sum().alias("sum_difference_c"),
         (difference * difference).sum().alias("sum_squared_difference_c2"), absolute.sum().alias("sum_absolute_difference_c"),
         difference.min().alias("min_difference_c"), difference.max().alias("max_difference_c"), absolute.max().alias("max_absolute_difference_c"),
@@ -232,7 +241,20 @@ def _pairwise_summary(values: pl.LazyFrame) -> pl.LazyFrame:
             for threshold in (0.1, 0.2, 0.5)
             for expression in _threshold_aggregates(absolute, weight, threshold)
         ],
+    ]
+
+
+def _pairwise_summary(enriched_histogram: pl.DataFrame) -> pl.DataFrame:
+    additive_columns = (
+        column
+        for column in PAIRWISE_COLUMNS[len(PAIRWISE_GROUP_COLUMNS):]
+        if column not in PAIRWISE_MIN_COLUMNS + PAIRWISE_MAX_COLUMNS
     )
+    return enriched_histogram.group_by(*PAIRWISE_GROUP_COLUMNS).agg(
+        *(pl.col(column).sum() for column in additive_columns),
+        *(pl.col(column).min() for column in PAIRWISE_MIN_COLUMNS),
+        *(pl.col(column).max() for column in PAIRWISE_MAX_COLUMNS),
+    ).select(PAIRWISE_COLUMNS)
 
 
 def _threshold_aggregates(absolute: pl.Expr, weight: pl.Expr, threshold: float) -> list[pl.Expr]:
@@ -246,7 +268,7 @@ def _threshold_aggregates(absolute: pl.Expr, weight: pl.Expr, threshold: float) 
     ]
 
 
-def _histogram_summary(values: pl.LazyFrame) -> pl.LazyFrame:
+def _enriched_histogram_summary(values: pl.LazyFrame) -> pl.LazyFrame:
     absolute = pl.col("difference_c").abs()
     bin_id = pl.when(absolute < 2).then((absolute / 0.01).floor()).when(
         absolute < 5
@@ -264,9 +286,11 @@ def _histogram_summary(values: pl.LazyFrame) -> pl.LazyFrame:
     ).then(2 + (pl.col("abs_bin_id") - 199) * 0.05).when(pl.col("abs_bin_id") < 320).then(
         5 + (pl.col("abs_bin_id") - 259) * 0.25
     ).when(pl.col("abs_bin_id") < 400).then(21 + (pl.col("abs_bin_id") - 320)).otherwise(None)
-    return binned.group_by("result_date", "quantity", "implementation_a", "implementation_b", "abs_bin_id").agg(
-        pl.len().alias("n"), pl.col("area_weight").sum().alias("area_weight_sum"),
-    ).with_columns(lower.alias("abs_bin_lower_c"), upper.alias("abs_bin_upper_c"))
+    return binned.group_by(
+        *PAIRWISE_GROUP_COLUMNS, "abs_bin_id"
+    ).agg(*_pairwise_aggregations()).with_columns(
+        lower.alias("abs_bin_lower_c"), upper.alias("abs_bin_upper_c")
+    )
 
 
 def _status_summary(base: pl.LazyFrame) -> pl.LazyFrame:

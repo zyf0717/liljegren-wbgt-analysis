@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from liljegren_analysis import (
     HSBRunResults,
+    completed_pairwise_dates,
     compute_daily_pairwise,
     initialize_pairwise_output,
     persist_daily_pairwise,
@@ -160,12 +161,16 @@ def run_pipeline() -> int:
     )
 
     days = _days(args.start_date, args.end_date)
+    complete_dates = completed_pairwise_dates(output_root, args.sample_scope)
+    pending_days = [result_date for result_date in days if result_date not in complete_dates]
     logger.info(
         "Processing %d dates quantities=wbgt,tg,tnwb quantity_scope=joint "
-        "sample_scope=%s with %d workers",
+        "sample_scope=%s with %d workers; pending=%d skipped=%d",
         len(days),
         args.sample_scope,
         args.workers,
+        len(pending_days),
+        len(days) - len(pending_days),
     )
     logger.info("Output: %s", output_root)
     logger.info("Log: %s", log_file)
@@ -182,7 +187,7 @@ def run_pipeline() -> int:
                 runs,
                 args.sample_scope,
             )
-            for result_date in days
+            for result_date in pending_days
         ]
 
         for completed, future in enumerate(as_completed(futures), start=1):
@@ -190,7 +195,7 @@ def run_pipeline() -> int:
             persist_daily_pairwise(output_root, result_date, summaries, args.sample_scope)
             logger.info(
                 "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
-                result_date, worker_pid, compute_seconds, completed, len(days),
+                result_date, worker_pid, compute_seconds, completed, len(pending_days),
             )
         logger.info("Saved pairwise statistics to %s", output_root)
         return 0
