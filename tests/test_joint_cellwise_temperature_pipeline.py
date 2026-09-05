@@ -13,6 +13,7 @@ from liljegren_analysis.cellwise import (
     analyze_cellwise_quantile_spread,
     compute_joint_cellwise_temperature_quantiles,
 )
+from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 _CELLS = (
@@ -23,7 +24,7 @@ _CELLS = (
 
 
 def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
-    for implementation_index, implementation in enumerate(DEFAULT_JOINT_IMPLEMENTATIONS):
+    for implementation_index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
         path = (
             hsb_run
             / "results"

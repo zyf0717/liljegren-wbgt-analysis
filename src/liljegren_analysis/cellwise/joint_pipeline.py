@@ -129,7 +129,9 @@ def compute_joint_cellwise_temperature_quantiles(
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
     implementations = _implementation_names(implementations)
-    _validate_canonical_run_inventory(hsb_runs, dates, implementations)
+    _validate_canonical_run_inventory(
+        hsb_runs, dates, implementations, allow_unexpected=True
+    )
     _validate_options(
         probabilities, exact_validation_cells, date_workers, replay_workers
     )
