@@ -19,6 +19,7 @@ from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..comparison.config import EXPECTED_IMPLEMENTATIONS, REFERENCE_IMPLEMENTATION
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
+from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
 PERCENTILES = ("p50", "p90", "p95", "p99")
 SPREAD_METRICS = (
@@ -481,12 +482,24 @@ def _write_figures(
     for suffix in ("png", "pdf"):
         figure.savefig(directory / f"spread_by_percentile.{suffix}", dpi=200)
     plt.close(figure)
+    _write_spread_maps(cellwise, directory)
+
+
+def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    map_x, map_y = equal_earth_coordinates(
+        _float_column(cellwise, "longitude"),
+        _float_column(cellwise, "latitude"),
+    )
     for metric in SPREAD_METRICS:
         figure, axis = plt.subplots(figsize=(10, 4.8), layout="constrained")
         values = _float_column(cellwise, metric)
         image = axis.scatter(
-            _float_column(cellwise, "longitude"),
-            _float_column(cellwise, "latitude"),
+            map_x,
+            map_y,
             c=values,
             s=0.35,
             marker="s",
@@ -496,13 +509,8 @@ def _write_figures(
             vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
             rasterized=True,
         )
-        axis.set(
-            xlabel="Longitude",
-            ylabel="Latitude",
-            title=f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)",
-            xlim=(-180, 180),
-            ylim=(-90, 90),
-        )
+        configure_equal_earth_axis(axis)
+        axis.set_title(f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)")
         figure.colorbar(image, ax=axis, label="Spread (°C)")
         for suffix in ("png", "pdf"):
             figure.savefig(directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220)

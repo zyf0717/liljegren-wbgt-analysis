@@ -10,6 +10,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from .non_consensus import DEFAULT_OUTPUT_ROOT
+from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,10 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     valid = np.isfinite(percent)
     upper = max(1.0, float(np.ceil(np.quantile(percent[valid], 0.99))))
     figure, axis = plt.subplots(figsize=(10.0, 4.8), layout="constrained")
+    map_x, map_y = equal_earth_coordinates(longitude[valid], latitude[valid])
     image = axis.scatter(
-        longitude[valid],
-        latitude[valid],
+        map_x,
+        map_y,
         c=percent[valid],
         s=0.35,
         marker="s",
@@ -76,13 +78,8 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
         vmax=upper,
         rasterized=True,
     )
-    axis.set(
-        xlabel="Longitude",
-        ylabel="Latitude",
-        title="Annual ISO 7243 non-consensus rate",
-        xlim=(-180, 180),
-        ylim=(-90, 90),
-    )
+    configure_equal_earth_axis(axis)
+    axis.set_title("Annual ISO 7243 non-consensus rate")
     figure.colorbar(
         image,
         ax=axis,

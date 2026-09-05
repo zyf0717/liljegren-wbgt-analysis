@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
+from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
 
 DEFAULT_INPUT_ROOT = Path("data/cellwise_iso7243_classification_changes")
@@ -256,9 +257,10 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
     figure, axes = plt.subplots(2, 2, figsize=(12.0, 8.0), layout="constrained")
     map_axis = axes[0, 0]
     changed_percent = 100.0 * summary.changed_fraction
+    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
     image = map_axis.scatter(
-        summary.longitude,
-        summary.latitude,
+        map_x,
+        map_y,
         c=changed_percent,
         s=0.35,
         marker="s",
@@ -268,13 +270,8 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         vmax=50.0,
         rasterized=True,
     )
-    map_axis.set(
-        xlabel="Longitude",
-        ylabel="Latitude",
-        title="Mean classification disagreement across implementation pairs",
-        xlim=(-180, 180),
-        ylim=(-90, 90),
-    )
+    configure_equal_earth_axis(map_axis)
+    map_axis.set_title("Mean classification disagreement across implementation pairs")
     figure.colorbar(
         image,
         ax=map_axis,
@@ -317,14 +314,15 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
         squeeze=False,
     )
     image = None
+    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
     for axis, (implementation_a, implementation_b), values in zip(
         axes.flat,
         summary.implementation_pairs,
         summary.pair_changed_fraction,
     ):
         image = axis.scatter(
-            summary.longitude,
-            summary.latitude,
+            map_x,
+            map_y,
             c=100.0 * values,
             s=0.25,
             marker="s",
@@ -334,13 +332,8 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             vmax=color_upper_percent,
             rasterized=True,
         )
-        axis.set(
-            title=f"{implementation_a} vs {implementation_b}",
-            xlim=(-180, 180),
-            ylim=(-90, 90),
-            xticks=(-180, 0, 180),
-            yticks=(-90, 0, 90),
-        )
+        configure_equal_earth_axis(axis)
+        axis.set_title(f"{implementation_a} vs {implementation_b}")
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)
     assert image is not None

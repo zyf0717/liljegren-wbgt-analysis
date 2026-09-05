@@ -7,6 +7,7 @@ from .country import (
     extract_country_observations,
 )
 from .comparison import (
+    DEFAULT_PAIRWISE_OUTPUT_ROOT,
     DailyPairwiseSummaries,
     completed_pairwise_dates,
     compute_daily_pairwise,
@@ -14,6 +15,7 @@ from .comparison import (
     histogram_quantiles,
     initialize_pairwise_output,
     pairwise_metadata,
+    pairwise_product_root,
     persist_daily_pairwise,
     pooled_area_weighted_difference_statistics,
     pooled_difference_statistics,
@@ -53,6 +55,7 @@ __all__ = [
     "CountryExtractionProgress",
     "ClassificationAnalysis",
     "DailyPairwiseSummaries",
+    "DEFAULT_PAIRWISE_OUTPUT_ROOT",
     "Era5ClassificationAnalysis",
     "RESULT_QUANTITIES",
     "RESULT_QUANTITY_SPECS",
@@ -80,6 +83,7 @@ __all__ = [
     "histogram_quantiles",
     "initialize_pairwise_output",
     "pairwise_metadata",
+    "pairwise_product_root",
     "persist_daily_pairwise",
     "pooled_area_weighted_difference_statistics",
     "pooled_difference_statistics",

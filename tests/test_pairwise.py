@@ -19,7 +19,6 @@ from liljegren_analysis import (
     persist_daily_pairwise,
 )
 from liljegren_analysis.comparison.config import (
-    EXPECTED_IMPLEMENTATION_PAIRS,
     EXPECTED_IMPLEMENTATIONS,
 )
 from liljegren_analysis.comparison.pairwise import (
@@ -96,30 +95,34 @@ class PairwiseTests(unittest.TestCase):
             self.assertTrue((published / "manifest.json").exists())
             self.assertEqual(pq.read_table(published / "pairwise.parquet").num_rows, 9)
 
-    def test_all_implementations_requires_exact_complete_support(self) -> None:
+    def test_all_implementations_uses_discovered_complete_support(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "hsb"
-            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+            implementations = ("alpha", "beta", "gamma")
+            for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index), float(index + 1)])
             _, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
             self.assertEqual(
                 summaries.pairwise.num_rows,
-                3 * EXPECTED_IMPLEMENTATION_PAIRS,
+                3 * len(implementations) * (len(implementations) - 1) // 2,
             )
-            _write_results(root, "heatstress", [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
+            _write_results(root, "alpha", [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
             with self.assertRaisesRegex(ValueError, "no complete"):
                 compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
 
-    def test_all_implementations_rejects_unexpected_implementation(self) -> None:
+    def test_all_implementations_includes_every_schema_valid_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "hsb"
-            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+            implementations = ("alpha", "beta", "gamma", "delta")
+            for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index)])
-            _write_results(root, "unexpected", [1.0])
-            with self.assertRaisesRegex(ValueError, "unexpected=.*unexpected"):
-                compute_daily_pairwise(
-                    date(2025, 1, 1), (root,), "all-implementations"
-                )
+            _, summaries, _, _ = compute_daily_pairwise(
+                date(2025, 1, 1), (root,), "all-implementations"
+            )
+            self.assertEqual(
+                summaries.pairwise.num_rows,
+                3 * len(implementations) * (len(implementations) - 1) // 2,
+            )
 
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
