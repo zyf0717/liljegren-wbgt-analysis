@@ -4,8 +4,8 @@
 Tg, and Tnwb. A materialized base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
 one self-join and expands quantities afterward. Complete-case scope aggregates
-all seven implementations and all three quantities in one grouped pass, then
-expands the 21 fixed pairs and three quantities after the 7:1 reduction.
+all nine implementations and all three quantities in one grouped pass, then
+expands the 36 fixed pairs and three quantities after the 9:1 reduction.
 `persist_daily_pairwise()` validates and atomically replaces one Parquet date
 directory containing all three summary tables.
 
@@ -14,8 +14,9 @@ directory containing all three summary tables.
 An implementation row is agreement-eligible only when all three statuses are
 `ok` and all three values are non-null. Pairwise scope joins these joint-valid
 rows per implementation pair. Complete-case scope additionally restricts input
-to `heatstress`, `heatstress-jl`, `heatstress-r`, `liljegren-c`, `meteor`,
-`pywbgt`, and `thermofeel`, then retains only identities present exactly once
+to `argonne-liljegren-c`, `heatstress`, `heatstress-jl`, `heatstress-r`,
+`kong-huber-pywbgt`, `kwodzicki-pywbgt`, `mdljts-wbgt`, `meteor`, and
+`thermofeel`, then retains only identities present exactly once
 for every implementation. Therefore each pair has identical `n` and
 `area_weight_sum` across WBGT, Tg, and Tnwb. Coverage summaries retain the
 independent status and value-presence counts for each quantity.
@@ -35,7 +36,8 @@ authoritative sufficient statistics:
 - exact count and area mass above absolute-difference thresholds 0.1, 0.2,
   and 0.5 °C.
 
-Floating sums use Polars reductions. Daily derived means, variances, and scalar
+Inputs are promoted to float64 before Polars differences and reductions. Daily
+derived means, variances, and scalar
 quantiles are intentionally absent.
 
 `daily_pairwise_abs_histogram` stores non-empty fixed bins keyed by quantity,
@@ -79,6 +81,7 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-`metadata.json` records schema version 1, result-schema ID, sample scope, and
-histogram version. Each completed date contains three Parquet files and a
+`metadata.json` records schema version 5, result-schema ID, sample scope,
+quantity-set version, implementation-set version, and histogram version. Each
+completed date contains three Parquet files and a
 manifest written last; incomplete directories are not valid inputs.

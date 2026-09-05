@@ -35,6 +35,16 @@ class DailyPairwiseScriptTests(unittest.TestCase):
                     args.log_file,
                     MODULE.REPOSITORY / "data" / f"daily_pairwise_{scope}.log",
                 )
+                self.assertEqual(
+                    MODULE.DEFAULT_RUNS,
+                    (
+                        MODULE.REPOSITORY.parent
+                        / "HeatStressBench"
+                        / ".hsb"
+                        / "runs"
+                        / "wbgt-comparison-20260902-150355",
+                    ),
+                )
 
 
 if __name__ == "__main__":

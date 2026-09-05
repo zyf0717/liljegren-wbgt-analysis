@@ -16,8 +16,8 @@ each unordered pair appears once.
 
 The production Polars plan materializes one wide base relation per date, including
 all three quantities and the ERA5 latitude weight. Pairwise scope uses one
-implementation self-join. Complete-case scope aggregates all 21 values for the
-seven implementations once and expands the 21 fixed pairs only after the 7:1
+implementation self-join. Complete-case scope aggregates all 27 values for the
+nine implementations once and expands the 36 fixed pairs only after the 9:1
 reduction. The grouped aggregation then emits:
 
 - exact unweighted and cell-area-weighted sufficient sums and extrema;
@@ -33,7 +33,7 @@ The runner supports two populations:
 
 - `pairwise`: each pair uses rows valid for those two implementations;
 - `all-implementations`: every pair uses the same rows valid across the fixed
-  canonical seven implementations.
+  canonical nine implementations.
 
 Both row- and area-weighted statistics are always produced together.
 
@@ -71,7 +71,8 @@ uv run pytest -q
 
 ## Run the analysis
 
-The default pair-specific run reads `.hsb/runs/wbgt-comparison-20260823-181813`
+The default pair-specific run reads the sibling HeatStressBench repository's
+`.hsb/runs/wbgt-comparison-20260902-150355`
 and writes `data/pairwise/pairwise/v1/dates/<date>/`:
 
 ```bash
@@ -86,7 +87,8 @@ The paper complete-case cache writes
 
 ```bash
 uv run python scripts/daily_pairwise.py \
-  --sample-scope all-implementations
+  --sample-scope all-implementations \
+  --force
 ```
 
 ### Cellwise WBGT temporal quantiles
@@ -100,7 +102,7 @@ Parquet product:
 ```bash
 uv run python scripts/compute_cellwise_wbgt_quantiles.py \
   --hsb-run /path/to/hsb-run \
-  --implementation liljegren-c \
+  --implementation argonne-liljegren-c \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
   --output-root data/cellwise_wbgt_quantiles
@@ -118,7 +120,7 @@ deterministic 100-cell exact-order-statistic validation sample runs by default;
 use `--exact-validation-cells 0` only when intentionally deferring it.
 
 The joint-support temperature product is the preferred input when comparing
-implementations. It reads all seven implementations and WBGT, Tg, and Tnwb
+implementations. It reads all nine implementations and WBGT, Tg, and Tnwb
 together once per date to construct a strict common-validity mask. Replay then
 scans all three quantities once per implementation/date and updates three
 concurrent disk-backed histograms:
@@ -131,7 +133,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --output-root data/cellwise_temperature_quantiles/2025-joint-v1
 ```
 
-An observation enters any joint histogram only when all 21
+An observation enters any joint histogram only when all 27
 implementation/quantity results have status `ok` and a finite value. Each wide
 `implementations/<implementation>.parquet` contains the shared `n_joint`,
 WBGT/Tg/Tnwb quantiles and bounds, and quantity-specific native-valid counts.
@@ -141,7 +143,7 @@ memmaps, so memory is bounded by Arrow batches and fixed grid/hour masks rather
 than observation rows. Histograms are discarded after each implementation's
 final Parquet file is written. Completed outputs are idempotent; compatible
 masks and finalized implementation files resume after interruption, and
-`.work/` is removed after all seven wide files and metadata are committed.
+`.work/` is removed after all nine wide files and metadata are committed.
 
 ### Global ERA5 population weights
 
@@ -166,7 +168,7 @@ atomic Parquet directory per date.
 
 The reference-free analysis joins the persisted implementation quantiles by
 `cell_id`; it does not read daily HSB result shards. It reports P50/P90/P95/P99
-cross-implementation spreads, the Liljegren-C diagnostic, extrema frequencies,
+cross-implementation spreads, the Argonne Liljegren-C diagnostic, extrema frequencies,
 a comparison chart, and one map per quantile. Weight global statistics by equal
 cell (`none`), ERA5 cell geometry (`geometry`, the default), or LandScan
 population (`population`):
@@ -188,7 +190,7 @@ readable and the original extraction API is unchanged.
 
 ### Global ISO 7243 cell-pair classification changes
 
-Classify four annual joint-support WBGT summary values and emit the 21 ordered
+Classify four annual joint-support WBGT summary values and emit the 36 ordered
 implementation pairs for every complete-case cell. The product is
 deliberately unweighted: join `cell_lookup.parquet` downstream to geometric or
 LandScan population weights when calculating aggregate shares.
@@ -208,7 +210,7 @@ pair at a time, without a cross join or materializing the output.
 ### Cellwise ISO 7243 non-consensus percentage
 
 The separate non-consensus ETL scans the raw daily result rows. For each cell,
-it records the percentage of joint-valid annual rows where the seven ISO 7243
+it records the percentage of joint-valid annual rows where the nine ISO 7243
 WBGT classes are not unanimous:
 
 ```bash
@@ -221,7 +223,7 @@ The default HSB input is the same run used by daily pairwise analysis. The
 output is `data/cellwise_iso7243_non_consensus/cellwise_non_consensus.parquet`,
 with `n_joint`, `n_non_consensus`, and `non_consensus_percent`.
 
-Render 21 implementation-pair maps (each `n_changed / 4`, using a shared
+Render 36 implementation-pair maps (each `n_changed / 4`, using a shared
 dynamic P99 color scale) plus the supplementary aggregate map and unweighted,
 geometric-weighted, and population-weighted `n_changed` distributions:
 

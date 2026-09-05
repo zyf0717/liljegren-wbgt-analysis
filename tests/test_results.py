@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis import HSBRunResults
+from liljegren_analysis import HSBRunResults, RESULT_SCHEMA_ID
 from liljegren_analysis.io.results import iter_result_batches
 
 
@@ -18,14 +19,37 @@ def _write_result(hsb_run: Path, implementation: str, value: float, result_date:
         "cycle_ordinal": pa.array([1], type=pa.uint32()),
         "row_id": ["era5-global-n012500-e1037500-2025010100"],
         "row_ordinal": pa.array([1], type=pa.uint32()),
-        "wbgt_status": ["ok"], "wbgt_c": [value],
-        "tg_status": ["ok"], "tg_c": [value + 10.0],
-        "tnwb_status": ["ok"], "tnwb_c": [value + 20.0],
+        "wbgt_status": ["ok"], "wbgt_c": pa.array([value], type=pa.float32()),
+        "tg_status": ["ok"], "tg_c": pa.array([value + 10.0], type=pa.float32()),
+        "tnwb_status": ["ok"], "tnwb_c": pa.array([value + 20.0], type=pa.float32()),
         "unrelated_diagnostic": ["ignored"],
     }), path)
 
 
 class HSBRunResultsTests(unittest.TestCase):
+    def test_result_schema_id_is_float32_parquet_contract(self) -> None:
+        self.assertEqual(
+            RESULT_SCHEMA_ID,
+            "hsb-wbgt-comparison-results-parquet-float32-v1",
+        )
+
+    def test_run_manifest_must_declare_supported_result_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "hsb_run"
+            _write_result(root, "heatstress", 30.0)
+            (root / "run-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "execution": {
+                            "result_format": "parquet",
+                            "result_schema_id": "hsb-wbgt-comparison-results-csv-v3",
+                        }
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "Unsupported HSB run result"):
+                HSBRunResults.from_hsb_run(root)
+
     def test_files_preserve_provenance_and_deterministic_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory) / "hsb_run"

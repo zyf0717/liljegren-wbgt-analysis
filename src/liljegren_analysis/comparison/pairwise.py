@@ -12,9 +12,14 @@ from time import monotonic
 import polars as pl
 import pyarrow as pa
 
-from ..results import HSBRunResults, RESULT_QUANTITIES
+from ..results import HSBRunResults, RESULT_QUANTITIES, ResultFile
 from .area_weighted import _ERA5_LATITUDE_WEIGHTS
-from .config import EXPECTED_IMPLEMENTATIONS, SAMPLE_SCOPES, SampleScope
+from .config import (
+    EXPECTED_IMPLEMENTATION_PAIRS,
+    EXPECTED_IMPLEMENTATIONS,
+    SAMPLE_SCOPES,
+    SampleScope,
+)
 from .persistence import persist_date_partitions
 
 
@@ -54,25 +59,34 @@ def compute_daily_pairwise(
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
     started = monotonic()
-    base = _base_results(result_date, runs)
-    invalid = base.filter(pl.col("area_weight").is_null()).select("row_id").limit(1).collect()
+    base = _base_results(
+        result_date,
+        runs,
+        require_canonical=sample_scope == "all-implementations",
+    )
+    invalid = (
+        base.filter(pl.col("area_weight").is_null())
+        .select("row_id")
+        .limit(1)
+        .collect(engine="streaming")
+    )
     if invalid.height:
         raise ValueError(f"Invalid ERA5 row_id: {invalid.item(0, 0)}")
     values = _pairwise_values(base, sample_scope)
-    pairwise = _pairwise_summary(values).collect().sort(
+    pairwise = _pairwise_summary(values).collect(engine="streaming").sort(
         ["quantity", "implementation_a", "implementation_b"]
     )
     if sample_scope == "all-implementations":
-        expected = len(RESULT_QUANTITIES) * len(EXPECTED_IMPLEMENTATIONS) * (len(EXPECTED_IMPLEMENTATIONS) - 1) // 2
+        expected = len(RESULT_QUANTITIES) * EXPECTED_IMPLEMENTATION_PAIRS
         if pairwise.height != expected:
             raise ValueError(
                 f"Expected {expected} implementation pairs for {result_date}, found "
-                f"{pairwise.height}; no complete seven-implementation population exists"
+                f"{pairwise.height}; no complete canonical-implementation population exists"
             )
-    histogram = _histogram_summary(values).collect().sort(
+    histogram = _histogram_summary(values).collect(engine="streaming").sort(
         ["quantity", "implementation_a", "implementation_b", "abs_bin_id"]
     )
-    status = _status_summary(base).collect().sort(
+    status = _status_summary(base).collect(engine="streaming").sort(
         ["quantity", "implementation", "status", "value_present"]
     )
     return result_date, DailyPairwiseSummaries(
@@ -99,18 +113,42 @@ def persist_daily_pairwise(
     )
 
 
-def _base_results(result_date: date, runs: tuple[Path, ...]) -> pl.LazyFrame:
-    _validate_nonoverlapping_scopes(result_date, runs)
-    files = tuple(
-        item for run in runs
-        for item in HSBRunResults.from_hsb_run(run).files(result_date=result_date)
-    )
+def _base_results(
+    result_date: date, runs: tuple[Path, ...], *, require_canonical: bool = False
+) -> pl.LazyFrame:
+    files = _result_files(result_date, runs)
     if not files:
         raise FileNotFoundError(f"No result shards found for {result_date.isoformat()}")
+    if require_canonical:
+        discovered = {item.implementation for item in files}
+        expected = set(EXPECTED_IMPLEMENTATIONS)
+        if discovered != expected:
+            raise ValueError(
+                f"Implementation inventory differs for {result_date}: "
+                f"missing={sorted(expected - discovered)}, "
+                f"unexpected={sorted(discovered - expected)}"
+            )
+        scopes = {
+            implementation: tuple(
+                sorted(item.run_id for item in files if item.implementation == implementation)
+            )
+            for implementation in EXPECTED_IMPLEMENTATIONS
+        }
+        reference_scopes = scopes[EXPECTED_IMPLEMENTATIONS[0]]
+        if not reference_scopes or any(
+            implementation_scopes != reference_scopes
+            for implementation_scopes in scopes.values()
+        ):
+            raise ValueError(
+                f"Implementation shard scopes differ for {result_date}: {scopes}"
+            )
     scans = [
         pl.scan_parquet(item.path).select(
             "cycle_ordinal", "row_id", "row_ordinal",
             "wbgt_status", "wbgt_c", "tg_status", "tg_c", "tnwb_status", "tnwb_c",
+        ).with_columns(
+            pl.col(f"{quantity}_c").cast(pl.Float64)
+            for quantity in RESULT_QUANTITIES
         ).with_columns(
             pl.lit(item.result_date).cast(pl.Date).alias("result_date"),
             pl.lit(item.run_id).alias("run_id"),
@@ -244,8 +282,11 @@ def _status_summary(base: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def _validate_nonoverlapping_scopes(result_date: date, runs: tuple[Path, ...]) -> None:
+def _result_files(
+    result_date: date, runs: tuple[Path, ...]
+) -> tuple[ResultFile, ...]:
     scopes: dict[tuple[str, str], Path] = {}
+    files: list[ResultFile] = []
     for run in runs:
         for item in HSBRunResults.from_hsb_run(run).files(result_date=result_date):
             scope = (item.run_id, item.implementation)
@@ -255,3 +296,5 @@ def _validate_nonoverlapping_scopes(result_date: date, runs: tuple[Path, ...]) -
                     f"Overlapping result scope for {result_date} run_id={item.run_id} "
                     f"implementation={item.implementation}: {previous} and {item.path}"
                 )
+            files.append(item)
+    return tuple(files)

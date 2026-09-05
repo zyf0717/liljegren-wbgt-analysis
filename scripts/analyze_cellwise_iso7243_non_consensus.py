@@ -13,7 +13,13 @@ from liljegren_analysis.cellwise.non_consensus import (
 
 
 REPOSITORY = Path(__file__).parents[1]
-DEFAULT_HSB_RUN = REPOSITORY / ".hsb" / "runs" / "wbgt-comparison-20260823-181813"
+DEFAULT_HSB_RUN = (
+    REPOSITORY.parent
+    / "HeatStressBench"
+    / ".hsb"
+    / "runs"
+    / "wbgt-comparison-20260902-150355"
+)
 
 
 def main() -> None:

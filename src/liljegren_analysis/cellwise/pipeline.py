@@ -212,6 +212,7 @@ def _hsb_run_paths(
     for hsb_run in hsb_runs:
         if not (hsb_run / "results").is_dir():
             raise FileNotFoundError(f"HSB run results directory does not exist: {hsb_run}")
+        HSBRunResults.from_hsb_run(hsb_run)
     return hsb_runs
 
 
@@ -255,6 +256,49 @@ def _input_files(
             scopes.add(scope)
         result.extend(date_files)
     return tuple(result)
+
+
+def _validate_canonical_run_inventory(
+    hsb_runs: tuple[Path, ...], dates: tuple[date, ...], implementations: tuple[str, ...]
+) -> None:
+    """Validate implementation membership and shard scopes without scanning rows."""
+
+    expected = set(implementations)
+    for current_date in dates:
+        entries = tuple(
+            (hsb_run, path)
+            for hsb_run in hsb_runs
+            for path in sorted(
+                (hsb_run / "results" / current_date.isoformat()).glob(
+                    "*/*/results.parquet"
+                )
+            )
+        )
+        discovered = {path.parent.name for _, path in entries}
+        if discovered != expected:
+            raise ValueError(
+                f"Implementation inventory differs for {current_date}: "
+                f"missing={sorted(expected - discovered)}, "
+                f"unexpected={sorted(discovered - expected)}"
+            )
+        scopes = {
+            implementation: tuple(
+                sorted(
+                    (hsb_run.as_posix(), path.parents[1].name)
+                    for hsb_run, path in entries
+                    if path.parent.name == implementation
+                )
+            )
+            for implementation in implementations
+        }
+        reference_scopes = scopes[implementations[0]]
+        if not reference_scopes or any(
+            implementation_scopes != reference_scopes
+            for implementation_scopes in scopes.values()
+        ):
+            raise ValueError(
+                f"Implementation shard scopes differ on {current_date}: {scopes}"
+            )
 
 
 def _input_fingerprint(paths: tuple[Path, ...]) -> str:

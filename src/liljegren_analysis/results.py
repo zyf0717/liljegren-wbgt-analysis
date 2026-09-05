@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Self
@@ -36,7 +38,7 @@ RESULT_QUANTITY_SPECS: Mapping[ResultQuantity, ResultQuantitySpec] = MappingProx
         ),
     }
 )
-RESULT_SCHEMA_ID = "hsb-wbgt-comparison-results-csv-v3"
+RESULT_SCHEMA_ID = "hsb-wbgt-comparison-results-parquet-float32-v1"
 _IDENTITY_COLUMNS = ("cycle_ordinal", "row_id", "row_ordinal")
 
 
@@ -60,7 +62,11 @@ class HSBRunResults:
 
     @classmethod
     def from_hsb_run(cls, hsb_run: str | Path) -> Self:
-        return cls(Path(hsb_run) / "results")
+        run = Path(hsb_run).expanduser().resolve()
+        manifest_path = run / "run-manifest.json"
+        if manifest_path.is_file():
+            _validate_run_manifest(manifest_path)
+        return cls(run / "results")
 
     def files(
         self,
@@ -143,6 +149,25 @@ def validate_result_schema(schema: pa.Schema) -> None:
         raise ValueError(
             f"Unsupported result schema {RESULT_SCHEMA_ID}: "
             f"invalid status types={invalid_status}, value types={invalid_values}"
+        )
+
+
+@cache
+def _validate_run_manifest(path: Path) -> None:
+    try:
+        manifest = json.loads(path.read_text())
+        execution = manifest["execution"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ValueError(f"Invalid HSB run manifest: {path}") from error
+    if (
+        not isinstance(execution, dict)
+        or execution.get("result_format") != "parquet"
+        or execution.get("result_schema_id") != RESULT_SCHEMA_ID
+    ):
+        raise ValueError(
+            f"Unsupported HSB run result contract in {path}: "
+            f"format={execution.get('result_format') if isinstance(execution, dict) else None}, "
+            f"schema_id={execution.get('result_schema_id') if isinstance(execution, dict) else None}"
         )
 
 

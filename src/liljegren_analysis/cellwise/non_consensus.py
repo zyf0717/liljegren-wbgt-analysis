@@ -28,6 +28,7 @@ from .pipeline import (
     _hsb_run_paths,
     _input_files,
     _input_fingerprint,
+    _validate_canonical_run_inventory,
 )
 
 
@@ -64,12 +65,13 @@ def analyze_cellwise_iso7243_non_consensus(
     """Write annual per-cell non-unanimous ISO-class percentages.
 
     Every source Parquet file is decoded in aligned PyArrow batches. NumPy holds
-    only the per-cell counters and current seven-implementation class batch.
+    only the per-cell counters and current canonical-implementation class batch.
     """
 
     thresholds = validate_thresholds(thresholds_c)
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
+    _validate_canonical_run_inventory(hsb_runs, dates, EXPECTED_IMPLEMENTATIONS)
     root = Path(output_root).expanduser().resolve()
     outputs = NonConsensusOutputs(
         root / "cellwise_non_consensus.parquet",

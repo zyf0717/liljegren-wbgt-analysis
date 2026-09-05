@@ -14,7 +14,10 @@ from liljegren_analysis.cellwise.iso7243 import (
     PERCENTILES,
     analyze_cellwise_iso7243_classification,
 )
-from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.config import (
+    EXPECTED_IMPLEMENTATION_PAIRS,
+    EXPECTED_IMPLEMENTATIONS,
+)
 
 
 class CellwiseISO7243Tests(unittest.TestCase):
@@ -75,7 +78,7 @@ class CellwiseISO7243Tests(unittest.TestCase):
             )
 
             pairs = pq.read_table(output.cell_pair_differences)
-            self.assertEqual(pairs.num_rows, 2 * 21)
+            self.assertEqual(pairs.num_rows, 2 * EXPECTED_IMPLEMENTATION_PAIRS)
             self.assertEqual(
                 pairs.schema,
                 pa.schema(
@@ -96,7 +99,10 @@ class CellwiseISO7243Tests(unittest.TestCase):
             self.assertEqual(first_pair["n_compared"].to_pylist(), [4, 4])
             self.assertEqual(first_pair["n_higher"].to_pylist(), [1, 1])
             self.assertEqual(first_pair["n_lower"].to_pylist(), [0, 2])
-            self.assertEqual(pq.ParquetFile(output.cell_pair_differences).num_row_groups, 21)
+            self.assertEqual(
+                pq.ParquetFile(output.cell_pair_differences).num_row_groups,
+                EXPECTED_IMPLEMENTATION_PAIRS,
+            )
 
             lookup = pq.read_table(output.cell_lookup)
             self.assertEqual(lookup["cell_id"].to_pylist(), [0, 1])
@@ -114,10 +120,21 @@ class CellwiseISO7243Tests(unittest.TestCase):
             metadata = json.loads(output.metadata.read_text())
             self.assertEqual(metadata["complete_case_cell_count"], 2)
             self.assertEqual(metadata["excluded_cell_count"], 2)
-            self.assertEqual(metadata["implementation_pair_count"], 21)
-            self.assertEqual(metadata["row_count"], 42)
-            self.assertEqual(metadata["implementation_ids"]["heatstress"], 0)
-            self.assertEqual(metadata["implementation_ids"]["thermofeel"], 6)
+            self.assertEqual(
+                metadata["implementation_pair_count"],
+                EXPECTED_IMPLEMENTATION_PAIRS,
+            )
+            self.assertEqual(
+                metadata["row_count"], 2 * EXPECTED_IMPLEMENTATION_PAIRS
+            )
+            self.assertEqual(
+                metadata["implementation_ids"]["heatstress"],
+                EXPECTED_IMPLEMENTATIONS.index("heatstress"),
+            )
+            self.assertEqual(
+                metadata["implementation_ids"]["thermofeel"],
+                EXPECTED_IMPLEMENTATIONS.index("thermofeel"),
+            )
 
             with self.assertRaises(FileExistsError):
                 analyze_cellwise_iso7243_classification(

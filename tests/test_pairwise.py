@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -8,8 +9,16 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis import compute_daily_pairwise, persist_daily_pairwise
-from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis import (
+    compute_daily_pairwise,
+    initialize_pairwise_output,
+    pairwise_metadata,
+    persist_daily_pairwise,
+)
+from liljegren_analysis.comparison.config import (
+    EXPECTED_IMPLEMENTATION_PAIRS,
+    EXPECTED_IMPLEMENTATIONS,
+)
 from liljegren_analysis.comparison.pairwise import DailyPairwiseSummaries
 
 
@@ -25,9 +34,9 @@ def _write_results(hsb_run: Path, implementation: str, values: list[float | None
         "cycle_ordinal": pa.array(cycle_ordinals or [1] * len(values), type=pa.uint32()),
         "row_id": row_ids or [_row_id(index) for index in range(len(values))],
         "row_ordinal": pa.array(range(len(values)), type=pa.uint32()),
-        "wbgt_status": statuses, "wbgt_c": values,
-        "tg_status": tg_statuses or statuses, "tg_c": [None if value is None else value + 100 for value in values],
-        "tnwb_status": statuses, "tnwb_c": [None if value is None else value - 100 for value in values],
+        "wbgt_status": statuses, "wbgt_c": pa.array(values, type=pa.float32()),
+        "tg_status": tg_statuses or statuses, "tg_c": pa.array([None if value is None else value + 100 for value in values], type=pa.float32()),
+        "tnwb_status": statuses, "tnwb_c": pa.array([None if value is None else value - 100 for value in values], type=pa.float32()),
     }), path)
 
 
@@ -47,6 +56,12 @@ class PairwiseTests(unittest.TestCase):
                 key = row["quantity"], row["implementation_a"], row["implementation_b"]
                 histogram_counts[key] = histogram_counts.get(key, 0) + row["n"]
             self.assertEqual(histogram_counts[("wbgt", "alpha", "gamma")], 2)
+            for name in (
+                "sum_difference_c",
+                "sum_squared_difference_c2",
+                "sum_absolute_difference_c",
+            ):
+                self.assertTrue(pa.types.is_float64(summaries.pairwise.schema.field(name).type))
             published = persist_daily_pairwise(root / "output", result_date, summaries)
             self.assertTrue((published / "manifest.json").exists())
             self.assertEqual(pq.read_table(published / "pairwise.parquet").num_rows, 9)
@@ -57,10 +72,44 @@ class PairwiseTests(unittest.TestCase):
             for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
                 _write_results(root, implementation, [float(index), float(index + 1)])
             _, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
-            self.assertEqual(summaries.pairwise.num_rows, 63)
+            self.assertEqual(
+                summaries.pairwise.num_rows,
+                3 * EXPECTED_IMPLEMENTATION_PAIRS,
+            )
             _write_results(root, "heatstress", [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
             with self.assertRaisesRegex(ValueError, "no complete"):
                 compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
+
+    def test_all_implementations_rejects_unexpected_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "hsb"
+            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+                _write_results(root, implementation, [float(index)])
+            _write_results(root, "unexpected", [1.0])
+            with self.assertRaisesRegex(ValueError, "unexpected=.*unexpected"):
+                compute_daily_pairwise(
+                    date(2025, 1, 1), (root,), "all-implementations"
+                )
+
+    def test_pairwise_output_requires_explicit_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            root = output / "all-implementations" / "v1"
+            root.mkdir(parents=True)
+            (root / "metadata.json").write_text('{"schema_version": 1}')
+            stale = root / "dates" / "stale"
+            stale.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "Incompatible"):
+                initialize_pairwise_output(output, "all-implementations")
+            initialized = initialize_pairwise_output(
+                output, "all-implementations", overwrite=True
+            )
+            self.assertEqual(initialized, root.resolve())
+            self.assertFalse(stale.exists())
+            self.assertEqual(
+                json.loads((initialized / "metadata.json").read_text()),
+                pairwise_metadata("all-implementations"),
+            )
 
     def test_invalid_histogram_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
