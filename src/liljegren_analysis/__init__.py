@@ -8,6 +8,7 @@ from .country import (
 )
 from .comparison import (
     DailyPairwiseSummaries,
+    completed_pairwise_dates,
     compute_daily_pairwise,
     histogram_quantile_statistics,
     histogram_quantiles,
@@ -64,6 +65,7 @@ __all__ = [
     "analyze_nasa_power_run",
     "analyze_wbgt_classification",
     "compute_daily_pairwise",
+    "completed_pairwise_dates",
     "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",
     "compute_era5_population_weights",

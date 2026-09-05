@@ -5,7 +5,11 @@ from .pairwise import (
     compute_daily_pairwise,
     persist_daily_pairwise,
 )
-from .persistence import initialize_pairwise_output, pairwise_metadata
+from .persistence import (
+    completed_pairwise_dates,
+    initialize_pairwise_output,
+    pairwise_metadata,
+)
 from .statistics import (
     histogram_quantile_bin_indices,
     histogram_quantile_statistics,
@@ -18,6 +22,7 @@ from .statistics import (
 __all__ = [
     "DailyPairwiseSummaries",
     "compute_daily_pairwise",
+    "completed_pairwise_dates",
     "histogram_quantile_bin_indices",
     "histogram_quantile_statistics",
     "histogram_quantiles",

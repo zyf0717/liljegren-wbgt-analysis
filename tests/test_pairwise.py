@@ -8,8 +8,11 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import polars as pl
+from polars.testing import assert_frame_equal
 
 from liljegren_analysis import (
+    completed_pairwise_dates,
     compute_daily_pairwise,
     initialize_pairwise_output,
     pairwise_metadata,
@@ -19,7 +22,14 @@ from liljegren_analysis.comparison.config import (
     EXPECTED_IMPLEMENTATION_PAIRS,
     EXPECTED_IMPLEMENTATIONS,
 )
-from liljegren_analysis.comparison.pairwise import DailyPairwiseSummaries
+from liljegren_analysis.comparison.pairwise import (
+    PAIRWISE_COLUMNS,
+    PAIRWISE_GROUP_COLUMNS,
+    DailyPairwiseSummaries,
+    _enriched_histogram_summary,
+    _pairwise_aggregations,
+    _pairwise_summary,
+)
 
 
 def _row_id(index: int) -> str:
@@ -41,6 +51,26 @@ def _write_results(hsb_run: Path, implementation: str, values: list[float | None
 
 
 class PairwiseTests(unittest.TestCase):
+    def test_enriched_histogram_preserves_direct_pairwise_statistics(self) -> None:
+        values = pl.DataFrame({
+            "result_date": [date(2025, 1, 1)] * 6,
+            "quantity": ["wbgt"] * 6,
+            "implementation_a": ["alpha"] * 6,
+            "implementation_b": ["beta"] * 6,
+            "area_weight": [1.0, 0.5, 1.5, 2.0, 0.25, 0.75],
+            "difference_c": [-5.0, -0.5, -0.1, 0.0, 0.2, 2.0],
+        })
+        direct = values.group_by(*PAIRWISE_GROUP_COLUMNS).agg(
+            *_pairwise_aggregations()
+        ).select(PAIRWISE_COLUMNS)
+        enriched = _enriched_histogram_summary(values.lazy()).collect(
+            engine="streaming"
+        )
+        derived = _pairwise_summary(enriched)
+
+        self.assertGreater(enriched.height, 1)
+        assert_frame_equal(derived, direct, check_exact=False, rel_tol=1e-14)
+
     def test_pairwise_totals_and_parquet_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -110,6 +140,82 @@ class PairwiseTests(unittest.TestCase):
                 json.loads((initialized / "metadata.json").read_text()),
                 pairwise_metadata("all-implementations"),
             )
+
+    def test_completed_dates_require_manifest_and_all_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            root = initialize_pairwise_output(output, "all-implementations")
+            complete = root / "dates" / "2025-01-01"
+            complete.mkdir(parents=True)
+            filenames = ["pairwise.parquet", "abs_histogram.parquet", "quantity_status.parquet"]
+            for filename in filenames:
+                (complete / filename).touch()
+            (complete / "manifest.json").write_text(
+                json.dumps({"result_date": "2025-01-01", "files": filenames})
+            )
+            incomplete = root / "dates" / "2025-01-02"
+            incomplete.mkdir()
+            (incomplete / "manifest.json").write_text(
+                json.dumps({"result_date": "2025-01-02", "files": filenames})
+            )
+            self.assertEqual(
+                completed_pairwise_dates(output, "all-implementations"),
+                {date(2025, 1, 1)},
+            )
+
+    def test_area_weight_validation_tolerates_reduction_order_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hsb = root / "hsb"
+            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+                _write_results(hsb, implementation, [float(index)])
+            result_date, summaries, _, _ = compute_daily_pairwise(
+                date(2025, 1, 1), (hsb,), "all-implementations"
+            )
+            status = summaries.quantity_status
+            offsets = {"wbgt": 0.0, "tg": 3e-6, "tnwb": 5e-6}
+            weights = pa.array(
+                [
+                    4_568_836.0 + offsets[quantity.as_py()]
+                    for quantity in status["quantity"]
+                ],
+                type=pa.float64(),
+            )
+            noisy = DailyPairwiseSummaries(
+                summaries.pairwise,
+                summaries.abs_histogram,
+                status.set_column(
+                    status.schema.get_field_index("area_weight_sum"),
+                    "area_weight_sum",
+                    weights,
+                ),
+            )
+            persist_daily_pairwise(
+                root / "accepted", result_date, noisy, "all-implementations"
+            )
+
+            material_weights = pa.array(
+                [
+                    4_568_836.0 + ({"wbgt": 0.0, "tg": 0.01, "tnwb": 0.0})[
+                        quantity.as_py()
+                    ]
+                    for quantity in status["quantity"]
+                ],
+                type=pa.float64(),
+            )
+            material = DailyPairwiseSummaries(
+                summaries.pairwise,
+                summaries.abs_histogram,
+                status.set_column(
+                    status.schema.get_field_index("area_weight_sum"),
+                    "area_weight_sum",
+                    material_weights,
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "Quantity status totals"):
+                persist_daily_pairwise(
+                    root / "rejected", result_date, material, "all-implementations"
+                )
 
     def test_invalid_histogram_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
