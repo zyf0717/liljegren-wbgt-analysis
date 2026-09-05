@@ -130,7 +130,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --hsb-run /path/to/hsb-run \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
-  --output-root data/cellwise_temperature_quantiles/2025-joint-v1 \
+  --output-root data/cellwise/temperature-quantiles/6-targets/2025-joint-v1 \
   --date-workers 4 \
   --replay-workers 2
 ```
@@ -179,8 +179,8 @@ population (`population`):
 
 ```bash
 uv run python scripts/analyze_cellwise_quantile_spread.py \
-  --input-root data/cellwise_temperature_quantiles/2025-joint-v1 \
-  --output-root data/cellwise_temperature_quantiles/analysis/wbgt \
+  --input-root data/cellwise/temperature-quantiles/6-targets/2025-joint-v1 \
+  --output-root data/cellwise/quantile-spread/6-targets/2025-joint-v1/wbgt \
   --quantity wbgt
 ```
 
@@ -202,8 +202,8 @@ LandScan population weights when calculating aggregate shares.
 
 ```bash
 uv run python scripts/analyze_cellwise_iso7243_classification.py \
-  --input-root data/cellwise_temperature_quantiles/2025-joint-v1 \
-  --output-root data/cellwise_iso7243_classification_changes \
+  --input-root data/cellwise/temperature-quantiles/6-targets/2025-joint-v1 \
+  --output-root data/cellwise/iso7243-classification/6-targets/2025-joint-v1 \
   --thresholds-c 25 26 28 30 33
 ```
 
@@ -228,7 +228,7 @@ The default HSB input is the same run used by daily pairwise analysis. The
 output is `data/cellwise_iso7243_non_consensus/cellwise_non_consensus.parquet`,
 with `n_joint`, `n_non_consensus`, and `non_consensus_percent`.
 
-Render 36 implementation-pair maps (each `n_changed / 4`, using a shared
+Render 15 implementation-pair maps (each `n_changed / 4`, using a shared
 dynamic P99 color scale) plus the supplementary aggregate map and unweighted,
 geometric-weighted, and population-weighted `n_changed` distributions:
 

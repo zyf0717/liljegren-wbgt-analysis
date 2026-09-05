@@ -11,11 +11,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
+from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
 
-DEFAULT_INPUT_ROOT = Path("data/cellwise_iso7243_classification_changes")
+DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
 DEFAULT_POPULATION_WEIGHTS_PATH = DEFAULT_POPULATION_OUTPUT_ROOT / "population.parquet"
 _WEIGHTINGS = ("Unweighted", "Geometric-weighted", "Population-weighted")
 

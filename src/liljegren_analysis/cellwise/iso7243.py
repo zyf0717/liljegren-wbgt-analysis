@@ -15,12 +15,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
+from .paths import DEFAULT_ISO7243_INPUT_ROOT, DEFAULT_ISO7243_OUTPUT_ROOT
 
 
 ISO7243_SCHEMA_VERSION = 1
 PERCENTILES = ("p50", "p90", "p95", "p99")
-DEFAULT_INPUT_ROOT = Path("data/cellwise_temperature_quantiles/2025-joint-v1")
-DEFAULT_OUTPUT_ROOT = Path("data/cellwise_iso7243_classification_changes")
+DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_INPUT_ROOT
+DEFAULT_OUTPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
 
 
 @dataclass(frozen=True)

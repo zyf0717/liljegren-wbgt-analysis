@@ -43,6 +43,7 @@ from .pipeline import (
     _input_fingerprint,
     _validate_canonical_run_inventory,
 )
+from .paths import DEFAULT_JOINT_OUTPUT_ROOT
 from .quantiles import quantile_table
 
 JOINT_CELLWISE_SCHEMA_VERSION = 2
@@ -108,7 +109,7 @@ def compute_joint_cellwise_temperature_quantiles(
     *,
     start_date: str | date,
     end_date: str | date,
-    output_root: str | Path = Path("data/cellwise_temperature_quantiles"),
+    output_root: str | Path = DEFAULT_JOINT_OUTPUT_ROOT,
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,

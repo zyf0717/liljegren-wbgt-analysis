@@ -18,6 +18,10 @@ import pyarrow.parquet as pq
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..comparison.config import REFERENCE_IMPLEMENTATION
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
+from .paths import (
+    DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
+    DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+)
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
@@ -46,7 +50,7 @@ class QuantileSpreadOutputs:
 
 
 def analyze_cellwise_quantile_spread(
-    input_root: str | Path,
+    input_root: str | Path = DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
     *,
     output_root: str | Path | None = None,
     quantity: ResultQuantity = "wbgt",
@@ -61,7 +65,7 @@ def analyze_cellwise_quantile_spread(
     target_root = (
         Path(output_root).expanduser().resolve()
         if output_root is not None
-        else source_root.parent / "analysis"
+        else DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT.resolve() / quantity
     )
     if quantity not in RESULT_QUANTITIES:
         raise ValueError(f"Unsupported result quantity: {quantity}")

@@ -9,6 +9,7 @@ from pathlib import Path
 from liljegren_analysis.cellwise import (
     DEFAULT_DATE_WORKERS,
     DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_JOINT_OUTPUT_ROOT,
     DEFAULT_REPLAY_WORKERS,
     compute_joint_cellwise_temperature_quantiles,
 )
@@ -29,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("data/cellwise_temperature_quantiles"),
+        default=DEFAULT_JOINT_OUTPUT_ROOT,
     )
     parser.add_argument(
         "--force",
