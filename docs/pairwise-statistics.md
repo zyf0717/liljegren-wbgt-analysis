@@ -22,7 +22,7 @@ quantity.
 Input roots are enumerated by `(run_id, implementation)` before scanning.
 Overlapping scopes are rejected to prevent many-to-many joins.
 
-## v1 Parquet date tables
+## Schema-v7 Parquet date tables
 
 `daily_pairwise`, keyed by date, quantity, and implementation pair, contains
 authoritative sufficient statistics:

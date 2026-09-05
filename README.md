@@ -74,7 +74,8 @@ uv run pytest -q
 
 The default complete-case run reads the sibling HeatStressBench repository's
 `.hsb/runs/wbgt-comparison-20260902-150355`
-and resumes `data/pairwise/all-implementations/v1/dates/<date>/`:
+and resumes
+`data/pairwise/6-targets/all-implementations/schema-v7/dates/<date>/`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \

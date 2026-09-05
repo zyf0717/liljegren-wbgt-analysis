@@ -146,7 +146,7 @@ class PairwiseTests(unittest.TestCase):
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
-            root = output / "all-implementations" / "v1"
+            root = output / "all-implementations" / "schema-v7"
             root.mkdir(parents=True)
             (root / "metadata.json").write_text('{"schema_version": 1}')
             stale = root / "dates" / "stale"
