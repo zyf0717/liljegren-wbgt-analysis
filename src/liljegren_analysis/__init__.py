@@ -22,6 +22,9 @@ from .comparison import (
     pooled_sufficient_statistics,
 )
 from .cellwise import (
+    DEFAULT_DATE_WORKERS,
+    DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_REPLAY_WORKERS,
     analyze_cellwise_quantile_spread,
     compute_cellwise_wbgt_quantiles,
     compute_joint_cellwise_temperature_quantiles,
@@ -55,7 +58,10 @@ __all__ = [
     "CountryExtractionProgress",
     "ClassificationAnalysis",
     "DailyPairwiseSummaries",
+    "DEFAULT_DATE_WORKERS",
+    "DEFAULT_JOINT_IMPLEMENTATIONS",
     "DEFAULT_PAIRWISE_OUTPUT_ROOT",
+    "DEFAULT_REPLAY_WORKERS",
     "Era5ClassificationAnalysis",
     "RESULT_QUANTITIES",
     "RESULT_QUANTITY_SPECS",

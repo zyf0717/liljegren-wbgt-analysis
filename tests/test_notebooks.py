@@ -60,6 +60,14 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertIn("pending_dates", code)
         self.assertIn("replace_existing_output = False", code)
 
+    def test_joint_cellwise_notebook_uses_parallel_safe_defaults(self) -> None:
+        code = _code("11-cellwise-temperature-quantiles.ipynb")
+
+        self.assertIn("DATE_WORKERS = 4", code)
+        self.assertIn("REPLAY_WORKERS = 2", code)
+        self.assertIn("REPLACE_EXISTING_OUTPUT = False", code)
+        self.assertIn("'kong-huber-pywbgt'", code)
+
     def test_interactive_global_map_uses_equal_earth(self) -> None:
         code = _code("31-cellwise-quantile-spread.ipynb")
 

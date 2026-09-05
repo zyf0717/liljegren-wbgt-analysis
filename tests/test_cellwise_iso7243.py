@@ -9,15 +9,15 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
 from liljegren_analysis.cellwise.grid import grid_from_source_cell_ids
 from liljegren_analysis.cellwise.iso7243 import (
     PERCENTILES,
     analyze_cellwise_iso7243_classification,
 )
-from liljegren_analysis.comparison.config import (
-    EXPECTED_IMPLEMENTATION_PAIRS,
-    EXPECTED_IMPLEMENTATIONS,
-)
+
+IMPLEMENTATIONS = DEFAULT_JOINT_IMPLEMENTATIONS
+IMPLEMENTATION_PAIRS = len(IMPLEMENTATIONS) * (len(IMPLEMENTATIONS) - 1) // 2
 
 
 class CellwiseISO7243Tests(unittest.TestCase):
@@ -39,14 +39,14 @@ class CellwiseISO7243Tests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": 2,
-                        "implementations": list(EXPECTED_IMPLEMENTATIONS),
+                        "implementations": list(IMPLEMENTATIONS),
                         "probabilities": [0.5, 0.9, 0.95, 0.99],
                         "temperature_bin_min_c": -40.0,
                         "temperature_bin_max_c": 60.0,
                     }
                 )
             )
-            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+            for index, implementation in enumerate(IMPLEMENTATIONS):
                 values = np.asarray(
                     [
                         [25.0, 30.0, 33.0, 34.0],
@@ -78,7 +78,7 @@ class CellwiseISO7243Tests(unittest.TestCase):
             )
 
             pairs = pq.read_table(output.cell_pair_differences)
-            self.assertEqual(pairs.num_rows, 2 * EXPECTED_IMPLEMENTATION_PAIRS)
+            self.assertEqual(pairs.num_rows, 2 * IMPLEMENTATION_PAIRS)
             self.assertEqual(
                 pairs.schema,
                 pa.schema(
@@ -101,7 +101,7 @@ class CellwiseISO7243Tests(unittest.TestCase):
             self.assertEqual(first_pair["n_lower"].to_pylist(), [0, 2])
             self.assertEqual(
                 pq.ParquetFile(output.cell_pair_differences).num_row_groups,
-                EXPECTED_IMPLEMENTATION_PAIRS,
+                IMPLEMENTATION_PAIRS,
             )
 
             lookup = pq.read_table(output.cell_lookup)
@@ -122,18 +122,18 @@ class CellwiseISO7243Tests(unittest.TestCase):
             self.assertEqual(metadata["excluded_cell_count"], 2)
             self.assertEqual(
                 metadata["implementation_pair_count"],
-                EXPECTED_IMPLEMENTATION_PAIRS,
+                IMPLEMENTATION_PAIRS,
             )
             self.assertEqual(
-                metadata["row_count"], 2 * EXPECTED_IMPLEMENTATION_PAIRS
+                metadata["row_count"], 2 * IMPLEMENTATION_PAIRS
             )
             self.assertEqual(
                 metadata["implementation_ids"]["heatstress"],
-                EXPECTED_IMPLEMENTATIONS.index("heatstress"),
+                IMPLEMENTATIONS.index("heatstress"),
             )
             self.assertEqual(
                 metadata["implementation_ids"]["thermofeel"],
-                EXPECTED_IMPLEMENTATIONS.index("thermofeel"),
+                IMPLEMENTATIONS.index("thermofeel"),
             )
 
             with self.assertRaises(FileExistsError):
