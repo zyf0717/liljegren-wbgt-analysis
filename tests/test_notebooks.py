@@ -49,6 +49,7 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertIn("pyarrow.parquet", code)
         self.assertIn("pairwise_product_root", code)
         self.assertIn("DEFAULT_PAIRWISE_OUTPUT_ROOT", code)
+        self.assertIn('quantity_order = ("wbgt", "tnwb", "tg")', code)
         self.assertIn("combinations(implementations, 2)", code)
         self.assertNotIn("EXPECTED_IMPLEMENTATION", code)
         self.assertNotIn("duckdb", code.casefold())
