@@ -47,8 +47,25 @@ class NotebookMigrationTests(unittest.TestCase):
         code = _code("30-yearly-pairwise.ipynb")
 
         self.assertIn("pyarrow.parquet", code)
-        self.assertIn("pairwise_root", code)
+        self.assertIn("pairwise_product_root", code)
+        self.assertIn("combinations(implementations, 2)", code)
+        self.assertNotIn("EXPECTED_IMPLEMENTATION", code)
         self.assertNotIn("duckdb", code.casefold())
+
+    def test_daily_pairwise_notebook_resumes_complete_case_product(self) -> None:
+        code = _code("10-daily-pairwise.ipynb")
+
+        self.assertIn('sample_scope = "all-implementations"', code)
+        self.assertIn("completed_pairwise_dates", code)
+        self.assertIn("pending_dates", code)
+        self.assertIn("replace_existing_output = False", code)
+
+    def test_interactive_global_map_uses_equal_earth(self) -> None:
+        code = _code("31-cellwise-quantile-spread.ipynb")
+
+        self.assertIn("equal_earth_coordinates", code)
+        self.assertIn("go.Scattergl", code)
+        self.assertNotIn("x=longitude", code)
 
     def test_era5_notebooks_use_current_run_contract(self) -> None:
         code = "\n".join(

@@ -16,6 +16,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class DailyPairwiseScriptTests(unittest.TestCase):
+    def test_defaults_use_complete_case_product_and_one_worker(self) -> None:
+        with patch.object(sys, "argv", ["daily_pairwise.py"]):
+            args = MODULE.parse_args()
+
+        self.assertEqual(args.sample_scope, "all-implementations")
+        self.assertEqual(args.workers, 1)
+
     def test_default_output_is_parquet_root(self) -> None:
         for scope in ("pairwise", "all-implementations"):
             with (

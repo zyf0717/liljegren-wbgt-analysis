@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..results import RESULT_SCHEMA_ID
-from .config import IMPLEMENTATION_SET_VERSION, SAMPLE_SCOPES
+from .config import SAMPLE_SCOPES, SampleScope
 from .distributions import ABS_HISTOGRAM_VERSION
 
 
@@ -38,8 +38,9 @@ _TABLE_COLUMNS = {
         "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
     ),
 }
-PAIRWISE_SCHEMA_VERSION = 5
+PAIRWISE_SCHEMA_VERSION = 6
 PAIRWISE_PRODUCT_VERSION = "v1"
+DEFAULT_PAIRWISE_OUTPUT_ROOT = Path("data/pairwise")
 AREA_WEIGHT_RTOL = 1e-10
 AREA_WEIGHT_ATOL = 1e-6
 
@@ -55,7 +56,7 @@ def pairwise_metadata(sample_scope: str) -> dict[str, object]:
         "result_schema_id": RESULT_SCHEMA_ID,
         "quantity_scope": "joint",
         "quantity_set_version": 1,
-        "implementation_set_version": IMPLEMENTATION_SET_VERSION,
+        "implementation_scope": "data-derived",
         "abs_histogram_version": ABS_HISTOGRAM_VERSION,
     }
 
@@ -65,7 +66,7 @@ def initialize_pairwise_output(
 ) -> Path:
     """Validate or explicitly reset one versioned pairwise output scope."""
 
-    root = _pairwise_root(Path(output_root), sample_scope)
+    root = pairwise_product_root(output_root, sample_scope)
     if overwrite and root.exists():
         _validate_reset_target(root)
         shutil.rmtree(root)
@@ -78,7 +79,7 @@ def completed_pairwise_dates(
 ) -> frozenset[date]:
     """Return dates whose atomic partition manifest and tables are complete."""
 
-    dates_root = _pairwise_root(Path(output_root), sample_scope) / "dates"
+    dates_root = pairwise_product_root(output_root, sample_scope) / "dates"
     if not dates_root.is_dir():
         return frozenset()
     expected_files = {f"{name}.parquet" for name in _TABLE_COLUMNS}
@@ -115,7 +116,7 @@ def persist_date_partitions(
     for name, table in tables.items():
         _validate_table(name, table, result_date)
     _validate_cross_table_totals(tables)
-    root = _pairwise_root(output_root, sample_scope)
+    root = pairwise_product_root(output_root, sample_scope)
     _write_metadata(root, sample_scope)
     dates = root / "dates"
     dates.mkdir(parents=True, exist_ok=True)
@@ -209,10 +210,19 @@ def _write_metadata(root: Path, sample_scope: str) -> None:
     _atomic_json(metadata, path)
 
 
-def _pairwise_root(output_root: Path, sample_scope: str) -> Path:
+def pairwise_product_root(
+    output_root: str | Path = DEFAULT_PAIRWISE_OUTPUT_ROOT,
+    sample_scope: SampleScope = "all-implementations",
+) -> Path:
+    """Resolve the versioned root for one pairwise population."""
+
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
-    return output_root.expanduser().resolve() / sample_scope / PAIRWISE_PRODUCT_VERSION
+    return (
+        Path(output_root).expanduser().resolve()
+        / sample_scope
+        / PAIRWISE_PRODUCT_VERSION
+    )
 
 
 def _validate_reset_target(path: Path) -> None:

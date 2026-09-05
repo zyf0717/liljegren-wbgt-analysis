@@ -14,11 +14,12 @@ each selected implementation. Signed differences are
 `implementation_a - implementation_b`, with names ordered lexicographically so
 each unordered pair appears once.
 
-The production Polars plan materializes one wide base relation per date, including
+The production Polars plan builds one wide base relation per date, including
 all three quantities and the ERA5 latitude weight. Pairwise scope uses one
-implementation self-join. Complete-case scope aggregates all 27 values for the
-nine implementations once and expands the 36 fixed pairs only after the 9:1
-reduction. The grouped aggregation then emits:
+implementation self-join. Complete-case scope discovers all schema-valid
+implementations, aggregates their `3n` values once, and expands the
+`n(n−1)/2` pairs only after the `n:1` reduction. The grouped aggregation then
+emits:
 
 - exact unweighted and cell-area-weighted sufficient sums and extrema;
 - a fixed-bin absolute-difference histogram for annual P50/P95/P99;
@@ -32,8 +33,8 @@ never reconstructs observation-level annual differences.
 The runner supports two populations:
 
 - `pairwise`: each pair uses rows valid for those two implementations;
-- `all-implementations`: every pair uses the same rows valid across the fixed
-  canonical nine implementations.
+- `all-implementations`: every pair uses the same rows valid across all
+  implementations discovered in the result product.
 
 Both row- and area-weighted statistics are always produced together.
 
@@ -71,24 +72,21 @@ uv run pytest -q
 
 ## Run the analysis
 
-The default pair-specific run reads the sibling HeatStressBench repository's
+The default complete-case run reads the sibling HeatStressBench repository's
 `.hsb/runs/wbgt-comparison-20260902-150355`
-and writes `data/pairwise/pairwise/v1/dates/<date>/`:
+and resumes `data/pairwise/all-implementations/v1/dates/<date>/`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
-  --end-date 2025-12-31 \
-  --sample-scope pairwise
+  --end-date 2025-12-31
 ```
 
-The paper complete-case cache writes
-`data/pairwise/all-implementations/v1/dates/<date>/`:
+Use pair-specific support explicitly when required:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
-  --sample-scope all-implementations \
-  --force
+  --sample-scope pairwise
 ```
 
 ### Cellwise WBGT temporal quantiles

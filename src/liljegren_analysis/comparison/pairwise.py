@@ -14,12 +14,7 @@ import pyarrow as pa
 
 from ..results import HSBRunResults, RESULT_QUANTITIES, ResultFile
 from .area_weighted import _ERA5_LATITUDE_WEIGHTS
-from .config import (
-    EXPECTED_IMPLEMENTATION_PAIRS,
-    EXPECTED_IMPLEMENTATIONS,
-    SAMPLE_SCOPES,
-    SampleScope,
-)
+from .config import SAMPLE_SCOPES, SampleScope
 from .persistence import persist_date_partitions
 
 
@@ -66,10 +61,10 @@ def compute_daily_pairwise(
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
     started = monotonic()
-    base = _base_results(
+    base, implementations = _base_results(
         result_date,
         runs,
-        require_canonical=sample_scope == "all-implementations",
+        require_common_shards=sample_scope == "all-implementations",
     )
     invalid = (
         base.filter(pl.col("area_weight").is_null())
@@ -80,17 +75,22 @@ def compute_daily_pairwise(
     if invalid.height:
         raise ValueError(f"Invalid ERA5 row_id: {invalid.item(0, 0)}")
     enriched_histogram = _enriched_histogram_summary(
-        _pairwise_values(base, sample_scope)
+        _pairwise_values(base, sample_scope, implementations)
     ).collect(engine="streaming")
     pairwise = _pairwise_summary(enriched_histogram).sort(
         ["quantity", "implementation_a", "implementation_b"]
     )
     if sample_scope == "all-implementations":
-        expected = len(RESULT_QUANTITIES) * EXPECTED_IMPLEMENTATION_PAIRS
+        expected = (
+            len(RESULT_QUANTITIES)
+            * len(implementations)
+            * (len(implementations) - 1)
+            // 2
+        )
         if pairwise.height != expected:
             raise ValueError(
                 f"Expected {expected} implementation pairs for {result_date}, found "
-                f"{pairwise.height}; no complete canonical-implementation population exists"
+                f"{pairwise.height}; no complete implementation population exists"
             )
     histogram = enriched_histogram.select(ABS_HISTOGRAM_COLUMNS).sort(
         ["quantity", "implementation_a", "implementation_b", "abs_bin_id"]
@@ -123,27 +123,22 @@ def persist_daily_pairwise(
 
 
 def _base_results(
-    result_date: date, runs: tuple[Path, ...], *, require_canonical: bool = False
-) -> pl.LazyFrame:
+    result_date: date, runs: tuple[Path, ...], *, require_common_shards: bool = False
+) -> tuple[pl.LazyFrame, tuple[str, ...]]:
     files = _result_files(result_date, runs)
     if not files:
         raise FileNotFoundError(f"No result shards found for {result_date.isoformat()}")
-    if require_canonical:
-        discovered = {item.implementation for item in files}
-        expected = set(EXPECTED_IMPLEMENTATIONS)
-        if discovered != expected:
-            raise ValueError(
-                f"Implementation inventory differs for {result_date}: "
-                f"missing={sorted(expected - discovered)}, "
-                f"unexpected={sorted(discovered - expected)}"
-            )
+    implementations = tuple(sorted({item.implementation for item in files}))
+    if len(implementations) < 2:
+        raise ValueError(f"Fewer than two implementations exist for {result_date}")
+    if require_common_shards:
         scopes = {
             implementation: tuple(
                 sorted(item.run_id for item in files if item.implementation == implementation)
             )
-            for implementation in EXPECTED_IMPLEMENTATIONS
+            for implementation in implementations
         }
-        reference_scopes = scopes[EXPECTED_IMPLEMENTATIONS[0]]
+        reference_scopes = scopes[implementations[0]]
         if not reference_scopes or any(
             implementation_scopes != reference_scopes
             for implementation_scopes in scopes.values()
@@ -166,9 +161,10 @@ def _base_results(
         for item in files
     ]
     weights = pl.from_arrow(_ERA5_LATITUDE_WEIGHTS).lazy()
-    return pl.concat(scans).with_columns(
+    base = pl.concat(scans).with_columns(
         pl.col("row_id").str.slice(12, 7).alias("latitude_code")
     ).join(weights, on="latitude_code", how="left").drop("latitude_code")
+    return base, implementations
 
 
 def _joint_valid(base: pl.LazyFrame) -> pl.LazyFrame:
@@ -180,7 +176,11 @@ def _joint_valid(base: pl.LazyFrame) -> pl.LazyFrame:
     ))
 
 
-def _pairwise_values(base: pl.LazyFrame, scope: SampleScope) -> pl.LazyFrame:
+def _pairwise_values(
+    base: pl.LazyFrame,
+    scope: SampleScope,
+    implementations: tuple[str, ...],
+) -> pl.LazyFrame:
     joint = _joint_valid(base)
     identity = ("result_date", "run_id", "cycle_ordinal", "row_id")
     if scope == "pairwise":
@@ -202,13 +202,13 @@ def _pairwise_values(base: pl.LazyFrame, scope: SampleScope) -> pl.LazyFrame:
         return pl.concat(frames)
 
     by_implementation: dict[str, pl.LazyFrame] = {}
-    for implementation in EXPECTED_IMPLEMENTATIONS:
+    for implementation in implementations:
         grouped = joint.filter(pl.col("implementation") == implementation).group_by(*identity).agg(
             pl.len().alias("_n"), pl.col("area_weight").first().alias("area_weight"),
             *[pl.col(f"{quantity}_c").first().alias(f"{implementation}_{quantity}") for quantity in RESULT_QUANTITIES],
         ).filter(pl.col("_n") == 1).drop("_n")
         by_implementation[implementation] = grouped
-    first, *rest = EXPECTED_IMPLEMENTATIONS
+    first, *rest = implementations
     wide = by_implementation[first]
     for implementation in rest:
         wide = wide.join(
@@ -221,7 +221,7 @@ def _pairwise_values(base: pl.LazyFrame, scope: SampleScope) -> pl.LazyFrame:
             (pl.col(f"{left}_{quantity}") - pl.col(f"{right}_{quantity}")).alias("difference_c"),
         )
         for quantity in RESULT_QUANTITIES
-        for left, right in combinations(EXPECTED_IMPLEMENTATIONS, 2)
+        for left, right in combinations(implementations, 2)
     ])
 
 

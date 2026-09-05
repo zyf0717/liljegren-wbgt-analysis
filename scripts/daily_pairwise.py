@@ -11,6 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from liljegren_analysis import (
+    DEFAULT_PAIRWISE_OUTPUT_ROOT,
     HSBRunResults,
     completed_pairwise_dates,
     compute_daily_pairwise,
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=REPOSITORY / "data" / "pairwise",
+        default=REPOSITORY / DEFAULT_PAIRWISE_OUTPUT_ROOT,
         help="Root directory for versioned Parquet date partitions.",
     )
     parser.add_argument(
@@ -75,17 +76,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample-scope",
         choices=SAMPLE_SCOPES,
-        default="pairwise",
+        default="all-implementations",
         help=(
-            "Valid rows required per pair or across all canonical "
-            "implementations (default: pairwise)."
+            "Valid rows required per pair or across all discovered "
+            "implementations (default: all-implementations)."
         ),
     )
     parser.add_argument(
         "--workers",
         type=_positive_int,
-        default=4,
-        help="Concurrent date workers (default: 4).",
+        default=1,
+        help="Concurrent date workers (default: 1).",
     )
     args = parser.parse_args()
     if args.start_date > args.end_date:
@@ -156,7 +157,7 @@ def run_pipeline() -> int:
     _configure_logging(log_file, logger)
     for run in runs:
         HSBRunResults.from_hsb_run(run)
-    initialize_pairwise_output(
+    product_root = initialize_pairwise_output(
         output_root, args.sample_scope, overwrite=args.force
     )
 
@@ -172,7 +173,7 @@ def run_pipeline() -> int:
         len(pending_days),
         len(days) - len(pending_days),
     )
-    logger.info("Output: %s", output_root)
+    logger.info("Output: %s", product_root)
     logger.info("Log: %s", log_file)
 
     executor = ProcessPoolExecutor(
@@ -197,7 +198,7 @@ def run_pipeline() -> int:
                 "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
                 result_date, worker_pid, compute_seconds, completed, len(pending_days),
             )
-        logger.info("Saved pairwise statistics to %s", output_root)
+        logger.info("Saved pairwise statistics to %s", product_root)
         return 0
     except Exception:
         logger.exception("Pairwise processing failed")
