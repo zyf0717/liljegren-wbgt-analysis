@@ -15,7 +15,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..results import RESULT_SCHEMA_ID
-from .config import SAMPLE_SCOPES, SampleScope
+from .config import (
+    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+    PAIRWISE_IMPLEMENTATION_SET_VERSION,
+    SAMPLE_SCOPES,
+    SampleScope,
+)
 from .distributions import ABS_HISTOGRAM_VERSION
 
 
@@ -38,7 +43,7 @@ _TABLE_COLUMNS = {
         "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
     ),
 }
-PAIRWISE_SCHEMA_VERSION = 6
+PAIRWISE_SCHEMA_VERSION = 7
 PAIRWISE_PRODUCT_VERSION = "v1"
 DEFAULT_PAIRWISE_OUTPUT_ROOT = Path("data/pairwise")
 AREA_WEIGHT_RTOL = 1e-10
@@ -50,15 +55,25 @@ def pairwise_metadata(sample_scope: str) -> dict[str, object]:
 
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
-    return {
+    metadata: dict[str, object] = {
         "schema_version": PAIRWISE_SCHEMA_VERSION,
         "sample_scope": sample_scope,
         "result_schema_id": RESULT_SCHEMA_ID,
         "quantity_scope": "joint",
         "quantity_set_version": 1,
-        "implementation_scope": "data-derived",
         "abs_histogram_version": ABS_HISTOGRAM_VERSION,
     }
+    if sample_scope == "all-implementations":
+        metadata.update(
+            {
+                "implementation_scope": "configured",
+                "implementation_set_version": PAIRWISE_IMPLEMENTATION_SET_VERSION,
+                "implementations": list(DEFAULT_PAIRWISE_IMPLEMENTATIONS),
+            }
+        )
+    else:
+        metadata["implementation_scope"] = "data-derived"
+    return metadata
 
 
 def initialize_pairwise_output(

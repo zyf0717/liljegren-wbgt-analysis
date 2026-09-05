@@ -16,10 +16,9 @@ each unordered pair appears once.
 
 The production Polars plan builds one wide base relation per date, including
 all three quantities and the ERA5 latitude weight. Pairwise scope uses one
-implementation self-join. Complete-case scope discovers all schema-valid
-implementations, aggregates their `3n` values once, and expands the
-`n(n−1)/2` pairs only after the `n:1` reduction. The grouped aggregation then
-emits:
+implementation self-join. Complete-case scope selects the configured six
+implementations, aggregates their 18 values once, and expands the 15 pairs only
+after the 6:1 reduction. The grouped aggregation then emits:
 
 - exact unweighted and cell-area-weighted sufficient sums and extrema;
 - a fixed-bin absolute-difference histogram for annual P50/P95/P99;
@@ -33,8 +32,9 @@ never reconstructs observation-level annual differences.
 The runner supports two populations:
 
 - `pairwise`: each pair uses rows valid for those two implementations;
-- `all-implementations`: every pair uses the same rows valid across all
-  implementations discovered in the result product.
+- `all-implementations`: every pair among `argonne-liljegren-c`, `heatstress`,
+  `kong-huber-pywbgt`, `kwodzicki-pywbgt`, `meteor`, and `thermofeel` uses the
+  same rows valid across all six.
 
 Both row- and area-weighted statistics are always produced together.
 

@@ -3,9 +3,9 @@
 `compute_daily_pairwise()` performs one date-scoped Polars lazy scan for WBGT,
 Tg, and Tnwb. A materialized base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
-one self-join and expands quantities afterward. Complete-case scope discovers
-the schema-valid implementation inventory, aggregates all three quantities in
-one grouped pass, then expands `n(n−1)/2` pairs after the `n:1` reduction.
+one self-join and expands quantities afterward. Complete-case scope selects the
+configured six-implementation inventory, aggregates all three quantities in
+one grouped pass, then expands 15 pairs after the 6:1 reduction.
 `persist_daily_pairwise()` validates and atomically replaces one Parquet date
 directory containing all three summary tables.
 
@@ -14,7 +14,7 @@ directory containing all three summary tables.
 An implementation row is agreement-eligible only when all three statuses are
 `ok` and all three values are non-null. Pairwise scope joins these joint-valid
 rows per implementation pair. Complete-case scope retains only identities
-present exactly once for every discovered implementation. Therefore each pair
+present exactly once for every configured implementation. Therefore each pair
 has identical `n` and `area_weight_sum` across WBGT, Tg, and Tnwb. Coverage
 summaries retain the independent status and value-presence counts for each
 quantity.
@@ -79,7 +79,8 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-`metadata.json` records schema version 6, result-schema ID, sample scope,
-quantity-set version, data-derived implementation scope, and histogram version.
+`metadata.json` records schema version 7, result-schema ID, sample scope,
+quantity-set version, the exact configured implementation cohort, and histogram
+version.
 Each completed date contains three Parquet files and a manifest written last;
 incomplete directories are not valid inputs.

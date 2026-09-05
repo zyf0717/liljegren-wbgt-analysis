@@ -19,7 +19,7 @@ from liljegren_analysis import (
     persist_daily_pairwise,
 )
 from liljegren_analysis.comparison.config import (
-    EXPECTED_IMPLEMENTATIONS,
+    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
 )
 from liljegren_analysis.comparison.pairwise import (
     PAIRWISE_COLUMNS,
@@ -95,10 +95,10 @@ class PairwiseTests(unittest.TestCase):
             self.assertTrue((published / "manifest.json").exists())
             self.assertEqual(pq.read_table(published / "pairwise.parquet").num_rows, 9)
 
-    def test_all_implementations_uses_discovered_complete_support(self) -> None:
+    def test_all_implementations_uses_configured_complete_support(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "hsb"
-            implementations = ("alpha", "beta", "gamma")
+            implementations = DEFAULT_PAIRWISE_IMPLEMENTATIONS
             for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index), float(index + 1)])
             _, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
@@ -106,14 +106,14 @@ class PairwiseTests(unittest.TestCase):
                 summaries.pairwise.num_rows,
                 3 * len(implementations) * (len(implementations) - 1) // 2,
             )
-            _write_results(root, "alpha", [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
+            _write_results(root, implementations[0], [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
             with self.assertRaisesRegex(ValueError, "no complete"):
                 compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
 
-    def test_all_implementations_includes_every_schema_valid_target(self) -> None:
+    def test_all_implementations_excludes_unconfigured_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "hsb"
-            implementations = ("alpha", "beta", "gamma", "delta")
+            implementations = (*DEFAULT_PAIRWISE_IMPLEMENTATIONS, "extra")
             for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index)])
             _, summaries, _, _ = compute_daily_pairwise(
@@ -121,8 +121,27 @@ class PairwiseTests(unittest.TestCase):
             )
             self.assertEqual(
                 summaries.pairwise.num_rows,
-                3 * len(implementations) * (len(implementations) - 1) // 2,
+                3
+                * len(DEFAULT_PAIRWISE_IMPLEMENTATIONS)
+                * (len(DEFAULT_PAIRWISE_IMPLEMENTATIONS) - 1)
+                // 2,
             )
+            compared = {
+                value
+                for column in ("implementation_a", "implementation_b")
+                for value in summaries.pairwise[column].to_pylist()
+            }
+            self.assertEqual(compared, set(DEFAULT_PAIRWISE_IMPLEMENTATIONS))
+
+    def test_all_implementations_requires_every_configured_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "hsb"
+            for implementation in DEFAULT_PAIRWISE_IMPLEMENTATIONS[:-1]:
+                _write_results(root, implementation, [1.0])
+            with self.assertRaisesRegex(ValueError, "implementations are missing"):
+                compute_daily_pairwise(
+                    date(2025, 1, 1), (root,), "all-implementations"
+                )
 
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -142,6 +161,10 @@ class PairwiseTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((initialized / "metadata.json").read_text()),
                 pairwise_metadata("all-implementations"),
+            )
+            self.assertEqual(
+                pairwise_metadata("all-implementations")["implementations"],
+                list(DEFAULT_PAIRWISE_IMPLEMENTATIONS),
             )
 
     def test_completed_dates_require_manifest_and_all_tables(self) -> None:
@@ -170,7 +193,7 @@ class PairwiseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             hsb = root / "hsb"
-            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+            for index, implementation in enumerate(DEFAULT_PAIRWISE_IMPLEMENTATIONS):
                 _write_results(hsb, implementation, [float(index)])
             result_date, summaries, _, _ = compute_daily_pairwise(
                 date(2025, 1, 1), (hsb,), "all-implementations"

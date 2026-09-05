@@ -7,6 +7,15 @@ from typing import Literal
 
 SampleScope = Literal["pairwise", "all-implementations"]
 SAMPLE_SCOPES: tuple[SampleScope, ...] = ("pairwise", "all-implementations")
+DEFAULT_PAIRWISE_IMPLEMENTATIONS = (
+    "argonne-liljegren-c",
+    "heatstress",
+    "kong-huber-pywbgt",
+    "kwodzicki-pywbgt",
+    "meteor",
+    "thermofeel",
+)
+PAIRWISE_IMPLEMENTATION_SET_VERSION = 1
 IMPLEMENTATION_SET_VERSION = 2
 EXPECTED_IMPLEMENTATIONS = (
     "argonne-liljegren-c",
