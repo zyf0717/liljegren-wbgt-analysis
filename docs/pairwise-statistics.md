@@ -1,13 +1,13 @@
 # Single-pass daily-to-annual pairwise statistics
 
-`compute_daily_pairwise()` performs one date-scoped wide scan for WBGT, Tg, and
-Tnwb. A materialized base relation joins ERA5 latitude weights before any
+`compute_daily_pairwise()` performs one date-scoped Polars lazy scan for WBGT,
+Tg, and Tnwb. A materialized base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
 one self-join and expands quantities afterward. Complete-case scope aggregates
 all seven implementations and all three quantities in one grouped pass, then
 expands the 21 fixed pairs and three quantities after the 7:1 reduction.
-`persist_daily_pairwise()` validates and replaces all daily partitions in one
-transaction.
+`persist_daily_pairwise()` validates and atomically replaces one Parquet date
+directory containing all three summary tables.
 
 ## Population selection
 
@@ -23,7 +23,7 @@ independent status and value-presence counts for each quantity.
 Input roots are enumerated by `(run_id, implementation)` before scanning.
 Overlapping scopes are rejected to prevent many-to-many joins.
 
-## v5 daily tables
+## v1 Parquet date tables
 
 `daily_pairwise`, keyed by date, quantity, and implementation pair, contains
 authoritative sufficient statistics:
@@ -35,8 +35,8 @@ authoritative sufficient statistics:
 - exact count and area mass above absolute-difference thresholds 0.1, 0.2,
   and 0.5 °C.
 
-Floating sums use DuckDB's compensated `fsum`. Daily derived means, variances,
-and scalar quantiles are intentionally absent.
+Floating sums use Polars reductions. Daily derived means, variances, and scalar
+quantiles are intentionally absent.
 
 `daily_pairwise_abs_histogram` stores non-empty fixed bins keyed by quantity,
 with count and area mass. Bounds are lower-inclusive and upper-exclusive:
@@ -79,7 +79,6 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-Schema metadata records version 5, result-schema ID, `quantity_scope=joint`,
-quantity-set version 1, sample scope, canonical implementation-set version, and
-histogram version. Old databases are rejected; v4 data is never migrated or
-mixed with v5 partitions.
+`metadata.json` records schema version 1, result-schema ID, sample scope, and
+histogram version. Each completed date contains three Parquet files and a
+manifest written last; incomplete directories are not valid inputs.

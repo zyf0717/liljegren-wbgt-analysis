@@ -39,6 +39,7 @@ from .results import (
     RESULT_QUANTITY_SPECS,
     RESULT_SCHEMA_ID,
     HSBRunResults,
+    ResultFile,
     ResultQuantity,
     ResultQuantitySpec,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "RESULT_QUANTITY_SPECS",
     "RESULT_SCHEMA_ID",
     "ResultQuantity",
+    "ResultFile",
     "ResultQuantitySpec",
     "NasaPowerClassificationAnalysis",
     "analyze_era5_country_cache",

@@ -71,7 +71,7 @@ class CellwiseShardMergeTests(unittest.TestCase):
             _write_day(hsb_run, "2025-01-02", [21.0, 31.0])
             original_scan = cellwise_pipeline._scan_valid_day
 
-            def fail_second_day(*args: object, **kwargs: object) -> tuple[object, object]:
+            def fail_second_day(*args: object, **kwargs: object) -> int:
                 if args[1].isoformat() == "2025-01-02":
                     raise RuntimeError("simulated scan interruption")
                 return original_scan(*args, **kwargs)  # type: ignore[arg-type]
@@ -87,7 +87,7 @@ class CellwiseShardMergeTests(unittest.TestCase):
                         end_date="2025-01-02",
                         output_root=output,
                     )
-            self.assertTrue((output / ".work" / "example.progress.json").exists())
+            self.assertFalse((output / ".work" / "example.progress.json").exists())
             output_path = compute_cellwise_wbgt_quantiles(
                 hsb_run,
                 implementation="example",

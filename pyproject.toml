@@ -9,9 +9,9 @@ description = "Analysis and comparison of Liljegren WBGT implementations"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "duckdb",
     "numpy",
     "pandas",
+    "polars>=1.44.1",
     "pyarrow",
     "rasterio",
     "shapely>=2.1,<3",
@@ -20,6 +20,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ipykernel",
+    "ipywidgets>=8.1.9",
     "jupyterlab",
     "matplotlib",
     "openpyxl",

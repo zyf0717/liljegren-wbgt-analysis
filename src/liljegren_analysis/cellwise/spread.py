@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
-from ..comparison.sql import EXPECTED_IMPLEMENTATIONS
+from ..comparison.config import EXPECTED_IMPLEMENTATIONS
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 

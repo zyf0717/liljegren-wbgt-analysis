@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
-from ..comparison.sql import EXPECTED_IMPLEMENTATIONS
+from ..comparison.config import EXPECTED_IMPLEMENTATIONS
 
 
 ISO7243_SCHEMA_VERSION = 1

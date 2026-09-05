@@ -17,7 +17,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
-from ..comparison.sql import EXPECTED_IMPLEMENTATIONS
+from ..comparison.config import EXPECTED_IMPLEMENTATIONS
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS
 from .grid import CellGrid, grid_from_source_cell_ids
 from .pipeline import (

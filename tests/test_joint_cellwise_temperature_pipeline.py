@@ -15,7 +15,7 @@ from liljegren_analysis.cellwise import (
     joint_pipeline,
 )
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
-from liljegren_analysis.comparison.sql import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 
 _CELLS = (
     "era5-global-n000000-e0000000",

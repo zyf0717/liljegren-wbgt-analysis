@@ -14,7 +14,7 @@ from liljegren_analysis.cellwise.non_consensus import (
 from liljegren_analysis.cellwise.non_consensus_plots import (
     plot_cellwise_iso7243_non_consensus,
 )
-from liljegren_analysis.comparison.sql import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 
 
 _CELLS = ("era5-global-n000000-e0000000", "era5-global-n002500-e0000000")

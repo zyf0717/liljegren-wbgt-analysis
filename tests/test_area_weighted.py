@@ -6,7 +6,6 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -85,11 +84,7 @@ class AreaWeightedTests(unittest.TestCase):
             right = [1.0, 1.0, 3.0, 4.0]
             _write(root, "alpha", row_ids, left)
             _write(root, "beta", row_ids, right)
-            _, summaries, _, _ = compute_daily_pairwise(
-                date(2025, 1, 1),
-                (root,),
-                1,
-            )
+            _, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,))
 
         row = next(
             item
@@ -118,8 +113,8 @@ class AreaWeightedTests(unittest.TestCase):
             root = Path(temporary_directory)
             _write(root, "alpha", ["row-1"], [2.0])
             _write(root, "beta", ["row-1"], [1.0])
-            with self.assertRaisesRegex(duckdb.Error, "Invalid ERA5 row_id"):
-                compute_daily_pairwise(date(2025, 1, 1), (root,), 1)
+            with self.assertRaisesRegex(ValueError, "Invalid ERA5 row_id"):
+                compute_daily_pairwise(date(2025, 1, 1), (root,))
 
 
 if __name__ == "__main__":

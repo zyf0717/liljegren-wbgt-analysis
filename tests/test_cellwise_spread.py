@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 
 from liljegren_analysis.cellwise.grid import grid_from_source_cell_ids
 from liljegren_analysis.cellwise.spread import analyze_cellwise_quantile_spread
-from liljegren_analysis.comparison.sql import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 
 
 class CellwiseQuantileSpreadTests(unittest.TestCase):

@@ -5,21 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from time import monotonic
 
-import duckdb
 import numpy as np
 import pyarrow as pa
 
+from ..comparison.config import EXPECTED_IMPLEMENTATIONS
 from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
-from ..comparison.sql import EXPECTED_IMPLEMENTATIONS
+from ..io.results import iter_result_batches
 from ..results import (
     RESULT_QUANTITIES,
     RESULT_QUANTITY_SPECS,
@@ -27,7 +26,7 @@ from ..results import (
     HSBRunResults,
     ResultQuantity,
 )
-from .accumulator import InMemoryCellwiseHistogramAccumulator, counter_dtype
+from .accumulator import CellwiseHistogramAccumulator, counter_dtype
 from .grid import CellGrid, load_grid
 from .pipeline import (
     DEFAULT_PROBABILITIES,
@@ -47,7 +46,6 @@ JOINT_CELLWISE_SCHEMA_VERSION = 2
 JOINT_SUPPORT_SCOPE = "all-implementations-all-quantities"
 HOURS_PER_DAY = 24
 REPLAY_STRATEGY = "implementation-all-quantities-in-memory-v3"
-_MEMORY_LIMIT = re.compile(r"^[1-9][0-9]*(?:MB|GB|TB)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -71,8 +69,6 @@ def compute_joint_cellwise_temperature_quantiles(
     end_date: str | date,
     output_root: str | Path = Path("data/cellwise_temperature_quantiles"),
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
-    threads: int = 1,
-    memory_limit: str = "16GB",
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
     exact_validation_seed: int = 0,
@@ -87,12 +83,11 @@ def compute_joint_cellwise_temperature_quantiles(
 
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
-    _validate_options(threads, memory_limit, probabilities, exact_validation_cells)
+    _validate_options(probabilities, exact_validation_cells)
     root = Path(output_root).expanduser().resolve()
     work = root / ".work"
     mask_directory = work / "joint_mask"
-    duckdb_directory = work / "duckdb"
-    for directory in (root, work, mask_directory, duckdb_directory):
+    for directory in (root, work, mask_directory):
         directory.mkdir(parents=True, exist_ok=True)
 
     input_files = tuple(
@@ -105,9 +100,7 @@ def compute_joint_cellwise_temperature_quantiles(
     grid = (
         load_grid(grid_path)
         if grid_path.exists()
-        else _build_grid(
-            hsb_runs, dates[0], EXPECTED_IMPLEMENTATIONS[0], threads
-        )
+        else _build_grid(hsb_runs, dates[0], EXPECTED_IMPLEMENTATIONS[0])
     )
     if not grid_path.exists():
         _atomic_parquet(grid.table, grid_path)
@@ -145,9 +138,6 @@ def compute_joint_cellwise_temperature_quantiles(
             hsb_runs,
             current_date,
             grid,
-            threads,
-            memory_limit,
-            duckdb_directory,
         )
         _atomic_mask(mask, mask_path)
         masks_generated += 1
@@ -173,9 +163,7 @@ def compute_joint_cellwise_temperature_quantiles(
                 histogram_spec=histogram_spec,
                 probabilities=probabilities,
                 dtype=dtype,
-                threads=threads,
-                memory_limit=memory_limit,
-                duckdb_directory=duckdb_directory,
+                work=work,
                 sample_cells=sample_cells,
                 sample_seed=exact_validation_seed,
             )
@@ -210,15 +198,8 @@ def compute_joint_cellwise_temperature_quantiles(
 
 
 def _validate_options(
-    threads: int,
-    memory_limit: str,
-    probabilities: tuple[float, ...],
-    exact_validation_cells: int,
+    probabilities: tuple[float, ...], exact_validation_cells: int
 ) -> None:
-    if threads < 1:
-        raise ValueError("threads must be positive")
-    if not _MEMORY_LIMIT.fullmatch(memory_limit):
-        raise ValueError("memory_limit must look like '16GB'")
     if probabilities != tuple(sorted(set(probabilities))):
         raise ValueError("probabilities must be unique and ascending")
     if any(probability <= 0.0 or probability > 1.0 for probability in probabilities):
@@ -298,131 +279,141 @@ def _discard_legacy_replay_files(work: Path) -> None:
     shutil.rmtree(work / "partials", ignore_errors=True)
 
 
-def _combined_results(
-    hsb_runs: tuple[Path, ...],
-    current_date: date,
-    connection: duckdb.DuckDBPyConnection,
-    *,
-    implementations: Sequence[str],
-    quantities: Sequence[ResultQuantity],
-) -> duckdb.DuckDBPyRelation:
-    relations = [
-        HSBRunResults.from_hsb_run(hsb_run, connection=connection).scan(
-            result_date=current_date,
-            implementations=implementations,
-            quantities=quantities,
-        )
+def _day_files(
+    hsb_runs: tuple[Path, ...], current_date: date, implementation: str
+):
+    files = tuple(
+        item
         for hsb_run in hsb_runs
-    ]
-    combined = relations[0]
-    for relation in relations[1:]:
-        combined = combined.union(relation)
-    return combined
+        for item in HSBRunResults.from_hsb_run(hsb_run).files(
+            result_date=current_date, implementation=implementation
+        )
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No {implementation} result shards found for {current_date.isoformat()}"
+        )
+    return files
 
 
-def _configure_connection(
-    connection: duckdb.DuckDBPyConnection,
-    threads: int,
-    memory_limit: str,
-    temp_directory: Path,
-) -> None:
-    connection.execute(f"SET threads = {threads}")
-    connection.execute(f"SET memory_limit = '{memory_limit.upper()}'")
-    escaped = temp_directory.as_posix().replace("'", "''")
-    connection.execute(f"SET temp_directory = '{escaped}'")
-    connection.execute("SET preserve_insertion_order = false")
+def _grid_lookup(grid: CellGrid) -> dict[str, int]:
+    return dict(
+        zip(
+            grid.lookup_table["source_cell_id"].to_pylist(),
+            grid.lookup_table["cell_id"].to_pylist(),
+            strict=True,
+        )
+    )
+
+
+def _identity_batch(
+    batch: pa.RecordBatch,
+    *,
+    lookup: dict[str, int],
+    current_date: date,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    run_ids = batch.column(0).to_pylist()
+    cycles = np.asarray(batch.column(1).to_pylist(), dtype=np.uint32)
+    row_ids = batch.column(2).to_pylist()
+    ordinals = np.asarray(batch.column(3).to_pylist(), dtype=np.uint32)
+    date_token = current_date.strftime("%Y%m%d")
+    cells: list[int] = []
+    hours: list[int] = []
+    for row_id in row_ids:
+        if (
+            row_id is None
+            or len(row_id) != 39
+            or row_id[28] != "-"
+            or row_id[29:37] != date_token
+            or not row_id[-2:].isdigit()
+            or int(row_id[-2:]) > 23
+            or (cell := lookup.get(row_id[:28])) is None
+        ):
+            raise ValueError(f"Malformed or unknown result identity on {current_date}")
+        cells.append(cell)
+        hours.append(int(row_id[-2:]))
+    return (
+        np.asarray(cells, dtype=np.int64),
+        np.asarray(hours, dtype=np.int64),
+        np.asarray(run_ids, dtype=object),
+        cycles,
+        ordinals,
+    )
 
 
 def _scan_joint_day_mask(
-    hsb_runs: tuple[Path, ...],
-    current_date: date,
-    grid: CellGrid,
-    threads: int,
-    memory_limit: str,
-    temp_directory: Path,
+    hsb_runs: tuple[Path, ...], current_date: date, grid: CellGrid
 ) -> np.ndarray:
-    valid = " AND ".join(
-        f"{spec.status_column} = 'ok' AND {spec.value_column} IS NOT NULL "
-        f"AND isfinite({spec.value_column})"
-        for spec in RESULT_QUANTITY_SPECS.values()
-    )
-    date_token = current_date.strftime("%Y%m%d")
-    with duckdb.connect() as connection:
-        _configure_connection(connection, threads, memory_limit, temp_directory)
-        connection.register("_cellwise_grid", grid.lookup_table)
-        results = _combined_results(
-            hsb_runs,
-            current_date,
-            connection,
-            implementations=EXPECTED_IMPLEMENTATIONS,
-            quantities=RESULT_QUANTITIES,
-        )
-        table = results.query(
-            "results",
-            f"""
-            WITH keyed AS (
-                SELECT
-                    grid.cell_id,
-                    try_cast(right(results.row_id, 2) AS UTINYINT) AS hour,
-                    results.implementation,
-                    results.run_id,
-                    results.cycle_ordinal,
-                    results.row_id,
-                    results.row_ordinal,
-                    grid.cell_id IS NOT NULL
-                      AND length(results.row_id) = 39
-                      AND substring(results.row_id, 29, 1) = '-'
-                      AND substring(results.row_id, 30, 8) = '{date_token}'
-                      AND try_cast(right(results.row_id, 2) AS INTEGER) BETWEEN 0 AND 23
-                        AS identity_valid,
-                    coalesce(({valid}), false) AS row_valid
-                FROM results
-                LEFT JOIN _cellwise_grid AS grid
-                  ON substring(results.row_id, 1, 28) = grid.source_cell_id
-            )
-            SELECT
-                cell_id,
-                hour,
-                count(*)::UTINYINT AS n_rows,
-                count(DISTINCT implementation)::UTINYINT AS n_implementations,
-                count(DISTINCT run_id)::UTINYINT AS n_runs,
-                count(DISTINCT cycle_ordinal)::UTINYINT AS n_cycles,
-                count(DISTINCT row_id)::UTINYINT AS n_row_ids,
-                count(DISTINCT row_ordinal)::UTINYINT AS n_row_ordinals,
-                bool_and(identity_valid) AS identity_valid,
-                bool_and(row_valid) AS all_values_valid
-            FROM keyed
-            GROUP BY cell_id, hour
-            """,
-        ).arrow().read_all()
+    """Build a common-support mask with disk-backed identity state.
 
-    cells = table["cell_id"].combine_chunks().to_numpy(zero_copy_only=False)
-    hours = table["hour"].combine_chunks().to_numpy(zero_copy_only=False)
-    identity_valid = table["identity_valid"].to_numpy(zero_copy_only=False)
-    n_rows = table["n_rows"].to_numpy(zero_copy_only=False)
-    n_implementations = table["n_implementations"].to_numpy(zero_copy_only=False)
-    singular = np.ones(len(table), dtype=bool)
-    for column in ("n_runs", "n_cycles", "n_row_ids", "n_row_ordinals"):
-        singular &= table[column].to_numpy(zero_copy_only=False) == 1
-    if table["cell_id"].null_count or table["hour"].null_count or not identity_valid.all():
-        raise ValueError(f"Malformed or unknown result identity on {current_date}")
-    if np.any(n_rows != n_implementations) or not singular.all():
-        raise ValueError(f"Duplicate or inconsistent result identity on {current_date}")
-    cells = np.asarray(cells, dtype=np.int64)
-    hours = np.asarray(hours, dtype=np.int64)
-    if len(np.unique(cells)) != grid.cell_count:
-        raise ValueError(f"Cell identity coverage mismatch on {current_date}")
-    flat = cells * HOURS_PER_DAY + hours
-    if len(np.unique(flat)) != len(flat):
-        raise ValueError(f"Duplicate cell/hour identity on {current_date}")
-    complete = (
-        (n_rows == len(EXPECTED_IMPLEMENTATIONS))
-        & (n_implementations == len(EXPECTED_IMPLEMENTATIONS))
-        & table["all_values_valid"].to_numpy(zero_copy_only=False)
-    )
-    mask = np.zeros(grid.cell_count * HOURS_PER_DAY, dtype=bool)
-    mask[flat[complete]] = True
-    return mask
+    The fixed grid/hour index bounds memory: one implementation is scanned in
+    Arrow batches while identity and validity arrays are held as temporary
+    memmaps, never as observation-scale Python objects.
+    """
+
+    size = grid.cell_count * HOURS_PER_DAY
+    lookup = _grid_lookup(grid)
+    run_codes: dict[str, int] = {}
+    with tempfile.TemporaryDirectory(prefix="joint-mask-") as temporary:
+        root = Path(temporary)
+        seen_count = np.memmap(root / "seen.u1", dtype=np.uint8, mode="w+", shape=size)
+        all_valid = np.memmap(root / "valid.u1", dtype=np.uint8, mode="w+", shape=size)
+        ref_run = np.memmap(root / "run.u4", dtype=np.uint32, mode="w+", shape=size)
+        ref_cycle = np.memmap(root / "cycle.u4", dtype=np.uint32, mode="w+", shape=size)
+        ref_ordinal = np.memmap(root / "ordinal.u4", dtype=np.uint32, mode="w+", shape=size)
+        seen_count[:] = 0
+        all_valid[:] = 1
+        for implementation in EXPECTED_IMPLEMENTATIONS:
+            implementation_seen = np.memmap(
+                root / f"{implementation}.seen.u1", dtype=np.uint8, mode="w+", shape=size
+            )
+            implementation_seen[:] = 0
+            columns = (
+                "cycle_ordinal", "row_id", "row_ordinal",
+                "wbgt_status", "wbgt_c", "tg_status", "tg_c", "tnwb_status", "tnwb_c",
+            )
+            for item in _day_files(hsb_runs, current_date, implementation):
+                for batch in iter_result_batches((item,), columns):
+                    annotated = pa.RecordBatch.from_arrays(
+                        [pa.array([item.run_id] * batch.num_rows), *batch.columns],
+                        names=("run_id", *columns),
+                    )
+                    cells, hours, runs, cycles, ordinals = _identity_batch(
+                        annotated, lookup=lookup, current_date=current_date
+                    )
+                    flat = cells * HOURS_PER_DAY + hours
+                    if len(np.unique(flat)) != len(flat) or implementation_seen[flat].any():
+                        raise ValueError(f"Duplicate or inconsistent result identity on {current_date}")
+                    implementation_seen[flat] = 1
+                    encoded_runs = np.asarray(
+                        [run_codes.setdefault(run, len(run_codes) + 1) for run in runs], dtype=np.uint32
+                    )
+                    first = seen_count[flat] == 0
+                    if np.any(~first) and (
+                        np.any(ref_run[flat[~first]] != encoded_runs[~first])
+                        or np.any(ref_cycle[flat[~first]] != cycles[~first])
+                        or np.any(ref_ordinal[flat[~first]] != ordinals[~first])
+                    ):
+                        raise ValueError(f"Duplicate or inconsistent result identity on {current_date}")
+                    ref_run[flat[first]] = encoded_runs[first]
+                    ref_cycle[flat[first]] = cycles[first]
+                    ref_ordinal[flat[first]] = ordinals[first]
+                    statuses = [batch.column(index).to_pylist() for index in (3, 5, 7)]
+                    values = [np.asarray(batch.column(index).to_pylist(), dtype=np.float64) for index in (4, 6, 8)]
+                    valid = np.logical_and.reduce([
+                        (np.asarray(status, dtype=object) == "ok") & np.isfinite(value)
+                        for status, value in zip(statuses, values, strict=True)
+                    ])
+                    all_valid[flat] &= valid
+                    seen_count[flat] += 1
+            implementation_seen.flush()
+            del implementation_seen
+        if not np.all(np.any(seen_count.reshape(grid.cell_count, HOURS_PER_DAY), axis=1)):
+            raise ValueError(f"Cell identity coverage mismatch on {current_date}")
+        mask = np.asarray((seen_count == len(EXPECTED_IMPLEMENTATIONS)) & (all_valid != 0), dtype=bool)
+        for array in (seen_count, all_valid, ref_run, ref_cycle, ref_ordinal):
+            array.flush()
+        return mask
 
 
 def _mask_path(directory: Path, current_date: date) -> Path:
@@ -483,77 +474,50 @@ def _scan_native_valid_day(
     current_date: date,
     implementation: str,
     grid: CellGrid,
-    threads: int,
-    memory_limit: str,
-    temp_directory: Path,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    dict[ResultQuantity, np.ndarray],
-    dict[ResultQuantity, np.ndarray],
+) -> Iterator[
+    tuple[
+        np.ndarray,
+        np.ndarray,
+        dict[ResultQuantity, np.ndarray],
+        dict[ResultQuantity, np.ndarray],
+    ]
 ]:
-    validity = {
-        quantity: (
-            f"results.{spec.status_column} = 'ok' "
-            f"AND results.{spec.value_column} IS NOT NULL "
-            f"AND isfinite(results.{spec.value_column})"
-        )
-        for quantity, spec in RESULT_QUANTITY_SPECS.items()
-    }
-    quantity_columns = ",\n                ".join(
-        f"coalesce(({validity[quantity]}), false) AS {quantity}_valid, "
-        f"results.{RESULT_QUANTITY_SPECS[quantity].value_column} AS {quantity}_c"
-        for quantity in RESULT_QUANTITIES
+    """Return bounded Arrow-derived batches containing any native-valid row."""
+
+    lookup = _grid_lookup(grid)
+    columns = (
+        "cycle_ordinal", "row_id", "row_ordinal",
+        "wbgt_status", "wbgt_c", "tg_status", "tg_c", "tnwb_status", "tnwb_c",
     )
-    any_valid = " OR ".join(f"({validity[quantity]})" for quantity in RESULT_QUANTITIES)
-    with duckdb.connect() as connection:
-        _configure_connection(connection, threads, memory_limit, temp_directory)
-        connection.register("_cellwise_grid", grid.lookup_table)
-        results = _combined_results(
-            hsb_runs,
-            current_date,
-            connection,
-            implementations=(implementation,),
-            quantities=RESULT_QUANTITIES,
-        )
-        table = results.query(
-            "results",
-            f"""
-            SELECT
-                grid.cell_id,
-                try_cast(right(results.row_id, 2) AS UTINYINT) AS hour,
-                {quantity_columns}
-            FROM results
-            INNER JOIN _cellwise_grid AS grid
-              ON substring(results.row_id, 1, 28) = grid.source_cell_id
-            WHERE {any_valid}
-            """,
-        ).arrow().read_all()
-    cells = np.asarray(
-        table["cell_id"].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.int64,
-    )
-    hours = np.asarray(
-        table["hour"].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.int64,
-    )
-    values = {
-        quantity: np.asarray(
-            table[f"{quantity}_c"].combine_chunks().to_numpy(zero_copy_only=False),
-            dtype=np.float64,
-        )
-        for quantity in RESULT_QUANTITIES
-    }
-    valid = {
-        quantity: np.asarray(
-            table[f"{quantity}_valid"]
-            .combine_chunks()
-            .to_numpy(zero_copy_only=False),
-            dtype=bool,
-        )
-        for quantity in RESULT_QUANTITIES
-    }
-    return cells, hours, values, valid
+    for item in _day_files(hsb_runs, current_date, implementation):
+        for batch in iter_result_batches((item,), columns):
+            annotated = pa.RecordBatch.from_arrays(
+                [pa.array([item.run_id] * batch.num_rows), *batch.columns],
+                names=("run_id", *columns),
+            )
+            cells, hours, _, _, _ = _identity_batch(
+                annotated, lookup=lookup, current_date=current_date
+            )
+            values = {
+                quantity: np.asarray(
+                    batch.column(4 + index * 2).to_pylist(), dtype=np.float64
+                )
+                for index, quantity in enumerate(RESULT_QUANTITIES)
+            }
+            valid = {
+                quantity: (
+                    np.asarray(batch.column(3 + index * 2).to_pylist(), dtype=object)
+                    == "ok"
+                ) & np.isfinite(values[quantity])
+                for index, quantity in enumerate(RESULT_QUANTITIES)
+            }
+            any_valid = np.logical_or.reduce(tuple(valid.values()))
+            if any_valid.any():
+                yield (
+                    cells[any_valid], hours[any_valid],
+                    {quantity: values[quantity][any_valid] for quantity in RESULT_QUANTITIES},
+                    {quantity: valid[quantity][any_valid] for quantity in RESULT_QUANTITIES},
+                )
 
 
 def _replay_implementation(
@@ -567,13 +531,11 @@ def _replay_implementation(
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
     dtype: np.dtype[np.unsignedinteger],
-    threads: int,
-    memory_limit: str,
-    duckdb_directory: Path,
+    work: Path,
     sample_cells: np.ndarray,
     sample_seed: int,
 ) -> tuple[dict[ResultQuantity, pa.Table], dict[str, object]]:
-    accumulators: dict[ResultQuantity, InMemoryCellwiseHistogramAccumulator] = {}
+    accumulators: dict[ResultQuantity, CellwiseHistogramAccumulator] = {}
     native_counts = {
         quantity: np.zeros(grid.cell_count, dtype=dtype)
         for quantity in RESULT_QUANTITIES
@@ -587,47 +549,48 @@ def _replay_implementation(
     started = monotonic()
     try:
         for quantity in RESULT_QUANTITIES:
-            accumulators[quantity] = InMemoryCellwiseHistogramAccumulator(
+            accumulators[quantity] = CellwiseHistogramAccumulator(
+                work,
+                f"{implementation}.{quantity}",
                 cell_count=grid.cell_count,
                 histogram_spec=histogram_spec,
                 dtype=dtype,
-            )
+                mode="w+",
+        )
         for current_date in dates:
-            cells, hours, values, native_valid = _scan_native_valid_day(
-                hsb_runs,
-                current_date,
-                implementation,
-                grid,
-                threads,
-                memory_limit,
-                duckdb_directory,
-            )
-            flat = cells * HOURS_PER_DAY + hours
-            if len(np.unique(flat)) != len(flat):
-                raise ValueError(f"Duplicate {implementation} identity on {current_date}")
-            selected = joint_masks.select(current_date, flat)
-            if int(selected.sum()) != joint_masks.selected_count_by_date[current_date]:
+            seen = np.zeros(grid.cell_count * HOURS_PER_DAY, dtype=bool)
+            selected_count = 0
+            for cells, hours, values, native_valid in _scan_native_valid_day(
+                hsb_runs, current_date, implementation, grid
+            ):
+                flat = cells * HOURS_PER_DAY + hours
+                if len(np.unique(flat)) != len(flat) or seen[flat].any():
+                    raise ValueError(f"Duplicate {implementation} identity on {current_date}")
+                seen[flat] = True
+                selected = joint_masks.select(current_date, flat)
+                selected_count += int(selected.sum())
+                joint_cells = cells[selected]
+                sample_positions = sample_index[joint_cells]
+                sampled = sample_positions >= 0
+                for quantity in RESULT_QUANTITIES:
+                    valid = native_valid[quantity]
+                    _increment_counts(native_counts[quantity], cells[valid])
+                    if not valid[selected].all():
+                        raise ValueError(
+                            f"Joint mask selects invalid {implementation}/{quantity} "
+                            f"on {current_date}"
+                        )
+                    joint_values = values[quantity][selected]
+                    accumulators[quantity].update(joint_cells, joint_values)
+                    for position, value in zip(
+                        sample_positions[sampled], joint_values[sampled], strict=True
+                    ):
+                        exact_values[quantity][int(position)].append(float(value))
+                rows_with_any_native_valid += len(cells)
+            if selected_count != joint_masks.selected_count_by_date[current_date]:
                 raise ValueError(
                     f"Joint count reconciliation failed for {implementation} on {current_date}"
                 )
-            joint_cells = cells[selected]
-            sample_positions = sample_index[joint_cells]
-            sampled = sample_positions >= 0
-            for quantity in RESULT_QUANTITIES:
-                valid = native_valid[quantity]
-                _increment_counts(native_counts[quantity], cells[valid])
-                if not valid[selected].all():
-                    raise ValueError(
-                        f"Joint mask selects invalid {implementation}/{quantity} "
-                        f"on {current_date}"
-                    )
-                joint_values = values[quantity][selected]
-                accumulators[quantity].update(joint_cells, joint_values)
-                for position, value in zip(
-                    sample_positions[sampled], joint_values[sampled], strict=True
-                ):
-                    exact_values[quantity][int(position)].append(float(value))
-            rows_with_any_native_valid += len(cells)
         scan_update_elapsed = monotonic() - started
         partials: dict[ResultQuantity, pa.Table] = {}
         quantity_provenance: dict[str, object] = {}
@@ -695,7 +658,7 @@ def _replay_implementation(
                 * len(RESULT_QUANTITIES)
             ),
             "histogram_update_strategy": "sparse_grouped_unique",
-            "histogram_storage": "in-memory-numpy",
+            "histogram_storage": "disk-backed-memmap",
             "quantities": quantity_provenance,
         }
         return partials, provenance

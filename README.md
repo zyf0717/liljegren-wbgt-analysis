@@ -14,7 +14,7 @@ each selected implementation. Signed differences are
 `implementation_a - implementation_b`, with names ordered lexicographically so
 each unordered pair appears once.
 
-The v5 production query materializes one wide base relation per date, including
+The production Polars plan materializes one wide base relation per date, including
 all three quantities and the ERA5 latitude weight. Pairwise scope uses one
 implementation self-join. Complete-case scope aggregates all 21 values for the
 seven implementations once and expands the 21 fixed pairs only after the 7:1
@@ -24,10 +24,10 @@ reduction. The grouped aggregation then emits:
 - a fixed-bin absolute-difference histogram for annual P50/P95/P99;
 - independent per-quantity status and value-presence coverage.
 
-Daily partitions are persisted atomically to one DuckDB cache. Interrupted runs
-are resumable and reruns replace dates idempotently. The annual notebook reads
-only these compact summaries; it never reconstructs observation-level annual
-differences.
+Daily summaries are atomically published as independent Parquet date
+partitions. Interrupted runs leave no complete manifest, and reruns replace a
+date idempotently. The annual notebook reads only these compact summaries; it
+never reconstructs observation-level annual differences.
 
 The runner supports two populations:
 
@@ -43,7 +43,7 @@ Both row- and area-weighted statistics are always produced together.
 - `scripts/` — repeatable headless daily processing.
 - `src/liljegren_analysis/country/` — country boundaries, grid cells, and
   observation extraction.
-- `src/liljegren_analysis/comparison/` — pairwise SQL, persistence,
+- `src/liljegren_analysis/comparison/` — Polars pairwise aggregation, Parquet persistence,
   distributions, weighting, and pooling formulas.
 - `src/liljegren_analysis/results.py` — shared HSB run result scanning.
 - `tests/` — aggregation, persistence, distribution, and pooling regression
@@ -71,9 +71,8 @@ uv run pytest -q
 
 ## Run the analysis
 
-The default pair-specific run reads
-`.hsb/runs/wbgt-comparison-20260823-181813` and writes
-`data/daily_pairwise_v5.duckdb`:
+The default pair-specific run reads `.hsb/runs/wbgt-comparison-20260823-181813`
+and writes `data/pairwise/pairwise/v1/dates/<date>/`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
@@ -83,7 +82,7 @@ uv run python scripts/daily_pairwise.py \
 ```
 
 The paper complete-case cache writes
-`data/daily_pairwise_all_implementations_v5.duckdb`:
+`data/pairwise/all-implementations/v1/dates/<date>/`:
 
 ```bash
 uv run python scripts/daily_pairwise.py \
@@ -129,9 +128,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --hsb-run /path/to/hsb-run \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
-  --output-root data/cellwise_temperature_quantiles/2025-joint-v1 \
-  --threads 8 \
-  --memory-limit 16GB
+  --output-root data/cellwise_temperature_quantiles/2025-joint-v1
 ```
 
 An observation enters any joint histogram only when all 21
@@ -139,16 +136,12 @@ implementation/quantity results have status `ok` and a finite value. Each wide
 `implementations/<implementation>.parquet` contains the shared `n_joint`,
 WBGT/Tg/Tnwb quantiles and bounds, and quantity-specific native-valid counts.
 Daily masks are bit-packed and content-hashed under `.work/joint_mask/` while a
-run is incomplete. Three dense in-memory NumPy histograms exist during replay:
-about 4.93 GB each, or 14.79 GB total, for 351,848 cells, 7,002 bins, and
-annual `uint16` counters. DuckDB is opened and closed for each daily mask or
-implementation replay scan, uses the configurable 16 GB default limit and
-`.work/duckdb/` spill directory, and never retains an accumulating multi-date
-relation. Histograms are discarded after their implementation's final Parquet
-file is written; no histogram work files are persisted. Completed outputs are
-idempotent; compatible masks and finalized implementation files resume after
-interruption, and `.work/` is
-removed after all seven wide files and metadata are committed atomically.
+run is incomplete. Identity state and all three histograms are disk-backed
+memmaps, so memory is bounded by Arrow batches and fixed grid/hour masks rather
+than observation rows. Histograms are discarded after each implementation's
+final Parquet file is written. Completed outputs are idempotent; compatible
+masks and finalized implementation files resume after interruption, and
+`.work/` is removed after all seven wide files and metadata are committed.
 
 ### Global ERA5 population weights
 
@@ -165,9 +158,9 @@ The LandScan 30-arc-second grid aligns exactly with each regular 0.25-degree
 ERA5 cell; the two polar rows use their physically clipped half-height bands.
 Use `--force` to replace an existing output.
 
-Matching log paths are derived automatically. `--database` and `--log-file`
-override the defaults. Each date uses a fresh worker process; the controller is
-the only database writer.
+Matching log paths are derived automatically. `--output-root` and `--log-file`
+override the defaults. Workers compute dates independently; publication is one
+atomic Parquet directory per date.
 
 ### Cellwise upper-tail implementation spread
 
@@ -210,7 +203,7 @@ uv run python scripts/analyze_cellwise_iso7243_classification.py \
 `cell_pair_differences.parquet` stores only `n_higher` and `n_lower`; derive
 `n_changed = n_higher + n_lower` and
 `n_same = n_compared - n_changed` when needed. It is written one implementation
-pair at a time, without DuckDB, a cross join, or materializing the output.
+pair at a time, without a cross join or materializing the output.
 
 ### Cellwise ISO 7243 non-consensus percentage
 
@@ -262,9 +255,9 @@ uv run python scripts/extract_country.py JPN
 
 The v2 output is `data/country/<iso3>/observations.parquet`, accompanied by
 `manifest.json`. It retains all matched rows and all six qualified component
-columns, including failed results. Use `--start-date`, `--end-date`, repeatable
-`--run`, and `--threads` to change extraction scope; existing caches require
-explicit `--force` replacement.
+columns, including failed results. Use `--start-date`, `--end-date`, and
+repeatable `--run` to change extraction scope; existing caches require explicit
+`--force` replacement.
 
 Classify the cached ERA5 country observations with any ordered WBGT threshold
 profile; this step never selects cells or rescans source results:
@@ -309,6 +302,6 @@ required for countries smaller than one ERA5 cell.
 
 ## Method documentation
 
-- [HSB run result scanning and DuckDB relations](docs/results.md)
+- [HSB result discovery and Arrow batches](docs/results.md)
 - [Single-pass pairwise statistics](docs/pairwise-statistics.md)
 - [ERA5 cell-area weighting](docs/area-weighted-statistics.md)

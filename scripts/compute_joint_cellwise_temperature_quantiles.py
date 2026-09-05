@@ -19,8 +19,6 @@ def main() -> None:
         type=Path,
         default=Path("data/cellwise_temperature_quantiles"),
     )
-    parser.add_argument("--threads", type=int, default=1)
-    parser.add_argument("--memory-limit", default="16GB")
     parser.add_argument(
         "--exact-validation-cells",
         type=int,
@@ -33,8 +31,6 @@ def main() -> None:
         start_date=arguments.start_date,
         end_date=arguments.end_date,
         output_root=arguments.output_root,
-        threads=arguments.threads,
-        memory_limit=arguments.memory_limit,
         exact_validation_cells=arguments.exact_validation_cells,
     )
     print(output)

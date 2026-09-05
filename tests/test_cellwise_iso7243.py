@@ -14,7 +14,7 @@ from liljegren_analysis.cellwise.iso7243 import (
     PERCENTILES,
     analyze_cellwise_iso7243_classification,
 )
-from liljegren_analysis.comparison.sql import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 
 
 class CellwiseISO7243Tests(unittest.TestCase):

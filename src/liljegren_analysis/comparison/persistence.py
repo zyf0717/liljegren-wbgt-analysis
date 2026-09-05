@@ -1,321 +1,144 @@
-"""Versioned atomic persistence for daily pairwise summaries."""
+"""Atomic Parquet publication for compact daily pairwise summaries."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import os
+import shutil
+import tempfile
+import uuid
 from datetime import date
+from pathlib import Path
 
-import duckdb
+import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
+
+from ..results import RESULT_SCHEMA_ID
+from .config import SAMPLE_SCOPES
+from .distributions import ABS_HISTOGRAM_VERSION
 
 
-@dataclass(frozen=True)
-class TableSchema:
-    """Describe one persisted daily summary table."""
-
-    table_name: str
-    columns: tuple[tuple[str, str, bool], ...]
-    primary_key: tuple[str, ...]
-
-    @property
-    def column_names(self) -> tuple[str, ...]:
-        return tuple(name for name, _, _ in self.columns)
-
-
-@dataclass(frozen=True)
-class PairwiseDatabaseSchema:
-    """Describe the complete pairwise-cache contract."""
-
-    version: int
-    sample_scope: str
-    result_schema_id: str
-    quantity_scope: str
-    quantity_set_version: int
-    implementation_set_version: int
-    abs_histogram_version: int
-    tables: tuple[TableSchema, ...]
+_TABLE_COLUMNS = {
+    "pairwise": (
+        "result_date", "quantity", "implementation_a", "implementation_b", "n",
+        "sum_difference_c", "sum_squared_difference_c2", "sum_absolute_difference_c",
+        "min_difference_c", "max_difference_c", "max_absolute_difference_c", "area_weight_sum",
+        "area_weighted_difference_sum_c", "area_weighted_squared_difference_sum_c2",
+        "area_weighted_absolute_difference_sum_c", "n_absolute_difference_gt_0_1_c",
+        "n_absolute_difference_gt_0_2_c", "n_absolute_difference_gt_0_5_c",
+        "area_weight_absolute_difference_gt_0_1_c", "area_weight_absolute_difference_gt_0_2_c",
+        "area_weight_absolute_difference_gt_0_5_c",
+    ),
+    "abs_histogram": (
+        "result_date", "quantity", "implementation_a", "implementation_b", "abs_bin_id",
+        "abs_bin_lower_c", "abs_bin_upper_c", "n", "area_weight_sum",
+    ),
+    "quantity_status": (
+        "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
+    ),
+}
 
 
 def persist_date_partitions(
-    connection: duckdb.DuckDBPyConnection,
-    result_date: date,
-    results: dict[str, pa.Table],
-    schema: PairwiseDatabaseSchema,
-) -> None:
-    """Atomically replace one date in every versioned summary table."""
+    output_root: Path, result_date: date, tables: dict[str, pa.Table], sample_scope: str
+) -> Path:
+    """Validate then atomically replace one date directory and its manifest."""
 
-    expected_tables = {table.table_name for table in schema.tables}
-    if set(results) != expected_tables:
-        raise ValueError(
-            "Daily summary tables differ: "
-            f"missing={sorted(expected_tables - set(results))}, "
-            f"extra={sorted(set(results) - expected_tables)}"
-        )
-
-    registrations: list[str] = []
+    if sample_scope not in SAMPLE_SCOPES:
+        raise ValueError(f"Unsupported sample scope: {sample_scope}")
+    if set(tables) != set(_TABLE_COLUMNS):
+        raise ValueError("Daily summary tables differ")
+    for name, table in tables.items():
+        _validate_table(name, table, result_date)
+    _validate_cross_table_totals(tables)
+    root = output_root.expanduser().resolve() / sample_scope / "v1"
+    _write_metadata(root, sample_scope)
+    dates = root / "dates"
+    dates.mkdir(parents=True, exist_ok=True)
+    destination = dates / result_date.isoformat()
+    temporary = Path(tempfile.mkdtemp(prefix=f".{result_date.isoformat()}.", dir=dates))
     try:
-        for table_schema in schema.tables:
-            result = results[table_schema.table_name]
-            _validate_result(result_date, result, table_schema)
-            registration = f"_day_{table_schema.table_name}"
-            connection.register(registration, result)
-            registrations.append(registration)
-
-        _validate_cross_table_totals(connection)
-        connection.execute("BEGIN")
-        try:
-            _ensure_schema(connection, schema)
-            for table_schema in schema.tables:
-                connection.execute(
-                    f"DELETE FROM {table_schema.table_name} "
-                    "WHERE result_date = ?",
-                    [result_date],
-                )
-                columns = ", ".join(table_schema.column_names)
-                connection.execute(
-                    f"""
-                    INSERT INTO {table_schema.table_name} ({columns})
-                    SELECT {columns}
-                    FROM _day_{table_schema.table_name}
-                    """
-                )
-            connection.execute("COMMIT")
-        except Exception:
-            connection.execute("ROLLBACK")
-            raise
+        filenames: list[str] = []
+        for name, table in tables.items():
+            filename = f"{name}.parquet"
+            pq.write_table(table, temporary / filename, compression="zstd")
+            filenames.append(filename)
+        _atomic_json({"result_date": result_date.isoformat(), "files": filenames}, temporary / "manifest.json")
+        backup = dates / f".{result_date.isoformat()}.{uuid.uuid4().hex}.old"
+        if destination.exists():
+            os.replace(destination, backup)
+        os.replace(temporary, destination)
+        shutil.rmtree(backup, ignore_errors=True)
+        return destination
     finally:
-        for registration in registrations:
-            connection.unregister(registration)
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
-def _validate_result(
-    result_date: date,
-    result: pa.Table,
-    schema: TableSchema,
-) -> None:
-    expected = set(schema.column_names)
-    actual = set(result.column_names)
-    if actual != expected or len(result.column_names) != len(expected):
-        raise ValueError(
-            f"{schema.table_name} result schema differs: "
-            f"missing={sorted(expected - actual)}, "
-            f"extra={sorted(actual - expected)}"
-        )
-    if any(value != result_date for value in result["result_date"].to_pylist()):
-        raise ValueError(
-            f"{schema.table_name} contains a date other than {result_date}"
-        )
+def _validate_table(name: str, table: pa.Table, result_date: date) -> None:
+    expected = _TABLE_COLUMNS[name]
+    if tuple(table.column_names) != expected:
+        raise ValueError(f"{name} result schema differs")
+    if any(value != result_date for value in table["result_date"].to_pylist()):
+        raise ValueError(f"{name} contains a date other than {result_date}")
 
 
-def _validate_cross_table_totals(connection: duckdb.DuckDBPyConnection) -> None:
-    invalid = connection.execute(
-        """
-        WITH histogram AS (
-            SELECT
-                quantity,
-                implementation_a,
-                implementation_b,
-                sum(n)::BIGINT AS n,
-                sum(area_weight_sum) AS area_weight_sum
-            FROM _day_daily_pairwise_abs_histogram
-            GROUP BY quantity, implementation_a, implementation_b
-        )
-        SELECT count(*)
-        FROM _day_daily_pairwise AS totals
-        FULL OUTER JOIN histogram
-            USING (quantity, implementation_a, implementation_b)
-        WHERE totals.implementation_a IS NULL
-           OR histogram.implementation_a IS NULL
-           OR totals.n <> histogram.n
-           OR abs(totals.area_weight_sum - histogram.area_weight_sum)
-                > greatest(1e-6, abs(totals.area_weight_sum) * 1e-12)
-        """
-    ).fetchone()[0]
-    if invalid:
-        raise ValueError("Daily histogram totals differ from pairwise totals")
-
-    invalid_joint_support = connection.execute(
-        """
-        SELECT count(*)
-        FROM (
-            SELECT
-                implementation_a,
-                implementation_b,
-                min(n) AS minimum_n,
-                max(n) AS maximum_n,
-                min(area_weight_sum) AS minimum_area_weight_sum,
-                max(area_weight_sum) AS maximum_area_weight_sum
-            FROM _day_daily_pairwise
-            GROUP BY implementation_a, implementation_b
-        )
-        WHERE minimum_n <> maximum_n
-           OR maximum_area_weight_sum - minimum_area_weight_sum
-                > greatest(1e-6, abs(maximum_area_weight_sum) * 1e-12)
-        """
-    ).fetchone()[0]
-    if invalid_joint_support:
-        raise ValueError("Joint quantity populations differ across quantities")
-
-    invalid_status_totals = connection.execute(
-        """
-        WITH totals AS (
-            SELECT
-                quantity,
-                implementation,
-                sum(n)::BIGINT AS n,
-                sum(area_weight_sum) AS area_weight_sum
-            FROM _day_daily_quantity_status
-            GROUP BY quantity, implementation
-        )
-        SELECT count(*)
-        FROM (
-            SELECT
-                implementation,
-                min(n) AS minimum_n,
-                max(n) AS maximum_n,
-                min(area_weight_sum) AS minimum_area_weight_sum,
-                max(area_weight_sum) AS maximum_area_weight_sum
-            FROM totals
-            GROUP BY implementation
-        )
-        WHERE minimum_n <> maximum_n
-           OR maximum_area_weight_sum - minimum_area_weight_sum
-                > greatest(1e-6, abs(maximum_area_weight_sum) * 1e-12)
-        """
-    ).fetchone()[0]
-    if invalid_status_totals:
-        raise ValueError("Quantity status totals differ across quantities")
-
-
-def _ensure_schema(
-    connection: duckdb.DuckDBPyConnection,
-    schema: PairwiseDatabaseSchema,
-) -> None:
-    metadata_exists = _table_exists(connection, "pairwise_schema")
-    table_existence = {
-        table.table_name: _table_exists(connection, table.table_name)
-        for table in schema.tables
+def _validate_cross_table_totals(tables: dict[str, pa.Table]) -> None:
+    totals = {
+        (row["quantity"], row["implementation_a"], row["implementation_b"]): row
+        for row in tables["pairwise"].to_pylist()
     }
-    if not metadata_exists and not any(table_existence.values()):
-        _create_schema(connection, schema)
+    histograms: dict[tuple[str, str, str], tuple[int, float]] = {}
+    for row in tables["abs_histogram"].to_pylist():
+        key = row["quantity"], row["implementation_a"], row["implementation_b"]
+        count, weight = histograms.get(key, (0, 0.0))
+        histograms[key] = count + row["n"], weight + row["area_weight_sum"]
+    if totals.keys() != histograms.keys():
+        raise ValueError("Daily histogram totals differ from pairwise totals")
+    for key, row in totals.items():
+        count, weight = histograms[key]
+        if count != row["n"] or not np.isclose(weight, row["area_weight_sum"], rtol=1e-12, atol=1e-6):
+            raise ValueError("Daily histogram totals differ from pairwise totals")
+    by_pair: dict[tuple[str, str], list[tuple[int, float]]] = {}
+    for row in totals.values():
+        by_pair.setdefault((row["implementation_a"], row["implementation_b"]), []).append((row["n"], row["area_weight_sum"]))
+    if any(len({count for count, _ in rows}) != 1 or not np.allclose([weight for _, weight in rows], rows[0][1], rtol=1e-12, atol=1e-6) for rows in by_pair.values()):
+        raise ValueError("Joint quantity populations differ across quantities")
+    by_implementation: dict[str, list[tuple[int, float]]] = {}
+    for row in tables["quantity_status"].to_pylist():
+        by_implementation.setdefault(row["implementation"], []).append((row["n"], row["area_weight_sum"], row["quantity"]))
+    for rows in by_implementation.values():
+        quantities: dict[str, tuple[int, float]] = {}
+        for count, weight, quantity in rows:
+            old_count, old_weight = quantities.get(quantity, (0, 0.0))
+            quantities[quantity] = old_count + count, old_weight + weight
+        if len({count for count, _ in quantities.values()}) != 1 or not np.allclose([weight for _, weight in quantities.values()], next(iter(quantities.values()))[1], rtol=1e-12, atol=1e-6):
+            raise ValueError("Quantity status totals differ across quantities")
+
+
+def _write_metadata(root: Path, sample_scope: str) -> None:
+    metadata = {
+        "schema_version": 1, "sample_scope": sample_scope,
+        "result_schema_id": RESULT_SCHEMA_ID, "abs_histogram_version": ABS_HISTOGRAM_VERSION,
+    }
+    path = root / "metadata.json"
+    if path.exists():
+        if json.loads(path.read_text()) != metadata:
+            raise ValueError("Incompatible pairwise Parquet metadata")
         return
-    if not metadata_exists or not all(table_existence.values()):
-        raise ValueError(_incompatible_message(schema))
-
-    metadata_columns = _columns(connection, "pairwise_schema")
-    expected_metadata_columns = [
-        ("schema_version", "INTEGER", False),
-        ("sample_scope", "VARCHAR", False),
-        ("result_schema_id", "VARCHAR", False),
-        ("quantity_scope", "VARCHAR", False),
-        ("quantity_set_version", "INTEGER", False),
-        ("implementation_set_version", "INTEGER", False),
-        ("abs_histogram_version", "INTEGER", False),
-    ]
-    if metadata_columns != expected_metadata_columns:
-        raise ValueError(_incompatible_message(schema))
-
-    metadata = connection.execute("SELECT * FROM pairwise_schema").fetchall()
-    expected_metadata = [
-        (
-            schema.version,
-            schema.sample_scope,
-            schema.result_schema_id,
-            schema.quantity_scope,
-            schema.quantity_set_version,
-            schema.implementation_set_version,
-            schema.abs_histogram_version,
-        )
-    ]
-    if metadata != expected_metadata:
-        raise ValueError(_incompatible_message(schema))
-
-    for table in schema.tables:
-        if _columns(connection, table.table_name) != list(table.columns):
-            raise ValueError(_incompatible_message(schema))
+    root.mkdir(parents=True, exist_ok=True)
+    _atomic_json(metadata, path)
 
 
-def _create_schema(
-    connection: duckdb.DuckDBPyConnection,
-    schema: PairwiseDatabaseSchema,
-) -> None:
-    connection.execute(
-        """
-        CREATE TABLE pairwise_schema (
-            schema_version INTEGER NOT NULL,
-            sample_scope VARCHAR NOT NULL,
-            result_schema_id VARCHAR NOT NULL,
-            quantity_scope VARCHAR NOT NULL,
-            quantity_set_version INTEGER NOT NULL,
-            implementation_set_version INTEGER NOT NULL,
-            abs_histogram_version INTEGER NOT NULL
-        )
-        """
-    )
-    connection.execute(
-        "INSERT INTO pairwise_schema VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [
-            schema.version,
-            schema.sample_scope,
-            schema.result_schema_id,
-            schema.quantity_scope,
-            schema.quantity_set_version,
-            schema.implementation_set_version,
-            schema.abs_histogram_version,
-        ],
-    )
-    for table in schema.tables:
-        definitions = [
-            f"{name} {data_type}{'' if nullable else ' NOT NULL'}"
-            for name, data_type, nullable in table.columns
-        ]
-        definitions.append(f"PRIMARY KEY ({', '.join(table.primary_key)})")
-        connection.execute(
-            f"CREATE TABLE {table.table_name} ({', '.join(definitions)})"
-        )
-
-
-def _columns(
-    connection: duckdb.DuckDBPyConnection,
-    table_name: str,
-) -> list[tuple[str, str, bool]]:
-    return connection.execute(
-        """
-        SELECT column_name, data_type, is_nullable = 'YES'
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = ?
-        ORDER BY ordinal_position
-        """,
-        [table_name],
-    ).fetchall()
-
-
-def _table_exists(
-    connection: duckdb.DuckDBPyConnection,
-    table_name: str,
-) -> bool:
-    return bool(
-        connection.execute(
-            """
-            SELECT count(*)
-            FROM information_schema.tables
-            WHERE table_schema = current_schema()
-              AND table_name = ?
-            """,
-            [table_name],
-        ).fetchone()[0]
-    )
-
-
-def _incompatible_message(schema: PairwiseDatabaseSchema) -> str:
-    return (
-        "Incompatible pairwise database schema; expected version "
-        f"{schema.version}, sample_scope={schema.sample_scope}, "
-        f"result_schema_id={schema.result_schema_id}, "
-        f"quantity_scope={schema.quantity_scope}, "
-        f"quantity_set_version={schema.quantity_set_version}, "
-        f"implementation_set_version={schema.implementation_set_version}, "
-        f"and abs_histogram_version={schema.abs_histogram_version}. "
-        "Use a new versioned database path and recompute."
-    )
+def _atomic_json(value: dict[str, object], path: Path) -> None:
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)

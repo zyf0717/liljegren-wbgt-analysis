@@ -7,8 +7,6 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import duckdb
-
 from liljegren_analysis import (
     CountryExtractionProgress,
     extract_countries_observations,
@@ -62,12 +60,6 @@ def parse_args() -> argparse.Namespace:
         help="Local Natural Earth-compatible GeoJSON boundary file.",
     )
     parser.add_argument(
-        "--threads",
-        type=_non_negative_int,
-        default=0,
-        help="DuckDB threads; 0 keeps DuckDB's default (default: 0).",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         help="Atomically replace an existing country cache.",
@@ -80,20 +72,12 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _non_negative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("value must be non-negative")
-    return parsed
-
-
 def run() -> int:
     args = parse_args()
     runs = tuple(args.run) if args.run is not None else DEFAULT_RUNS
     common = {
         "boundaries": args.boundaries,
         "boundary_cache": REPOSITORY / "data" / "boundaries",
-        "threads": args.threads,
         "overwrite": args.force,
         "progress": _print_progress,
     }
@@ -135,16 +119,11 @@ def run() -> int:
 
 
 def _print_progress(progress: CountryExtractionProgress) -> None:
-    percentage = (
-        " unavailable"
-        if progress.duckdb_percentage is None
-        else f" {progress.duckdb_percentage:.1f}%"
-    )
     print(
         f"[{progress.state}] phase={progress.phase} "
         f"elapsed={progress.elapsed_seconds:.1f}s "
-        f"progress={percentage.strip()} "
-        f"files={progress.selected_source_files}/{progress.total_source_files}",
+        f"files={progress.files_completed}/{progress.files_total} "
+        f"rows={progress.rows_selected:,}/{progress.rows_scanned:,}",
         file=sys.stderr,
         flush=True,
     )
@@ -156,7 +135,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("error: interrupted", file=sys.stderr)
         return 130
-    except (OSError, ValueError, duckdb.Error) as error:
+    except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
