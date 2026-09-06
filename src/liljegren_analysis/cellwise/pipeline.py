@@ -259,7 +259,11 @@ def _input_files(
 
 
 def _validate_canonical_run_inventory(
-    hsb_runs: tuple[Path, ...], dates: tuple[date, ...], implementations: tuple[str, ...]
+    hsb_runs: tuple[Path, ...],
+    dates: tuple[date, ...],
+    implementations: tuple[str, ...],
+    *,
+    allow_unexpected: bool = False,
 ) -> None:
     """Validate implementation membership and shard scopes without scanning rows."""
 
@@ -275,11 +279,12 @@ def _validate_canonical_run_inventory(
             )
         )
         discovered = {path.parent.name for _, path in entries}
-        if discovered != expected:
+        missing = expected - discovered
+        unexpected = discovered - expected
+        if missing or (unexpected and not allow_unexpected):
             raise ValueError(
                 f"Implementation inventory differs for {current_date}: "
-                f"missing={sorted(expected - discovered)}, "
-                f"unexpected={sorted(discovered - expected)}"
+                f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
             )
         scopes = {
             implementation: tuple(

@@ -16,8 +16,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
-from ..comparison.config import EXPECTED_IMPLEMENTATIONS, REFERENCE_IMPLEMENTATION
+from ..comparison.config import REFERENCE_IMPLEMENTATION
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
+from .paths import (
+    DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
+    DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+)
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
@@ -46,7 +50,7 @@ class QuantileSpreadOutputs:
 
 
 def analyze_cellwise_quantile_spread(
-    input_root: str | Path,
+    input_root: str | Path = DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
     *,
     output_root: str | Path | None = None,
     quantity: ResultQuantity = "wbgt",
@@ -61,7 +65,7 @@ def analyze_cellwise_quantile_spread(
     target_root = (
         Path(output_root).expanduser().resolve()
         if output_root is not None
-        else source_root.parent / "analysis"
+        else DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT.resolve() / quantity
     )
     if quantity not in RESULT_QUANTITIES:
         raise ValueError(f"Unsupported result quantity: {quantity}")
@@ -70,6 +74,9 @@ def analyze_cellwise_quantile_spread(
     if weighting not in ("none", "geometry", "population"):
         raise ValueError(f"Unsupported weighting: {weighting}")
     source_metadata = _load_source_metadata(source_root)
+    implementations = _metadata_implementations(source_metadata)
+    if REFERENCE_IMPLEMENTATION not in implementations:
+        raise ValueError(f"Reference implementation is absent: {REFERENCE_IMPLEMENTATION}")
     joint_schema = source_metadata.get("schema_version") == 2
     if not joint_schema and quantity != "wbgt":
         raise ValueError("Legacy cellwise products contain WBGT only")
@@ -91,6 +98,7 @@ def analyze_cellwise_quantile_spread(
         maximum_c=maximum_c,
         quantity=quantity,
         joint_schema=joint_schema,
+        implementations=implementations,
     )
     if not common.any():
         raise ValueError("No complete-case cells across all implementations")
@@ -120,12 +128,14 @@ def analyze_cellwise_quantile_spread(
             percentile: source_tables[implementation][percentile][common]
             for percentile in PERCENTILES
         }
-        for implementation in EXPECTED_IMPLEMENTATIONS
+        for implementation in implementations
     }
-    cellwise, metric_values = _cellwise_table(ids, latitudes, longitudes, weights, values)
+    cellwise, metric_values = _cellwise_table(
+        ids, latitudes, longitudes, weights, values, implementations
+    )
     summary = _global_summary(metric_values, weights)
-    c_anchor = _c_anchor_summary(values, weights)
-    extrema = _extrema_frequency(cellwise, weights)
+    c_anchor = _c_anchor_summary(values, weights, implementations)
+    extrema = _extrema_frequency(cellwise, weights, implementations)
 
     target_root.mkdir(parents=True, exist_ok=True)
     figure_directory = target_root / "figures"
@@ -154,7 +164,7 @@ def analyze_cellwise_quantile_spread(
             "quantity": quantity,
             "support_scope": source_metadata.get("support_scope", "implementation-native"),
             "percentiles": list(PERCENTILES),
-            "implementations": list(EXPECTED_IMPLEMENTATIONS),
+            "implementations": list(implementations),
             "complete_case_cell_count": len(ids),
             "canonical_cell_count": len(cell_ids),
             "weighting": weighting,
@@ -191,17 +201,26 @@ def _load_source_metadata(root: Path) -> dict[str, object]:
     if not path.is_file():
         raise FileNotFoundError(f"Missing cellwise metadata: {path}")
     metadata = json.loads(path.read_text())
-    expected = {
-        "probabilities": [0.5, 0.9, 0.95, 0.99],
-        "implementations": list(EXPECTED_IMPLEMENTATIONS),
-    }
-    if any(metadata.get(key) != value for key, value in expected.items()):
-        raise ValueError("Cellwise input metadata is not the required full implementation set")
+    if metadata.get("probabilities") != [0.5, 0.9, 0.95, 0.99]:
+        raise ValueError("Cellwise input metadata lacks the required quantiles")
+    _metadata_implementations(metadata)
     for key in ("histogram_version",):
         if key not in metadata:
             raise ValueError(f"Cellwise input metadata is missing {key}")
     _histogram_bounds(metadata)
     return metadata
+
+
+def _metadata_implementations(metadata: dict[str, object]) -> tuple[str, ...]:
+    values = metadata.get("implementations")
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value for value in values
+    ):
+        raise ValueError("Cellwise input metadata has invalid implementations")
+    implementations = tuple(values)
+    if len(implementations) < 2 or len(set(implementations)) != len(implementations):
+        raise ValueError("Cellwise input metadata requires unique implementations")
+    return implementations
 
 
 def _histogram_bounds(metadata: dict[str, object]) -> tuple[float, float, float]:
@@ -223,6 +242,7 @@ def _load_quantile_tables(
     maximum_c: float,
     quantity: ResultQuantity,
     joint_schema: bool,
+    implementations: tuple[str, ...],
 ) -> tuple[dict[str, dict[str, np.ndarray]], np.ndarray]:
     tables: dict[str, dict[str, np.ndarray]] = {}
     common = np.ones(len(cell_ids), dtype=bool)
@@ -235,7 +255,7 @@ def _load_quantile_tables(
         *(f"{prefix}{p}_lower_c" for p in PERCENTILES),
         *(f"{prefix}{p}_upper_c" for p in PERCENTILES),
     ]
-    for implementation in EXPECTED_IMPLEMENTATIONS:
+    for implementation in implementations:
         path = root / "implementations" / f"{implementation}.parquet"
         table = pq.read_table(path, columns=columns)
         if not np.array_equal(_integer_column(table, "cell_id"), cell_ids):
@@ -350,18 +370,19 @@ def _spot_check_sources(
 def _cellwise_table(
     cell_ids: np.ndarray, latitude: np.ndarray, longitude: np.ndarray, weights: np.ndarray,
     values: dict[str, dict[str, np.ndarray]],
+    implementations: tuple[str, ...],
 ) -> tuple[pa.Table, dict[str, np.ndarray]]:
     columns: dict[str, pa.Array] = {
         "cell_id": pa.array(cell_ids, type=pa.int64()), "latitude": pa.array(latitude),
         "longitude": pa.array(longitude), "weight": pa.array(weights),
     }
     metrics: dict[str, np.ndarray] = {}
-    for implementation in EXPECTED_IMPLEMENTATIONS:
+    for implementation in implementations:
         prefix = implementation.replace("-", "_")
         for percentile in PERCENTILES:
             columns[f"q_{prefix}_{percentile}_c"] = pa.array(values[implementation][percentile])
     for percentile in PERCENTILES:
-        matrix = np.column_stack([values[name][percentile] for name in EXPECTED_IMPLEMENTATIONS])
+        matrix = np.column_stack([values[name][percentile] for name in implementations])
         minimum_index, maximum_index = matrix.argmin(axis=1), matrix.argmax(axis=1)
         metric = f"spread_{percentile}_c"
         spread = matrix[np.arange(len(matrix)), maximum_index] - matrix[np.arange(len(matrix)), minimum_index]
@@ -369,8 +390,12 @@ def _cellwise_table(
             raise ValueError(f"Negative {metric}")
         metrics[metric] = spread
         columns[metric] = pa.array(spread)
-        columns[f"min_implementation_{percentile}"] = pa.array([EXPECTED_IMPLEMENTATIONS[index] for index in minimum_index])
-        columns[f"max_implementation_{percentile}"] = pa.array([EXPECTED_IMPLEMENTATIONS[index] for index in maximum_index])
+        columns[f"min_implementation_{percentile}"] = pa.array(
+            [implementations[index] for index in minimum_index]
+        )
+        columns[f"max_implementation_{percentile}"] = pa.array(
+            [implementations[index] for index in maximum_index]
+        )
     return pa.table(columns), metrics
 
 
@@ -402,9 +427,13 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, probability: flo
     return float(values[order[np.searchsorted(cumulative, probability * cumulative[-1], side="left")]])
 
 
-def _c_anchor_summary(values: dict[str, dict[str, np.ndarray]], weights: np.ndarray) -> pa.Table:
+def _c_anchor_summary(
+    values: dict[str, dict[str, np.ndarray]],
+    weights: np.ndarray,
+    implementations: tuple[str, ...],
+) -> pa.Table:
     rows: list[dict[str, object]] = []
-    for implementation in EXPECTED_IMPLEMENTATIONS:
+    for implementation in implementations:
         if implementation == REFERENCE_IMPLEMENTATION:
             continue
         for percentile in PERCENTILES:
@@ -426,12 +455,14 @@ def _c_anchor_summary(values: dict[str, dict[str, np.ndarray]], weights: np.ndar
     return pa.Table.from_pylist(rows)
 
 
-def _extrema_frequency(cellwise: pa.Table, weights: np.ndarray) -> pa.Table:
+def _extrema_frequency(
+    cellwise: pa.Table, weights: np.ndarray, implementations: tuple[str, ...]
+) -> pa.Table:
     rows: list[dict[str, object]] = []
     for percentile in PERCENTILES:
         minimum = cellwise[f"min_implementation_{percentile}"].to_pylist()
         maximum = cellwise[f"max_implementation_{percentile}"].to_pylist()
-        for implementation in EXPECTED_IMPLEMENTATIONS:
+        for implementation in implementations:
             rows.append({"percentile": percentile, "implementation": implementation,
                          "weight_fraction_argmin": float(weights[np.asarray(minimum) == implementation].sum() / weights.sum()),
                          "weight_fraction_argmax": float(weights[np.asarray(maximum) == implementation].sum() / weights.sum())})

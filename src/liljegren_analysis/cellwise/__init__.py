@@ -1,8 +1,23 @@
 """Streaming cellwise temporal temperature distribution summaries."""
 
 from .pipeline import compute_cellwise_wbgt_quantiles
-from .joint_pipeline import compute_joint_cellwise_temperature_quantiles
-from .spread import QuantileSpreadOutputs, analyze_cellwise_quantile_spread
+from .joint_pipeline import (
+    DEFAULT_DATE_WORKERS,
+    DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_REPLAY_WORKERS,
+    compute_joint_cellwise_temperature_quantiles,
+)
+from .paths import (
+    DEFAULT_ISO7243_INPUT_ROOT,
+    DEFAULT_ISO7243_OUTPUT_ROOT,
+    DEFAULT_JOINT_OUTPUT_ROOT,
+    DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
+    DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+)
+from .spread import (
+    QuantileSpreadOutputs,
+    analyze_cellwise_quantile_spread,
+)
 from .population import PopulationWeightOutputs, compute_era5_population_weights
 from .iso7243 import (
     ISO7243ClassificationOutputs,
@@ -20,6 +35,14 @@ __all__ = [
     "PopulationWeightOutputs",
     "ISO7243ClassificationOutputs",
     "NonConsensusOutputs",
+    "DEFAULT_DATE_WORKERS",
+    "DEFAULT_ISO7243_INPUT_ROOT",
+    "DEFAULT_ISO7243_OUTPUT_ROOT",
+    "DEFAULT_JOINT_IMPLEMENTATIONS",
+    "DEFAULT_JOINT_OUTPUT_ROOT",
+    "DEFAULT_QUANTILE_SPREAD_INPUT_ROOT",
+    "DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT",
+    "DEFAULT_REPLAY_WORKERS",
     "analyze_cellwise_quantile_spread",
     "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",

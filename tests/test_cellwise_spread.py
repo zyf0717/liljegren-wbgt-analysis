@@ -9,12 +9,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
 from liljegren_analysis.cellwise.grid import grid_from_source_cell_ids
 from liljegren_analysis.cellwise.spread import analyze_cellwise_quantile_spread
-from liljegren_analysis.comparison.config import (
-    EXPECTED_IMPLEMENTATIONS,
-    REFERENCE_IMPLEMENTATION,
-)
+from liljegren_analysis.comparison.config import REFERENCE_IMPLEMENTATION
+
+IMPLEMENTATIONS = DEFAULT_JOINT_IMPLEMENTATIONS
 
 
 class CellwiseQuantileSpreadTests(unittest.TestCase):
@@ -34,12 +34,12 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                         "wbgt_bin_max_c": 60.0,
                         "wbgt_bin_width_c": 0.02,
                         "probabilities": [0.5, 0.9, 0.95, 0.99],
-                        "implementations": list(EXPECTED_IMPLEMENTATIONS),
+                        "implementations": list(IMPLEMENTATIONS),
                         "histogram_version": 3,
                     }
                 )
             )
-            for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+            for index, implementation in enumerate(IMPLEMENTATIONS):
                 rows: dict[str, object] = {
                     "cell_id": [0, 1],
                     "n_valid": [10, 10],
@@ -63,7 +63,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             )
 
             cellwise = pq.read_table(output.cellwise_spread)
-            expected_spread = float(len(EXPECTED_IMPLEMENTATIONS) - 1)
+            expected_spread = float(len(IMPLEMENTATIONS) - 1)
             self.assertEqual(
                 cellwise["spread_p50_c"].to_pylist(), [expected_spread] * 2
             )
@@ -72,10 +72,11 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             )
             self.assertEqual(
                 cellwise["min_implementation_p95"].to_pylist(),
-                [EXPECTED_IMPLEMENTATIONS[0]] * 2,
+                [IMPLEMENTATIONS[0]] * 2,
             )
             self.assertEqual(
-                cellwise["max_implementation_p99"].to_pylist(), ["thermofeel"] * 2
+                cellwise["max_implementation_p99"].to_pylist(),
+                [IMPLEMENTATIONS[-1]] * 2,
             )
             summary = pq.read_table(output.global_summary)
             self.assertEqual(
@@ -83,14 +84,14 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 ["spread_p50_c", "spread_p90_c", "spread_p95_c", "spread_p99_c"],
             )
             anchor = pq.read_table(output.c_anchor_differences)
-            self.assertEqual(anchor.num_rows, 4 * (len(EXPECTED_IMPLEMENTATIONS) - 1))
+            self.assertEqual(anchor.num_rows, 4 * (len(IMPLEMENTATIONS) - 1))
             self.assertEqual(
                 set(anchor["anchor_implementation"].to_pylist()),
                 {REFERENCE_IMPLEMENTATION},
             )
             self.assertEqual(
                 pq.read_table(output.extrema_frequency).num_rows,
-                4 * len(EXPECTED_IMPLEMENTATIONS),
+                4 * len(IMPLEMENTATIONS),
             )
 
             unweighted = analyze_cellwise_quantile_spread(

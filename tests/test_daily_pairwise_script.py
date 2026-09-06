@@ -36,7 +36,7 @@ class DailyPairwiseScriptTests(unittest.TestCase):
                 args = MODULE.parse_args()
                 self.assertEqual(
                     args.output_root,
-                    MODULE.REPOSITORY / "data" / "pairwise",
+                    MODULE.REPOSITORY / "data" / "pairwise" / "6-targets",
                 )
                 self.assertEqual(
                     args.log_file,

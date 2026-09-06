@@ -6,7 +6,20 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from liljegren_analysis.cellwise import compute_joint_cellwise_temperature_quantiles
+from liljegren_analysis.cellwise import (
+    DEFAULT_DATE_WORKERS,
+    DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_JOINT_OUTPUT_ROOT,
+    DEFAULT_REPLAY_WORKERS,
+    compute_joint_cellwise_temperature_quantiles,
+)
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
 
 
 def main() -> None:
@@ -17,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("data/cellwise_temperature_quantiles"),
+        default=DEFAULT_JOINT_OUTPUT_ROOT,
     )
     parser.add_argument(
         "--force",
@@ -30,6 +43,26 @@ def main() -> None:
         default=100,
         help="deterministic exact-order-statistic validation sample; zero disables it",
     )
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        help=(
+            "target implementation; repeat to override the default set: "
+            + ", ".join(DEFAULT_JOINT_IMPLEMENTATIONS)
+        ),
+    )
+    parser.add_argument(
+        "--date-workers",
+        type=_positive_int,
+        default=DEFAULT_DATE_WORKERS,
+        help=f"parallel joint-mask dates (default: {DEFAULT_DATE_WORKERS})",
+    )
+    parser.add_argument(
+        "--replay-workers",
+        type=_positive_int,
+        default=DEFAULT_REPLAY_WORKERS,
+        help=f"parallel implementation replays (default: {DEFAULT_REPLAY_WORKERS})",
+    )
     arguments = parser.parse_args()
     output = compute_joint_cellwise_temperature_quantiles(
         arguments.hsb_run,
@@ -37,6 +70,13 @@ def main() -> None:
         end_date=arguments.end_date,
         output_root=arguments.output_root,
         exact_validation_cells=arguments.exact_validation_cells,
+        implementations=(
+            arguments.implementation
+            if arguments.implementation is not None
+            else DEFAULT_JOINT_IMPLEMENTATIONS
+        ),
+        date_workers=arguments.date_workers,
+        replay_workers=arguments.replay_workers,
         overwrite=arguments.force,
     )
     print(output)

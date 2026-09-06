@@ -4,18 +4,17 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from liljegren_analysis.cellwise import (
+    DEFAULT_JOINT_IMPLEMENTATIONS,
     analyze_cellwise_quantile_spread,
     compute_joint_cellwise_temperature_quantiles,
-    joint_pipeline,
 )
-from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
+from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 _CELLS = (
     "era5-global-n000000-e0000000",
@@ -36,7 +35,7 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         wbgt_status = ["ok", "ok", "ok"]
-        if implementation == "heatstress-jl":
+        if implementation == "meteor":
             wbgt_status[2] = "invalid"
         offset = implementation_index / 10
         tnwb_values: list[float | None] = [
@@ -44,7 +43,7 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
             20.0 + day + offset,
             30.0 + day + offset,
         ]
-        if implementation == "heatstress-r" and day == 2:
+        if implementation == "thermofeel" and day == 2:
             tnwb_values[1] = None
         pq.write_table(
             pa.table(
@@ -67,6 +66,19 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
 
 
 class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
+    def test_default_targets_match_report_scope(self) -> None:
+        self.assertEqual(
+            DEFAULT_JOINT_IMPLEMENTATIONS,
+            (
+                "argonne-liljegren-c",
+                "heatstress",
+                "meteor",
+                "thermofeel",
+                "kwodzicki-pywbgt",
+                "kong-huber-pywbgt",
+            ),
+        )
+
     def test_all_implementation_all_quantity_support_is_shared(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -78,27 +90,23 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             stale = output / "stale"
             stale.write_text("old product")
 
-            with mock.patch.object(
-                joint_pipeline,
-                "_scan_native_valid_day",
-                wraps=joint_pipeline._scan_native_valid_day,
-            ) as scan:
-                result_root = compute_joint_cellwise_temperature_quantiles(
-                    hsb_run,
-                    start_date="2025-01-01",
-                    end_date="2025-01-02",
-                    output_root=output,
-                    histogram_spec=WBGTHistogramSpec(
-                        minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
-                    ),
-                    exact_validation_cells=3,
-                    overwrite=True,
-                )
+            result_root = compute_joint_cellwise_temperature_quantiles(
+                hsb_run,
+                start_date="2025-01-01",
+                end_date="2025-01-02",
+                output_root=output,
+                histogram_spec=WBGTHistogramSpec(
+                    minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
+                ),
+                exact_validation_cells=3,
+                date_workers=2,
+                replay_workers=2,
+                overwrite=True,
+            )
             self.assertFalse(stale.exists())
-            self.assertEqual(scan.call_count, len(EXPECTED_IMPLEMENTATIONS) * 2)
 
             self.assertEqual(result_root, output.resolve())
-            for implementation in EXPECTED_IMPLEMENTATIONS:
+            for implementation in DEFAULT_JOINT_IMPLEMENTATIONS:
                 table = pq.read_table(
                     output / "implementations" / f"{implementation}.parquet"
                 )
@@ -112,16 +120,16 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             heatstress = pq.read_table(
                 output / "implementations" / "heatstress.parquet"
             )
-            heatstress_jl = pq.read_table(
-                output / "implementations" / "heatstress-jl.parquet"
+            meteor = pq.read_table(
+                output / "implementations" / "meteor.parquet"
             )
             self.assertEqual(heatstress["wbgt_native_valid_n"].to_pylist(), [2, 2, 2])
-            self.assertEqual(heatstress_jl["wbgt_native_valid_n"].to_pylist(), [2, 2, 0])
-            self.assertEqual(heatstress_jl["tg_native_valid_n"].to_pylist(), [2, 2, 2])
-            heatstress_r = pq.read_table(
-                output / "implementations" / "heatstress-r.parquet"
+            self.assertEqual(meteor["wbgt_native_valid_n"].to_pylist(), [2, 2, 0])
+            self.assertEqual(meteor["tg_native_valid_n"].to_pylist(), [2, 2, 2])
+            thermofeel = pq.read_table(
+                output / "implementations" / "thermofeel.parquet"
             )
-            self.assertEqual(heatstress_r["tnwb_native_valid_n"].to_pylist(), [2, 1, 2])
+            self.assertEqual(thermofeel["tnwb_native_valid_n"].to_pylist(), [2, 1, 2])
             self.assertEqual(heatstress["wbgt_p50_c"].to_pylist(), [21.5, 31.5, None])
             self.assertEqual(heatstress["tg_p90_c"].to_pylist(), [32.5, 41.5, None])
 
@@ -136,8 +144,10 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             )
             self.assertEqual(metadata["joint_observation_count"], 3)
             self.assertEqual(metadata["cells_with_joint_observations"], 2)
+            self.assertEqual(metadata["date_workers_this_invocation"], 2)
+            self.assertEqual(metadata["replay_workers_this_invocation"], 2)
             self.assertEqual(
-                set(metadata["unit_provenance"]), set(EXPECTED_IMPLEMENTATIONS)
+                set(metadata["unit_provenance"]), set(DEFAULT_JOINT_IMPLEMENTATIONS)
             )
             first_provenance = metadata["unit_provenance"]["heatstress"]
             self.assertEqual(

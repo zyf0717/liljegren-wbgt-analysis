@@ -78,8 +78,8 @@ def parse_args() -> argparse.Namespace:
         choices=SAMPLE_SCOPES,
         default="all-implementations",
         help=(
-            "Valid rows required per pair or across all discovered "
-            "implementations (default: all-implementations)."
+            "Valid rows required per pair or across the configured "
+            "implementation cohort (default: all-implementations)."
         ),
     )
     parser.add_argument(

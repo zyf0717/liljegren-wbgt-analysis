@@ -15,13 +15,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
-from ..comparison.config import EXPECTED_IMPLEMENTATIONS
+from .paths import DEFAULT_ISO7243_INPUT_ROOT, DEFAULT_ISO7243_OUTPUT_ROOT
 
 
 ISO7243_SCHEMA_VERSION = 1
 PERCENTILES = ("p50", "p90", "p95", "p99")
-DEFAULT_INPUT_ROOT = Path("data/cellwise_temperature_quantiles/2025-joint-v1")
-DEFAULT_OUTPUT_ROOT = Path("data/cellwise_iso7243_classification_changes")
+DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_INPUT_ROOT
+DEFAULT_OUTPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ def analyze_cellwise_iso7243_classification(
         raise FileExistsError(f"ISO 7243 output already exists at {root}; pass force=True")
     thresholds = validate_thresholds(thresholds_c)
     metadata = _load_input_metadata(source_root)
+    implementations = tuple(metadata["implementations"])
     grid = pq.read_table(source_root / "grid.parquet")
     cell_ids = _integer_column(grid, "cell_id")
     if not len(cell_ids):
@@ -77,12 +78,16 @@ def analyze_cellwise_iso7243_classification(
     if cell_ids[-1] > np.iinfo(np.int32).max:
         raise ValueError("Input grid cell_id values exceed int32 output range")
 
-    class_ids, complete = _load_class_ids(source_root, cell_ids, thresholds, metadata)
+    class_ids, complete = _load_class_ids(
+        source_root, cell_ids, thresholds, metadata, implementations
+    )
     if not complete.any():
         raise ValueError("No cells have complete valid WBGT quantiles")
     retained_ids = cell_ids[complete].astype(np.int32, copy=False)
     class_ids = class_ids[:, :, complete]
-    _write_pair_differences(class_ids, retained_ids, paths.cell_pair_differences)
+    _write_pair_differences(
+        class_ids, retained_ids, implementations, paths.cell_pair_differences
+    )
     lookup = grid.select(["cell_id", "source_cell_id", "latitude", "longitude"]).filter(
         pa.array(complete)
     )
@@ -100,24 +105,24 @@ def analyze_cellwise_iso7243_classification(
                     implementation: _sha256(
                         source_root / "implementations" / f"{implementation}.parquet"
                     )
-                    for implementation in EXPECTED_IMPLEMENTATIONS
+                    for implementation in implementations
                 },
             },
             "thresholds_c": list(thresholds),
             "quantiles": list(PERCENTILES),
             "implementation_ids": {
                 implementation: index
-                for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS)
+                for index, implementation in enumerate(implementations)
             },
             "canonical_cell_count": len(cell_ids),
             "complete_case_cell_count": len(retained_ids),
             "excluded_cell_count": int((~complete).sum()),
-            "implementation_pair_count": len(EXPECTED_IMPLEMENTATIONS)
-            * (len(EXPECTED_IMPLEMENTATIONS) - 1)
+            "implementation_pair_count": len(implementations)
+            * (len(implementations) - 1)
             // 2,
             "row_count": len(retained_ids)
-            * len(EXPECTED_IMPLEMENTATIONS)
-            * (len(EXPECTED_IMPLEMENTATIONS) - 1)
+            * len(implementations)
+            * (len(implementations) - 1)
             // 2,
             "weighting": "none",
         },
@@ -133,8 +138,14 @@ def _load_input_metadata(root: Path) -> dict[str, object]:
     metadata = json.loads(path.read_text())
     if metadata.get("schema_version") != 2:
         raise ValueError("ISO 7243 analysis requires a joint cellwise quantile product")
-    if metadata.get("implementations") != list(EXPECTED_IMPLEMENTATIONS):
-        raise ValueError("Input metadata does not contain the expected implementations")
+    implementations = metadata.get("implementations")
+    if (
+        not isinstance(implementations, list)
+        or len(implementations) < 2
+        or not all(isinstance(value, str) and value for value in implementations)
+        or len(set(implementations)) != len(implementations)
+    ):
+        raise ValueError("Input metadata does not contain valid implementations")
     if metadata.get("probabilities") != [0.5, 0.9, 0.95, 0.99]:
         raise ValueError("Input metadata does not contain the required quantiles")
     for key in ("temperature_bin_min_c", "temperature_bin_max_c"):
@@ -148,9 +159,12 @@ def _load_class_ids(
     cell_ids: np.ndarray,
     thresholds: tuple[float, ...],
     metadata: dict[str, object],
+    implementations: tuple[str, ...],
 ) -> tuple[np.ndarray, np.ndarray]:
     count = len(cell_ids)
-    classes = np.empty((len(EXPECTED_IMPLEMENTATIONS), len(PERCENTILES), count), dtype=np.uint8)
+    classes = np.empty(
+        (len(implementations), len(PERCENTILES), count), dtype=np.uint8
+    )
     complete = np.ones(count, dtype=bool)
     minimum = float(metadata["temperature_bin_min_c"])
     maximum = float(metadata["temperature_bin_max_c"])
@@ -163,7 +177,7 @@ def _load_class_ids(
                 f"wbgt_{percentile}_upper_c",
             )
         )
-    for implementation_index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+    for implementation_index, implementation in enumerate(implementations):
         table = pq.read_table(root / "implementations" / f"{implementation}.parquet", columns=columns)
         if not np.array_equal(_integer_column(table, "cell_id"), cell_ids):
             raise ValueError(f"Cell universe/order differs for {implementation}")
@@ -192,6 +206,7 @@ def _load_class_ids(
 def _write_pair_differences(
     classes: np.ndarray,
     cell_ids: np.ndarray,
+    implementations: tuple[str, ...],
     path: Path,
 ) -> None:
     schema = pa.schema(
@@ -212,9 +227,9 @@ def _write_pair_differences(
     temporary_path = Path(temporary_name)
     try:
         with pq.ParquetWriter(temporary_path, schema, compression="zstd") as writer:
-            for implementation_a in range(len(EXPECTED_IMPLEMENTATIONS)):
+            for implementation_a in range(len(implementations)):
                 classes_a = classes[implementation_a]
-                for implementation_b in range(implementation_a + 1, len(EXPECTED_IMPLEMENTATIONS)):
+                for implementation_b in range(implementation_a + 1, len(implementations)):
                     classes_b = classes[implementation_b]
                     writer.write_table(
                         pa.table(

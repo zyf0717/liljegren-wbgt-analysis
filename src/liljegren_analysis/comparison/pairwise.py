@@ -14,7 +14,7 @@ import pyarrow as pa
 
 from ..results import HSBRunResults, RESULT_QUANTITIES, ResultFile
 from .area_weighted import _ERA5_LATITUDE_WEIGHTS
-from .config import SAMPLE_SCOPES, SampleScope
+from .config import DEFAULT_PAIRWISE_IMPLEMENTATIONS, SAMPLE_SCOPES, SampleScope
 from .persistence import persist_date_partitions
 
 
@@ -65,6 +65,11 @@ def compute_daily_pairwise(
         result_date,
         runs,
         require_common_shards=sample_scope == "all-implementations",
+        required_implementations=(
+            DEFAULT_PAIRWISE_IMPLEMENTATIONS
+            if sample_scope == "all-implementations"
+            else None
+        ),
     )
     invalid = (
         base.filter(pl.col("area_weight").is_null())
@@ -123,12 +128,27 @@ def persist_daily_pairwise(
 
 
 def _base_results(
-    result_date: date, runs: tuple[Path, ...], *, require_common_shards: bool = False
+    result_date: date,
+    runs: tuple[Path, ...],
+    *,
+    require_common_shards: bool = False,
+    required_implementations: tuple[str, ...] | None = None,
 ) -> tuple[pl.LazyFrame, tuple[str, ...]]:
-    files = _result_files(result_date, runs)
+    selected = frozenset(required_implementations) if required_implementations else None
+    files = _result_files(result_date, runs, selected)
     if not files:
         raise FileNotFoundError(f"No result shards found for {result_date.isoformat()}")
-    implementations = tuple(sorted({item.implementation for item in files}))
+    discovered = {item.implementation for item in files}
+    if required_implementations is not None:
+        missing = set(required_implementations) - discovered
+        if missing:
+            raise ValueError(
+                f"Configured pairwise implementations are missing for {result_date}: "
+                f"{sorted(missing)}"
+            )
+        implementations = tuple(sorted(required_implementations))
+    else:
+        implementations = tuple(sorted(discovered))
     if len(implementations) < 2:
         raise ValueError(f"Fewer than two implementations exist for {result_date}")
     if require_common_shards:
@@ -307,12 +327,16 @@ def _status_summary(base: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _result_files(
-    result_date: date, runs: tuple[Path, ...]
+    result_date: date,
+    runs: tuple[Path, ...],
+    implementations: frozenset[str] | None = None,
 ) -> tuple[ResultFile, ...]:
     scopes: dict[tuple[str, str], Path] = {}
     files: list[ResultFile] = []
     for run in runs:
         for item in HSBRunResults.from_hsb_run(run).files(result_date=result_date):
+            if implementations is not None and item.implementation not in implementations:
+                continue
             scope = (item.run_id, item.implementation)
             previous = scopes.setdefault(scope, item.path)
             if previous != item.path:

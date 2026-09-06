@@ -8,15 +8,17 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
+from multiprocessing import get_context
 from pathlib import Path
 from time import monotonic
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
-from ..comparison.config import EXPECTED_IMPLEMENTATIONS
 from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
 from ..io.results import iter_result_batches
 from ..results import (
@@ -41,12 +43,23 @@ from .pipeline import (
     _input_fingerprint,
     _validate_canonical_run_inventory,
 )
+from .paths import DEFAULT_JOINT_OUTPUT_ROOT
 from .quantiles import quantile_table
 
 JOINT_CELLWISE_SCHEMA_VERSION = 2
 JOINT_SUPPORT_SCOPE = "all-implementations-all-quantities"
 HOURS_PER_DAY = 24
 REPLAY_STRATEGY = "implementation-all-quantities-in-memory-v3"
+DEFAULT_DATE_WORKERS = 4
+DEFAULT_REPLAY_WORKERS = 2
+DEFAULT_JOINT_IMPLEMENTATIONS = (
+    "argonne-liljegren-c",
+    "heatstress",
+    "meteor",
+    "thermofeel",
+    "kwodzicki-pywbgt",
+    "kong-huber-pywbgt",
+)
 
 
 @dataclass(frozen=True)
@@ -63,16 +76,47 @@ class JointMaskCache:
         return ((packed[byte_ids] >> bit_ids) & 1).astype(bool, copy=False)
 
 
+@dataclass(frozen=True)
+class _MaskWorkerState:
+    hsb_runs: tuple[Path, ...]
+    implementations: tuple[str, ...]
+    grid: CellGrid
+    mask_directory: Path
+
+
+@dataclass(frozen=True)
+class _ReplayWorkerState:
+    hsb_runs: tuple[Path, ...]
+    dates: tuple[date, ...]
+    grid: CellGrid
+    joint_masks: JointMaskCache
+    joint_counts: np.ndarray
+    histogram_spec: WBGTHistogramSpec
+    probabilities: tuple[float, ...]
+    dtype: np.dtype[np.unsignedinteger]
+    work: Path
+    sample_cells: np.ndarray
+    sample_seed: int
+    output_root: Path
+
+
+_MASK_WORKER_STATE: _MaskWorkerState | None = None
+_REPLAY_WORKER_STATE: _ReplayWorkerState | None = None
+
+
 def compute_joint_cellwise_temperature_quantiles(
     hsb_run_paths: str | Path | Sequence[str | Path],
     *,
     start_date: str | date,
     end_date: str | date,
-    output_root: str | Path = Path("data/cellwise_temperature_quantiles"),
+    output_root: str | Path = DEFAULT_JOINT_OUTPUT_ROOT,
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
     exact_validation_seed: int = 0,
+    implementations: Sequence[str] = DEFAULT_JOINT_IMPLEMENTATIONS,
+    date_workers: int = DEFAULT_DATE_WORKERS,
+    replay_workers: int = DEFAULT_REPLAY_WORKERS,
     overwrite: bool = False,
 ) -> Path:
     """Compute WBGT, Tg and Tnwb quantiles on one strict common support.
@@ -85,8 +129,13 @@ def compute_joint_cellwise_temperature_quantiles(
 
     hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
-    _validate_canonical_run_inventory(hsb_runs, dates, EXPECTED_IMPLEMENTATIONS)
-    _validate_options(probabilities, exact_validation_cells)
+    implementations = _implementation_names(implementations)
+    _validate_canonical_run_inventory(
+        hsb_runs, dates, implementations, allow_unexpected=True
+    )
+    _validate_options(
+        probabilities, exact_validation_cells, date_workers, replay_workers
+    )
     root = Path(output_root).expanduser().resolve()
     if overwrite and root.exists():
         _validate_reset_target(root)
@@ -98,7 +147,7 @@ def compute_joint_cellwise_temperature_quantiles(
 
     input_files = tuple(
         path
-        for implementation in EXPECTED_IMPLEMENTATIONS
+        for implementation in implementations
         for path in _input_files(hsb_runs, dates, implementation)
     )
     input_fingerprint = _input_fingerprint(tuple(sorted(input_files)))
@@ -106,19 +155,19 @@ def compute_joint_cellwise_temperature_quantiles(
     grid = (
         load_grid(grid_path)
         if grid_path.exists()
-        else _build_grid(hsb_runs, dates[0], EXPECTED_IMPLEMENTATIONS[0])
+        else _build_grid(hsb_runs, dates[0], implementations[0])
     )
     if not grid_path.exists():
         _atomic_parquet(grid.table, grid_path)
 
     manifest_path = work / "manifest.json"
     expected_manifest = _expected_manifest(
-        dates, grid, histogram_spec, probabilities, input_fingerprint
+        dates, implementations, grid, histogram_spec, probabilities, input_fingerprint
     )
     manifest = _open_manifest(manifest_path, expected_manifest, root / "metadata.json")
     if (root / "metadata.json").exists() and all(
         (root / "implementations" / f"{implementation}.parquet").exists()
-        for implementation in EXPECTED_IMPLEMENTATIONS
+        for implementation in implementations
     ):
         shutil.rmtree(work)
         return root
@@ -126,66 +175,51 @@ def compute_joint_cellwise_temperature_quantiles(
     _discard_legacy_replay_files(work)
     started = monotonic()
 
-    mask_fingerprints = dict(manifest.get("mask_fingerprints", {}))
-    masks_reused = 0
-    masks_generated = 0
-    for current_date in dates:
-        mask_path = _mask_path(mask_directory, current_date)
-        date_key = current_date.isoformat()
-        existing_fingerprint = mask_fingerprints.get(date_key)
-        if (
-            _valid_mask_file(mask_path, grid.cell_count)
-            and existing_fingerprint == _file_sha256(mask_path)
-        ):
-            masks_reused += 1
-            continue
-        mask_path.unlink(missing_ok=True)
-        mask = _scan_joint_day_mask(
-            hsb_runs,
-            current_date,
-            grid,
-        )
-        _atomic_mask(mask, mask_path)
-        masks_generated += 1
-        mask_fingerprints[date_key] = _file_sha256(mask_path)
-        manifest["mask_fingerprints"] = mask_fingerprints
-        _atomic_json(manifest, manifest_path)
+    mask_started = monotonic()
+    mask_fingerprints, masks_generated, masks_reused = _generate_joint_masks(
+        hsb_runs=hsb_runs,
+        implementations=implementations,
+        dates=dates,
+        grid=grid,
+        grid_path=grid_path,
+        mask_directory=mask_directory,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        workers=date_workers,
+    )
+    mask_elapsed = monotonic() - mask_started
 
     joint_masks, joint_counts = _load_joint_masks(mask_directory, dates, grid.cell_count)
     sample_cells = _sample_cells(joint_counts, exact_validation_cells, exact_validation_seed)
     dtype = counter_dtype(len(dates) * HOURS_PER_DAY)
     provenance = dict(manifest.get("unit_provenance", {}))
-
-    for implementation in EXPECTED_IMPLEMENTATIONS:
-        output_path = root / "implementations" / f"{implementation}.parquet"
-        if implementation not in provenance or not output_path.exists():
-            partials, implementation_provenance = _replay_implementation(
-                hsb_runs=hsb_runs,
-                dates=dates,
-                implementation=implementation,
-                grid=grid,
-                joint_counts=joint_counts,
-                joint_masks=joint_masks,
-                histogram_spec=histogram_spec,
-                probabilities=probabilities,
-                dtype=dtype,
-                work=work,
-                sample_cells=sample_cells,
-                sample_seed=exact_validation_seed,
-            )
-            wide = _wide_implementation_table(
-                grid=grid,
-                dates=dates,
-                joint_counts=joint_counts,
-                partials=partials,
-            )
-            _atomic_parquet(wide, output_path)
-            provenance[implementation] = implementation_provenance
-            manifest["unit_provenance"] = provenance
-            _atomic_json(manifest, manifest_path)
+    replay_started = monotonic()
+    provenance = _replay_implementations(
+        hsb_runs=hsb_runs,
+        dates=dates,
+        implementations=implementations,
+        grid=grid,
+        grid_path=grid_path,
+        joint_masks=joint_masks,
+        joint_counts=joint_counts,
+        mask_directory=mask_directory,
+        histogram_spec=histogram_spec,
+        probabilities=probabilities,
+        dtype=dtype,
+        work=work,
+        sample_cells=sample_cells,
+        sample_seed=exact_validation_seed,
+        output_root=root,
+        provenance=provenance,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        workers=replay_workers,
+    )
+    replay_elapsed = monotonic() - replay_started
 
     metadata = _final_metadata(
         dates=dates,
+        implementations=implementations,
         grid=grid,
         histogram_spec=histogram_spec,
         probabilities=probabilities,
@@ -196,11 +230,287 @@ def compute_joint_cellwise_temperature_quantiles(
         mask_fingerprints=mask_fingerprints,
         masks_generated=masks_generated,
         masks_reused=masks_reused,
+        date_workers=date_workers,
+        replay_workers=replay_workers,
+        mask_elapsed_seconds=mask_elapsed,
+        replay_elapsed_seconds=replay_elapsed,
         elapsed_seconds=monotonic() - started,
     )
     _atomic_json(metadata, root / "metadata.json")
     shutil.rmtree(work)
     return root
+
+
+def _generate_joint_masks(
+    *,
+    hsb_runs: tuple[Path, ...],
+    implementations: tuple[str, ...],
+    dates: tuple[date, ...],
+    grid: CellGrid,
+    grid_path: Path,
+    mask_directory: Path,
+    manifest: dict[str, object],
+    manifest_path: Path,
+    workers: int,
+) -> tuple[dict[str, object], int, int]:
+    fingerprints = dict(manifest.get("mask_fingerprints", {}))
+    pending: list[date] = []
+    reused = 0
+    for current_date in dates:
+        mask_path = _mask_path(mask_directory, current_date)
+        existing = fingerprints.get(current_date.isoformat())
+        if _valid_mask_file(mask_path, grid.cell_count) and existing == _file_sha256(
+            mask_path
+        ):
+            reused += 1
+        else:
+            mask_path.unlink(missing_ok=True)
+            pending.append(current_date)
+
+    def checkpoint(result: tuple[date, str]) -> None:
+        current_date, fingerprint = result
+        fingerprints[current_date.isoformat()] = fingerprint
+        manifest["mask_fingerprints"] = fingerprints
+        _atomic_json(manifest, manifest_path)
+
+    if workers == 1:
+        for current_date in pending:
+            checkpoint(
+                _scan_and_persist_joint_day_mask(
+                    hsb_runs, implementations, current_date, grid, mask_directory
+                )
+            )
+    elif pending:
+        with ProcessPoolExecutor(
+            max_workers=min(workers, len(pending)),
+            mp_context=get_context("spawn"),
+            initializer=_initialize_mask_worker,
+            initargs=(hsb_runs, implementations, grid_path, mask_directory),
+        ) as executor:
+            futures = [executor.submit(_mask_worker, current_date) for current_date in pending]
+            for future in as_completed(futures):
+                checkpoint(future.result())
+    return fingerprints, len(pending), reused
+
+
+def _initialize_mask_worker(
+    hsb_runs: tuple[Path, ...],
+    implementations: tuple[str, ...],
+    grid_path: Path,
+    mask_directory: Path,
+) -> None:
+    global _MASK_WORKER_STATE
+    _MASK_WORKER_STATE = _MaskWorkerState(
+        hsb_runs=hsb_runs,
+        implementations=implementations,
+        grid=load_grid(grid_path),
+        mask_directory=mask_directory,
+    )
+
+
+def _mask_worker(current_date: date) -> tuple[date, str]:
+    if _MASK_WORKER_STATE is None:
+        raise RuntimeError("Mask worker is not initialized")
+    return _scan_and_persist_joint_day_mask(
+        _MASK_WORKER_STATE.hsb_runs,
+        _MASK_WORKER_STATE.implementations,
+        current_date,
+        _MASK_WORKER_STATE.grid,
+        _MASK_WORKER_STATE.mask_directory,
+    )
+
+
+def _scan_and_persist_joint_day_mask(
+    hsb_runs: tuple[Path, ...],
+    implementations: tuple[str, ...],
+    current_date: date,
+    grid: CellGrid,
+    mask_directory: Path,
+) -> tuple[date, str]:
+    mask_path = _mask_path(mask_directory, current_date)
+    _atomic_mask(
+        _scan_joint_day_mask(hsb_runs, implementations, current_date, grid), mask_path
+    )
+    return current_date, _file_sha256(mask_path)
+
+
+def _replay_implementations(
+    *,
+    hsb_runs: tuple[Path, ...],
+    dates: tuple[date, ...],
+    implementations: tuple[str, ...],
+    grid: CellGrid,
+    grid_path: Path,
+    joint_masks: JointMaskCache,
+    joint_counts: np.ndarray,
+    mask_directory: Path,
+    histogram_spec: WBGTHistogramSpec,
+    probabilities: tuple[float, ...],
+    dtype: np.dtype[np.unsignedinteger],
+    work: Path,
+    sample_cells: np.ndarray,
+    sample_seed: int,
+    output_root: Path,
+    provenance: dict[str, object],
+    manifest: dict[str, object],
+    manifest_path: Path,
+    workers: int,
+) -> dict[str, object]:
+    pending = [
+        implementation
+        for implementation in implementations
+        if implementation not in provenance
+        or not (output_root / "implementations" / f"{implementation}.parquet").exists()
+    ]
+
+    def checkpoint(result: tuple[str, dict[str, object]]) -> None:
+        implementation, implementation_provenance = result
+        provenance[implementation] = implementation_provenance
+        manifest["unit_provenance"] = provenance
+        _atomic_json(manifest, manifest_path)
+
+    if workers == 1:
+        for implementation in pending:
+            checkpoint(
+                _replay_and_persist_implementation(
+                    hsb_runs=hsb_runs,
+                    dates=dates,
+                    implementation=implementation,
+                    grid=grid,
+                    joint_counts=joint_counts,
+                    joint_masks=joint_masks,
+                    histogram_spec=histogram_spec,
+                    probabilities=probabilities,
+                    dtype=dtype,
+                    work=work,
+                    sample_cells=sample_cells,
+                    sample_seed=sample_seed,
+                    output_root=output_root,
+                )
+            )
+    elif pending:
+        with ProcessPoolExecutor(
+            max_workers=min(workers, len(pending)),
+            mp_context=get_context("spawn"),
+            initializer=_initialize_replay_worker,
+            initargs=(
+                hsb_runs,
+                dates,
+                grid_path,
+                mask_directory,
+                histogram_spec,
+                probabilities,
+                dtype,
+                work,
+                len(sample_cells),
+                sample_seed,
+                output_root,
+            ),
+        ) as executor:
+            futures = [executor.submit(_replay_worker, implementation) for implementation in pending]
+            for future in as_completed(futures):
+                checkpoint(future.result())
+    return {
+        implementation: provenance[implementation]
+        for implementation in implementations
+    }
+
+
+def _initialize_replay_worker(
+    hsb_runs: tuple[Path, ...],
+    dates: tuple[date, ...],
+    grid_path: Path,
+    mask_directory: Path,
+    histogram_spec: WBGTHistogramSpec,
+    probabilities: tuple[float, ...],
+    dtype: np.dtype[np.unsignedinteger],
+    work: Path,
+    sample_size: int,
+    sample_seed: int,
+    output_root: Path,
+) -> None:
+    global _REPLAY_WORKER_STATE
+    grid = load_grid(grid_path)
+    joint_masks, joint_counts = _load_joint_masks(
+        mask_directory, dates, grid.cell_count
+    )
+    _REPLAY_WORKER_STATE = _ReplayWorkerState(
+        hsb_runs=hsb_runs,
+        dates=dates,
+        grid=grid,
+        joint_masks=joint_masks,
+        joint_counts=joint_counts,
+        histogram_spec=histogram_spec,
+        probabilities=probabilities,
+        dtype=dtype,
+        work=work,
+        sample_cells=_sample_cells(joint_counts, sample_size, sample_seed),
+        sample_seed=sample_seed,
+        output_root=output_root,
+    )
+
+
+def _replay_worker(implementation: str) -> tuple[str, dict[str, object]]:
+    if _REPLAY_WORKER_STATE is None:
+        raise RuntimeError("Replay worker is not initialized")
+    state = _REPLAY_WORKER_STATE
+    return _replay_and_persist_implementation(
+        hsb_runs=state.hsb_runs,
+        dates=state.dates,
+        implementation=implementation,
+        grid=state.grid,
+        joint_counts=state.joint_counts,
+        joint_masks=state.joint_masks,
+        histogram_spec=state.histogram_spec,
+        probabilities=state.probabilities,
+        dtype=state.dtype,
+        work=state.work,
+        sample_cells=state.sample_cells,
+        sample_seed=state.sample_seed,
+        output_root=state.output_root,
+    )
+
+
+def _replay_and_persist_implementation(
+    *,
+    hsb_runs: tuple[Path, ...],
+    dates: tuple[date, ...],
+    implementation: str,
+    grid: CellGrid,
+    joint_counts: np.ndarray,
+    joint_masks: JointMaskCache,
+    histogram_spec: WBGTHistogramSpec,
+    probabilities: tuple[float, ...],
+    dtype: np.dtype[np.unsignedinteger],
+    work: Path,
+    sample_cells: np.ndarray,
+    sample_seed: int,
+    output_root: Path,
+) -> tuple[str, dict[str, object]]:
+    partials, provenance = _replay_implementation(
+        hsb_runs=hsb_runs,
+        dates=dates,
+        implementation=implementation,
+        grid=grid,
+        joint_counts=joint_counts,
+        joint_masks=joint_masks,
+        histogram_spec=histogram_spec,
+        probabilities=probabilities,
+        dtype=dtype,
+        work=work,
+        sample_cells=sample_cells,
+        sample_seed=sample_seed,
+    )
+    wide = _wide_implementation_table(
+        grid=grid,
+        dates=dates,
+        joint_counts=joint_counts,
+        partials=partials,
+    )
+    _atomic_parquet(
+        wide, output_root / "implementations" / f"{implementation}.parquet"
+    )
+    return implementation, provenance
 
 
 def _validate_reset_target(path: Path) -> None:
@@ -209,8 +519,24 @@ def _validate_reset_target(path: Path) -> None:
         raise ValueError(f"Refusing to reset broad output path: {path}")
 
 
+def _implementation_names(values: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError("implementations must be a sequence, not a string")
+    implementations = tuple(values)
+    if len(implementations) < 2:
+        raise ValueError("implementations must contain at least two targets")
+    if any(not value for value in implementations):
+        raise ValueError("implementation names must not be empty")
+    if len(set(implementations)) != len(implementations):
+        raise ValueError("implementations must be unique")
+    return implementations
+
+
 def _validate_options(
-    probabilities: tuple[float, ...], exact_validation_cells: int
+    probabilities: tuple[float, ...],
+    exact_validation_cells: int,
+    date_workers: int,
+    replay_workers: int,
 ) -> None:
     if probabilities != tuple(sorted(set(probabilities))):
         raise ValueError("probabilities must be unique and ascending")
@@ -218,10 +544,15 @@ def _validate_options(
         raise ValueError("probabilities must be in (0, 1]")
     if exact_validation_cells < 0:
         raise ValueError("exact_validation_cells must not be negative")
+    if date_workers < 1:
+        raise ValueError("date_workers must be positive")
+    if replay_workers < 1:
+        raise ValueError("replay_workers must be positive")
 
 
 def _expected_manifest(
     dates: tuple[date, ...],
+    implementations: tuple[str, ...],
     grid: CellGrid,
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
@@ -233,7 +564,7 @@ def _expected_manifest(
         "result_schema_id": RESULT_SCHEMA_ID,
         "start_date": dates[0].isoformat(),
         "end_date": dates[-1].isoformat(),
-        "implementations": list(EXPECTED_IMPLEMENTATIONS),
+        "implementations": list(implementations),
         "quantities": list(RESULT_QUANTITIES),
         "probabilities": list(probabilities),
         "histogram": _histogram_metadata(histogram_spec),
@@ -308,53 +639,80 @@ def _day_files(
     return files
 
 
-def _grid_lookup(grid: CellGrid) -> dict[str, int]:
-    return dict(
-        zip(
-            grid.lookup_table["source_cell_id"].to_pylist(),
-            grid.lookup_table["cell_id"].to_pylist(),
-            strict=True,
-        )
-    )
-
-
 def _identity_batch(
     batch: pa.RecordBatch,
     *,
-    lookup: dict[str, int],
+    source_cell_ids: pa.Array,
     current_date: date,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    run_ids = batch.column(0).to_pylist()
-    cycles = np.asarray(batch.column(1).to_pylist(), dtype=np.uint32)
-    row_ids = batch.column(2).to_pylist()
-    ordinals = np.asarray(batch.column(3).to_pylist(), dtype=np.uint32)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    cycles_column = batch.column(0)
+    row_ids = batch.column(1)
+    ordinals_column = batch.column(2)
     date_token = current_date.strftime("%Y%m%d")
-    cells: list[int] = []
-    hours: list[int] = []
-    for row_id in row_ids:
-        if (
-            row_id is None
-            or len(row_id) != 39
-            or row_id[28] != "-"
-            or row_id[29:37] != date_token
-            or not row_id[-2:].isdigit()
-            or int(row_id[-2:]) > 23
-            or (cell := lookup.get(row_id[:28])) is None
-        ):
-            raise ValueError(f"Malformed or unknown result identity on {current_date}")
-        cells.append(cell)
-        hours.append(int(row_id[-2:]))
+    valid_format = pc.fill_null(
+        pc.and_(
+            pc.equal(pc.utf8_length(row_ids), 39),
+            pc.and_(
+                pc.equal(pc.utf8_slice_codeunits(row_ids, 28, 29), "-"),
+                pc.equal(pc.utf8_slice_codeunits(row_ids, 29, 37), date_token),
+            ),
+        ),
+        False,
+    )
+    cell_indices = pc.index_in(
+        pc.utf8_slice_codeunits(row_ids, 0, 28), value_set=source_cell_ids
+    )
+    if not pc.all(valid_format).as_py() or cell_indices.null_count:
+        raise ValueError(f"Malformed or unknown result identity on {current_date}")
+    hours = pc.cast(
+        pc.utf8_slice_codeunits(row_ids, 37, 39), pa.uint8(), safe=True
+    ).to_numpy(zero_copy_only=False)
+    if np.any(hours > 23):
+        raise ValueError(f"Malformed or unknown result identity on {current_date}")
+    if cycles_column.null_count or ordinals_column.null_count:
+        raise ValueError(f"Malformed or unknown result identity on {current_date}")
     return (
-        np.asarray(cells, dtype=np.int64),
+        np.asarray(cell_indices.to_numpy(zero_copy_only=False), dtype=np.int64),
         np.asarray(hours, dtype=np.int64),
-        np.asarray(run_ids, dtype=object),
-        cycles,
-        ordinals,
+        np.asarray(
+            pc.cast(cycles_column, pa.uint32(), safe=True).to_numpy(
+                zero_copy_only=False
+            ),
+            dtype=np.uint32,
+        ),
+        np.asarray(
+            pc.cast(ordinals_column, pa.uint32(), safe=True).to_numpy(
+                zero_copy_only=False
+            ),
+            dtype=np.uint32,
+        ),
     )
 
 
+def _quantity_values_and_validity(
+    batch: pa.RecordBatch,
+) -> tuple[dict[ResultQuantity, np.ndarray], dict[ResultQuantity, np.ndarray]]:
+    values: dict[ResultQuantity, np.ndarray] = {}
+    valid: dict[ResultQuantity, np.ndarray] = {}
+    for index, quantity in enumerate(RESULT_QUANTITIES):
+        value_array = pc.cast(batch.column(4 + index * 2), pa.float64(), safe=True)
+        valid_array = pc.fill_null(
+            pc.and_(
+                pc.equal(batch.column(3 + index * 2), "ok"),
+                pc.is_finite(value_array),
+            ),
+            False,
+        )
+        values[quantity] = value_array.to_numpy(zero_copy_only=False)
+        valid[quantity] = valid_array.to_numpy(zero_copy_only=False)
+    return values, valid
+
+
 def _scan_joint_day_mask(
-    hsb_runs: tuple[Path, ...], current_date: date, grid: CellGrid
+    hsb_runs: tuple[Path, ...],
+    implementations: tuple[str, ...],
+    current_date: date,
+    grid: CellGrid,
 ) -> np.ndarray:
     """Build a common-support mask with disk-backed identity state.
 
@@ -364,7 +722,7 @@ def _scan_joint_day_mask(
     """
 
     size = grid.cell_count * HOURS_PER_DAY
-    lookup = _grid_lookup(grid)
+    source_cell_ids = grid.table["source_cell_id"].combine_chunks()
     run_codes: dict[str, int] = {}
     with tempfile.TemporaryDirectory(prefix="joint-mask-") as temporary:
         root = Path(temporary)
@@ -375,7 +733,7 @@ def _scan_joint_day_mask(
         ref_ordinal = np.memmap(root / "ordinal.u4", dtype=np.uint32, mode="w+", shape=size)
         seen_count[:] = 0
         all_valid[:] = 1
-        for implementation in EXPECTED_IMPLEMENTATIONS:
+        for implementation in implementations:
             implementation_seen = np.memmap(
                 root / f"{implementation}.seen.u1", dtype=np.uint8, mode="w+", shape=size
             )
@@ -386,43 +744,37 @@ def _scan_joint_day_mask(
             )
             for item in _day_files(hsb_runs, current_date, implementation):
                 for batch in iter_result_batches((item,), columns):
-                    annotated = pa.RecordBatch.from_arrays(
-                        [pa.array([item.run_id] * batch.num_rows), *batch.columns],
-                        names=("run_id", *columns),
-                    )
-                    cells, hours, runs, cycles, ordinals = _identity_batch(
-                        annotated, lookup=lookup, current_date=current_date
+                    cells, hours, cycles, ordinals = _identity_batch(
+                        batch,
+                        source_cell_ids=source_cell_ids,
+                        current_date=current_date,
                     )
                     flat = cells * HOURS_PER_DAY + hours
                     if len(np.unique(flat)) != len(flat) or implementation_seen[flat].any():
                         raise ValueError(f"Duplicate or inconsistent result identity on {current_date}")
                     implementation_seen[flat] = 1
-                    encoded_runs = np.asarray(
-                        [run_codes.setdefault(run, len(run_codes) + 1) for run in runs], dtype=np.uint32
-                    )
+                    encoded_run = run_codes.setdefault(item.run_id, len(run_codes) + 1)
                     first = seen_count[flat] == 0
                     if np.any(~first) and (
-                        np.any(ref_run[flat[~first]] != encoded_runs[~first])
+                        np.any(ref_run[flat[~first]] != encoded_run)
                         or np.any(ref_cycle[flat[~first]] != cycles[~first])
                         or np.any(ref_ordinal[flat[~first]] != ordinals[~first])
                     ):
                         raise ValueError(f"Duplicate or inconsistent result identity on {current_date}")
-                    ref_run[flat[first]] = encoded_runs[first]
+                    ref_run[flat[first]] = encoded_run
                     ref_cycle[flat[first]] = cycles[first]
                     ref_ordinal[flat[first]] = ordinals[first]
-                    statuses = [batch.column(index).to_pylist() for index in (3, 5, 7)]
-                    values = [np.asarray(batch.column(index).to_pylist(), dtype=np.float64) for index in (4, 6, 8)]
-                    valid = np.logical_and.reduce([
-                        (np.asarray(status, dtype=object) == "ok") & np.isfinite(value)
-                        for status, value in zip(statuses, values, strict=True)
-                    ])
+                    _, quantity_valid = _quantity_values_and_validity(batch)
+                    valid = np.logical_and.reduce(tuple(quantity_valid.values()))
                     all_valid[flat] &= valid
                     seen_count[flat] += 1
             implementation_seen.flush()
             del implementation_seen
         if not np.all(np.any(seen_count.reshape(grid.cell_count, HOURS_PER_DAY), axis=1)):
             raise ValueError(f"Cell identity coverage mismatch on {current_date}")
-        mask = np.asarray((seen_count == len(EXPECTED_IMPLEMENTATIONS)) & (all_valid != 0), dtype=bool)
+        mask = np.asarray(
+            (seen_count == len(implementations)) & (all_valid != 0), dtype=bool
+        )
         for array in (seen_count, all_valid, ref_run, ref_cycle, ref_ordinal):
             array.flush()
         return mask
@@ -496,33 +848,19 @@ def _scan_native_valid_day(
 ]:
     """Return bounded Arrow-derived batches containing any native-valid row."""
 
-    lookup = _grid_lookup(grid)
+    source_cell_ids = grid.table["source_cell_id"].combine_chunks()
     columns = (
         "cycle_ordinal", "row_id", "row_ordinal",
         "wbgt_status", "wbgt_c", "tg_status", "tg_c", "tnwb_status", "tnwb_c",
     )
     for item in _day_files(hsb_runs, current_date, implementation):
         for batch in iter_result_batches((item,), columns):
-            annotated = pa.RecordBatch.from_arrays(
-                [pa.array([item.run_id] * batch.num_rows), *batch.columns],
-                names=("run_id", *columns),
+            cells, hours, _, _ = _identity_batch(
+                batch,
+                source_cell_ids=source_cell_ids,
+                current_date=current_date,
             )
-            cells, hours, _, _, _ = _identity_batch(
-                annotated, lookup=lookup, current_date=current_date
-            )
-            values = {
-                quantity: np.asarray(
-                    batch.column(4 + index * 2).to_pylist(), dtype=np.float64
-                )
-                for index, quantity in enumerate(RESULT_QUANTITIES)
-            }
-            valid = {
-                quantity: (
-                    np.asarray(batch.column(3 + index * 2).to_pylist(), dtype=object)
-                    == "ok"
-                ) & np.isfinite(values[quantity])
-                for index, quantity in enumerate(RESULT_QUANTITIES)
-            }
+            values, valid = _quantity_values_and_validity(batch)
             any_valid = np.logical_or.reduce(tuple(valid.values()))
             if any_valid.any():
                 yield (
@@ -811,6 +1149,7 @@ def _wide_implementation_table(
 def _final_metadata(
     *,
     dates: tuple[date, ...],
+    implementations: tuple[str, ...],
     grid: CellGrid,
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
@@ -821,6 +1160,10 @@ def _final_metadata(
     mask_fingerprints: dict[str, object],
     masks_generated: int,
     masks_reused: int,
+    date_workers: int,
+    replay_workers: int,
+    mask_elapsed_seconds: float,
+    replay_elapsed_seconds: float,
     elapsed_seconds: float,
 ) -> dict[str, object]:
     return {
@@ -849,7 +1192,11 @@ def _final_metadata(
         ),
         "support_masks_generated_this_invocation": masks_generated,
         "support_masks_reused_this_invocation": masks_reused,
-        "implementations": list(EXPECTED_IMPLEMENTATIONS),
+        "date_workers_this_invocation": date_workers,
+        "replay_workers_this_invocation": replay_workers,
+        "mask_elapsed_seconds_this_invocation": mask_elapsed_seconds,
+        "replay_elapsed_seconds_this_invocation": replay_elapsed_seconds,
+        "implementations": list(implementations),
         "quantities": list(RESULT_QUANTITIES),
         "hours_per_day": HOURS_PER_DAY,
         "expected_observations_per_cell": len(dates) * HOURS_PER_DAY,

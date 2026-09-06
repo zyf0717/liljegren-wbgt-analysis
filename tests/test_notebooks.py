@@ -48,6 +48,8 @@ class NotebookMigrationTests(unittest.TestCase):
 
         self.assertIn("pyarrow.parquet", code)
         self.assertIn("pairwise_product_root", code)
+        self.assertIn("DEFAULT_PAIRWISE_OUTPUT_ROOT", code)
+        self.assertIn('quantity_order = ("wbgt", "tnwb", "tg")', code)
         self.assertIn("combinations(implementations, 2)", code)
         self.assertNotIn("EXPECTED_IMPLEMENTATION", code)
         self.assertNotIn("duckdb", code.casefold())
@@ -60,12 +62,34 @@ class NotebookMigrationTests(unittest.TestCase):
         self.assertIn("pending_dates", code)
         self.assertIn("replace_existing_output = False", code)
 
+    def test_joint_cellwise_notebook_uses_parallel_safe_defaults(self) -> None:
+        code = _code("11-cellwise-temperature-quantiles.ipynb")
+
+        self.assertIn("DATE_WORKERS = DEFAULT_DATE_WORKERS", code)
+        self.assertIn("REPLAY_WORKERS = DEFAULT_REPLAY_WORKERS", code)
+        self.assertIn("REPLACE_EXISTING_OUTPUT = False", code)
+        self.assertIn("IMPLEMENTATIONS = DEFAULT_JOINT_IMPLEMENTATIONS", code)
+        self.assertIn("DEFAULT_JOINT_OUTPUT_ROOT", code)
+
     def test_interactive_global_map_uses_equal_earth(self) -> None:
         code = _code("31-cellwise-quantile-spread.ipynb")
 
         self.assertIn("equal_earth_coordinates", code)
         self.assertIn("go.Scattergl", code)
+        self.assertIn("DEFAULT_QUANTILE_SPREAD_INPUT_ROOT", code)
+        self.assertIn("DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT", code)
         self.assertNotIn("x=longitude", code)
+
+    def test_cellwise_notebooks_do_not_use_legacy_output_paths(self) -> None:
+        code = "\n".join(
+            _code(name)
+            for name in (
+                "11-cellwise-temperature-quantiles.ipynb",
+                "31-cellwise-quantile-spread.ipynb",
+            )
+        )
+
+        self.assertNotIn("data/cellwise_temperature_quantiles", code)
 
     def test_era5_notebooks_use_current_run_contract(self) -> None:
         code = "\n".join(
