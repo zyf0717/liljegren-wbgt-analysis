@@ -9,7 +9,10 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis import extract_countries_observations, extract_country_observations
+from liljegren_analysis.country import (
+    extract_countries_observations,
+    extract_country_observations,
+)
 from liljegren_analysis.country.extraction import _parquet_may_overlap
 
 

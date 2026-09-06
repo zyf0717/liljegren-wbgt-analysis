@@ -58,6 +58,11 @@ joint-validity agreement filter.
 
 ## Annual pooling
 
+`analyze_yearly_pairwise()` reads a requested range of completed date
+partitions, checks pair and implementation coverage, and writes the pooled
+pairwise table, quantity coverage, metadata, and reference-comparison workbook.
+The CLI in `scripts/analyze_yearly_pairwise.py` is a thin wrapper over this API.
+
 For count (N), signed sum (S_1), squared sum (S_2), and absolute sum
 (S_A):
 

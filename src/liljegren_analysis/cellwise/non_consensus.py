@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import zip_longest
@@ -18,19 +17,26 @@ import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
 from ..comparison.config import EXPECTED_IMPLEMENTATIONS
+from ..io.artifacts import atomic_json as _atomic_json
+from ..io.artifacts import atomic_parquet as _atomic_parquet
+from ..io.artifacts import git_commit as _git_commit
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS
-from .grid import CellGrid, grid_from_source_cell_ids
-from .pipeline import (
-    _atomic_json,
-    _atomic_parquet,
-    _date_range,
-    _git_commit,
-    _hsb_run_paths,
-    _input_files,
-    _input_fingerprint,
-    _validate_canonical_run_inventory,
+from ._pipeline import (
+    date_range as _date_range,
 )
-
+from ._pipeline import (
+    hsb_run_paths as _hsb_run_paths,
+)
+from ._pipeline import (
+    input_files as _input_files,
+)
+from ._pipeline import (
+    input_fingerprint as _input_fingerprint,
+)
+from ._pipeline import (
+    validate_run_inventory as _validate_canonical_run_inventory,
+)
+from .grid import CellGrid, grid_from_source_cell_ids
 
 NON_CONSENSUS_SCHEMA_VERSION = 1
 DEFAULT_OUTPUT_ROOT = Path("data/cellwise_iso7243_non_consensus")
@@ -39,7 +45,11 @@ _COLUMNS = (
     "cycle_ordinal",
     "row_id",
     "row_ordinal",
-    *(column for spec in RESULT_QUANTITY_SPECS.values() for column in (spec.status_column, spec.value_column)),
+    *(
+        column
+        for spec in RESULT_QUANTITY_SPECS.values()
+        for column in (spec.status_column, spec.value_column)
+    ),
 )
 
 
@@ -80,7 +90,9 @@ def analyze_cellwise_iso7243_non_consensus(
         root / "metadata.json",
     )
     if not force and any(path.exists() for path in outputs.__dict__.values()):
-        raise FileExistsError(f"Non-consensus output already exists at {root}; pass force=True")
+        raise FileExistsError(
+            f"Non-consensus output already exists at {root}; pass force=True"
+        )
     files = {
         implementation: _input_files(hsb_runs, dates, implementation)
         for implementation in EXPECTED_IMPLEMENTATIONS
@@ -100,7 +112,11 @@ def analyze_cellwise_iso7243_non_consensus(
     non_consensus_counts = np.zeros(grid.cell_count, dtype=np.uint32)
     for current_date in dates:
         counts, non_consensus = _scan_day(
-            files_by_date[current_date], current_date, source_ids, grid.cell_count, thresholds
+            files_by_date[current_date],
+            current_date,
+            source_ids,
+            grid.cell_count,
+            thresholds,
         )
         joint_counts += counts
         non_consensus_counts += non_consensus
@@ -120,8 +136,12 @@ def analyze_cellwise_iso7243_non_consensus(
 def _build_grid(reference_files: tuple[Path, ...]) -> CellGrid:
     source_ids: set[str] = set()
     for path in reference_files:
-        for batch in pq.ParquetFile(path).iter_batches(columns=["row_id"], batch_size=BATCH_SIZE):
-            source_ids.update(pc.utf8_slice_codeunits(batch.column(0), 0, 28).to_pylist())
+        for batch in pq.ParquetFile(path).iter_batches(
+            columns=["row_id"], batch_size=BATCH_SIZE
+        ):
+            source_ids.update(
+                pc.utf8_slice_codeunits(batch.column(0), 0, 28).to_pylist()
+            )
     return grid_from_source_cell_ids(sorted(source_ids))
 
 
@@ -135,13 +155,13 @@ def _files_by_date(
         date_token = current_date.isoformat()
         grouped = {
             implementation: tuple(
-                path
-                for path in paths
-                if path.parents[2].name == date_token
+                path for path in paths if path.parents[2].name == date_token
             )
             for implementation, paths in files.items()
         }
-        reference_scopes = tuple(path.parents[1].name for path in grouped[EXPECTED_IMPLEMENTATIONS[0]])
+        reference_scopes = tuple(
+            path.parents[1].name for path in grouped[EXPECTED_IMPLEMENTATIONS[0]]
+        )
         if not reference_scopes or len(set(reference_scopes)) != len(reference_scopes):
             raise ValueError(f"Invalid implementation shard scopes on {current_date}")
         for implementation, paths in grouped.items():
@@ -180,15 +200,21 @@ def _scan_day(
             reference = aligned[EXPECTED_IMPLEMENTATIONS[0]]
             for implementation, batch in aligned.items():
                 if batch.num_rows != reference.num_rows:
-                    raise ValueError(f"Implementation batch sizes differ on {current_date}")
+                    raise ValueError(
+                        f"Implementation batch sizes differ on {current_date}"
+                    )
                 for column in ("cycle_ordinal", "row_id", "row_ordinal"):
                     if not batch.column(column).equals(reference.column(column)):
                         raise ValueError(
                             f"Implementation identity order differs for {implementation} on {current_date}"
                         )
-            cells, valid_identity = _cell_ids(reference.column("row_id"), source_ids, current_date)
+            cells, valid_identity = _cell_ids(
+                reference.column("row_id"), source_ids, current_date
+            )
             if not valid_identity:
-                raise ValueError(f"Malformed or unknown result identity on {current_date}")
+                raise ValueError(
+                    f"Malformed or unknown result identity on {current_date}"
+                )
             hours = _hours(reference.column("row_id"))
             if (hours > 23).any():
                 raise ValueError(f"Invalid hour identity on {current_date}")
@@ -197,12 +223,17 @@ def _scan_day(
                 raise ValueError(f"Duplicate cell/hour identity on {current_date}")
             seen[flat] = True
             valid = np.ones(reference.num_rows, dtype=bool)
-            classes = np.empty((len(EXPECTED_IMPLEMENTATIONS), reference.num_rows), dtype=np.uint8)
+            classes = np.empty(
+                (len(EXPECTED_IMPLEMENTATIONS), reference.num_rows), dtype=np.uint8
+            )
             for index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
                 batch = aligned[implementation]
                 for quantity in RESULT_QUANTITIES:
                     spec = RESULT_QUANTITY_SPECS[quantity]
-                    valid &= _valid_values(batch.column(spec.status_column), batch.column(spec.value_column))
+                    valid &= _valid_values(
+                        batch.column(spec.status_column),
+                        batch.column(spec.value_column),
+                    )
                 values = _floats(batch.column("wbgt_c"))
                 classes[index] = np.searchsorted(
                     thresholds, np.nan_to_num(values, nan=thresholds[0]), side="right"
@@ -213,11 +244,15 @@ def _scan_day(
     return joint_counts, non_consensus_counts
 
 
-def _cell_ids(row_ids: pa.Array, source_ids: pa.Array, current_date: date) -> tuple[np.ndarray, bool]:
+def _cell_ids(
+    row_ids: pa.Array, source_ids: pa.Array, current_date: date
+) -> tuple[np.ndarray, bool]:
     if not pc.all(pc.equal(pc.utf8_length(row_ids), 39)).as_py():
         return np.empty(0, dtype=np.int64), False
     date_token = current_date.strftime("%Y%m%d")
-    if not pc.all(pc.equal(pc.utf8_slice_codeunits(row_ids, 29, 37), date_token)).as_py():
+    if not pc.all(
+        pc.equal(pc.utf8_slice_codeunits(row_ids, 29, 37), date_token)
+    ).as_py():
         return np.empty(0, dtype=np.int64), False
     indices = pc.index_in(pc.utf8_slice_codeunits(row_ids, 0, 28), value_set=source_ids)
     if indices.null_count:
@@ -297,7 +332,9 @@ def _write_outputs(
 
 def _atomic_text(value: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
     temporary_path = Path(temporary)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

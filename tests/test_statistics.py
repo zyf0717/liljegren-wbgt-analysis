@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from liljegren_analysis import (
+from liljegren_analysis.comparison import (
     histogram_quantiles,
     histogram_quantile_statistics,
     pooled_area_weighted_difference_statistics,

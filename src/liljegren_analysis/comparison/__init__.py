@@ -20,20 +20,32 @@ from .statistics import (
     pooled_difference_statistics,
     pooled_sufficient_statistics,
 )
+from .workflows import run_daily_pairwise
+from .yearly import (
+    STATISTIC_SPECS,
+    YearlyPairwiseOutputs,
+    analyze_yearly_pairwise,
+    pairwise_matrices,
+)
 
 __all__ = [
-    "DailyPairwiseSummaries",
     "DEFAULT_PAIRWISE_OUTPUT_ROOT",
-    "compute_daily_pairwise",
+    "STATISTIC_SPECS",
+    "DailyPairwiseSummaries",
+    "YearlyPairwiseOutputs",
+    "analyze_yearly_pairwise",
     "completed_pairwise_dates",
+    "compute_daily_pairwise",
     "histogram_quantile_bin_indices",
     "histogram_quantile_statistics",
     "histogram_quantiles",
     "initialize_pairwise_output",
+    "pairwise_matrices",
     "pairwise_metadata",
     "pairwise_product_root",
     "persist_daily_pairwise",
     "pooled_area_weighted_difference_statistics",
     "pooled_difference_statistics",
     "pooled_sufficient_statistics",
+    "run_daily_pairwise",
 ]

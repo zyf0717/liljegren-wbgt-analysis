@@ -23,7 +23,6 @@ def main() -> None:
         "--output-root",
         type=Path,
     )
-    parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--quantity", choices=("wbgt", "tg", "tnwb"), default="wbgt")
     parser.add_argument(
         "--weighting", choices=("none", "geometry", "population"), default="geometry"
@@ -34,7 +33,6 @@ def main() -> None:
         arguments.input_root,
         output_root=arguments.output_root,
         quantity=arguments.quantity,
-        sample_size=arguments.sample_size,
         weighting=arguments.weighting,
         **(
             {"population_weights_path": arguments.population_weights_path}

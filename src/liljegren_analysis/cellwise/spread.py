@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -17,6 +14,9 @@ import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..comparison.config import REFERENCE_IMPLEMENTATION
+from ..io.artifacts import atomic_json as _atomic_json
+from ..io.artifacts import atomic_parquet as _atomic_parquet
+from ..io.artifacts import git_commit as _git_commit
 from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
 from .paths import (
     DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
@@ -54,10 +54,9 @@ def analyze_cellwise_quantile_spread(
     *,
     output_root: str | Path | None = None,
     quantity: ResultQuantity = "wbgt",
-    sample_size: int = 100,
-    sample_seed: int = 0,
     weighting: Weighting = "geometry",
-    population_weights_path: str | Path = DEFAULT_POPULATION_OUTPUT_ROOT / "population.parquet",
+    population_weights_path: str | Path = DEFAULT_POPULATION_OUTPUT_ROOT
+    / "population.parquet",
 ) -> QuantileSpreadOutputs:
     """Analyze one temperature's cross-implementation spread from Parquet only."""
 
@@ -69,17 +68,14 @@ def analyze_cellwise_quantile_spread(
     )
     if quantity not in RESULT_QUANTITIES:
         raise ValueError(f"Unsupported result quantity: {quantity}")
-    if sample_size < 1:
-        raise ValueError("sample_size must be positive")
     if weighting not in ("none", "geometry", "population"):
         raise ValueError(f"Unsupported weighting: {weighting}")
     source_metadata = _load_source_metadata(source_root)
     implementations = _metadata_implementations(source_metadata)
     if REFERENCE_IMPLEMENTATION not in implementations:
-        raise ValueError(f"Reference implementation is absent: {REFERENCE_IMPLEMENTATION}")
-    joint_schema = source_metadata.get("schema_version") == 2
-    if not joint_schema and quantity != "wbgt":
-        raise ValueError("Legacy cellwise products contain WBGT only")
+        raise ValueError(
+            f"Reference implementation is absent: {REFERENCE_IMPLEMENTATION}"
+        )
     minimum_c, maximum_c, width_c = _histogram_bounds(source_metadata)
     grid = pq.read_table(source_root / "grid.parquet")
     cell_ids = _integer_column(grid, "cell_id")
@@ -97,25 +93,10 @@ def analyze_cellwise_quantile_spread(
         minimum_c=minimum_c,
         maximum_c=maximum_c,
         quantity=quantity,
-        joint_schema=joint_schema,
         implementations=implementations,
     )
     if not common.any():
         raise ValueError("No complete-case cells across all implementations")
-    if not joint_schema and not np.isclose(
-        canonical_weights[common].sum(), canonical_weights.sum(), rtol=1e-12
-    ):
-        raise ValueError("Complete-case weight differs from the canonical retained grid")
-    _spot_check_sources(
-        source_root,
-        source_tables,
-        cell_ids,
-        common,
-        sample_size,
-        sample_seed,
-        quantity=quantity,
-        joint_schema=joint_schema,
-    )
 
     ids = cell_ids[common]
     latitudes = latitude[common]
@@ -162,7 +143,7 @@ def analyze_cellwise_quantile_spread(
             "temperature_bin_max_c": maximum_c,
             "temperature_bin_width_c": width_c,
             "quantity": quantity,
-            "support_scope": source_metadata.get("support_scope", "implementation-native"),
+            "support_scope": source_metadata["support_scope"],
             "percentiles": list(PERCENTILES),
             "implementations": list(implementations),
             "complete_case_cell_count": len(ids),
@@ -171,7 +152,9 @@ def analyze_cellwise_quantile_spread(
             "weight_source": weight_source,
             "weight_sum": float(weights.sum()),
             "canonical_weight_sum": float(canonical_weights.sum()),
-            "complete_case_weight_fraction": float(weights.sum() / canonical_weights.sum()),
+            "complete_case_weight_fraction": float(
+                weights.sum() / canonical_weights.sum()
+            ),
             **(
                 {
                     "area_weight_sum": float(weights.sum()),
@@ -183,8 +166,6 @@ def analyze_cellwise_quantile_spread(
                 if weighting == "geometry"
                 else {}
             ),
-            "sample_size": min(sample_size, len(ids)),
-            "sample_seed": sample_seed,
             "primary_map_metric": _primary_map_metric(summary),
             "spread_map_color_limits_c": list(SPREAD_MAP_COLOR_LIMITS_C),
             "git_commit": _git_commit(),
@@ -192,7 +173,12 @@ def analyze_cellwise_quantile_spread(
         metadata_path,
     )
     return QuantileSpreadOutputs(
-        cellwise_path, summary_path, anchor_path, extrema_path, metadata_path, figure_directory
+        cellwise_path,
+        summary_path,
+        anchor_path,
+        extrema_path,
+        metadata_path,
+        figure_directory,
     )
 
 
@@ -201,6 +187,10 @@ def _load_source_metadata(root: Path) -> dict[str, object]:
     if not path.is_file():
         raise FileNotFoundError(f"Missing cellwise metadata: {path}")
     metadata = json.loads(path.read_text())
+    if metadata.get("schema_version") != 2:
+        raise ValueError("Unsupported cellwise input schema")
+    if metadata.get("support_scope") != "all-implementations-all-quantities":
+        raise ValueError("Unsupported cellwise support scope")
     if metadata.get("probabilities") != [0.5, 0.9, 0.95, 0.99]:
         raise ValueError("Cellwise input metadata lacks the required quantiles")
     _metadata_implementations(metadata)
@@ -224,8 +214,7 @@ def _metadata_implementations(metadata: dict[str, object]) -> tuple[str, ...]:
 
 
 def _histogram_bounds(metadata: dict[str, object]) -> tuple[float, float, float]:
-    prefix = "temperature" if "temperature_bin_min_c" in metadata else "wbgt"
-    keys = tuple(f"{prefix}_bin_{suffix}_c" for suffix in ("min", "max", "width"))
+    keys = tuple(f"temperature_bin_{suffix}_c" for suffix in ("min", "max", "width"))
     if any(key not in metadata for key in keys):
         raise ValueError(f"Cellwise input metadata is missing histogram bounds: {keys}")
     minimum, maximum, width = (float(metadata[key]) for key in keys)
@@ -241,13 +230,12 @@ def _load_quantile_tables(
     minimum_c: float,
     maximum_c: float,
     quantity: ResultQuantity,
-    joint_schema: bool,
     implementations: tuple[str, ...],
 ) -> tuple[dict[str, dict[str, np.ndarray]], np.ndarray]:
     tables: dict[str, dict[str, np.ndarray]] = {}
     common = np.ones(len(cell_ids), dtype=bool)
-    prefix = f"{quantity}_" if joint_schema else ""
-    count_column = "n_joint" if joint_schema else "n_valid"
+    prefix = f"{quantity}_"
+    count_column = "n_joint"
     columns = [
         "cell_id",
         count_column,
@@ -261,9 +249,9 @@ def _load_quantile_tables(
         if not np.array_equal(_integer_column(table, "cell_id"), cell_ids):
             raise ValueError(f"Cell universe/order differs for {implementation}")
         values: dict[str, np.ndarray] = {
-            "n_valid": _integer_column(table, count_column)
+            "n_joint": _integer_column(table, count_column)
         }
-        active = values["n_valid"] > 0
+        active = values["n_joint"] > 0
         for percentile in PERCENTILES:
             estimate = _float_column(table, f"{prefix}{percentile}_c")
             lower = _float_column(table, f"{prefix}{percentile}_lower_c")
@@ -283,15 +271,19 @@ def _load_quantile_tables(
                 (estimate[active] >= minimum_c).all()
                 and (estimate[active] < maximum_c).all()
             ):
-                raise ValueError(f"{implementation} {percentile} falls outside histogram bounds")
+                raise ValueError(
+                    f"{implementation} {percentile} falls outside histogram bounds"
+                )
             if not (
                 (lower[active] <= estimate[active]).all()
                 and (estimate[active] < upper[active]).all()
             ):
-                raise ValueError(f"{implementation} {percentile} has invalid containing bounds")
+                raise ValueError(
+                    f"{implementation} {percentile} has invalid containing bounds"
+                )
             values[percentile] = estimate
             common &= np.isfinite(estimate) & np.isfinite(lower) & np.isfinite(upper)
-        common &= values["n_valid"] > 0
+        common &= values["n_joint"] > 0
         tables[implementation] = values
     return tables, common
 
@@ -304,7 +296,9 @@ def _area_weights(source_cell_ids: list[str]) -> np.ndarray:
             strict=True,
         )
     )
-    result = np.asarray([weights.get(value[12:19], np.nan) for value in source_cell_ids])
+    result = np.asarray(
+        [weights.get(value[12:19], np.nan) for value in source_cell_ids]
+    )
     if not np.isfinite(result).all() or (result <= 0).any():
         raise ValueError("Canonical grid has invalid ERA5 latitude area weights")
     return result
@@ -333,59 +327,41 @@ def _weights(
     lookup = dict(zip(population_ids, population, strict=True))
     weights = np.asarray([lookup.get(cell_id, np.nan) for cell_id in source_cell_ids])
     if not np.isfinite(weights).all() or (weights < 0.0).any():
-        raise ValueError("Population weights are missing or invalid for the analysis grid")
+        raise ValueError(
+            "Population weights are missing or invalid for the analysis grid"
+        )
     return weights, str(path)
 
 
-def _spot_check_sources(
-    root: Path,
-    tables: dict[str, dict[str, np.ndarray]],
-    cell_ids: np.ndarray,
-    common: np.ndarray,
-    sample_size: int,
-    seed: int,
-    *,
-    quantity: ResultQuantity,
-    joint_schema: bool,
-) -> None:
-    prefix = f"{quantity}_" if joint_schema else ""
-    selected = np.random.default_rng(seed).choice(np.flatnonzero(common), min(sample_size, int(common.sum())), replace=False)
-    for implementation, table in tables.items():
-        source = pq.read_table(
-            root / "implementations" / f"{implementation}.parquet",
-            columns=[
-                "cell_id", *(f"{prefix}{percentile}_c" for percentile in PERCENTILES)
-            ],
-        )
-        if not np.array_equal(_integer_column(source, "cell_id")[selected], cell_ids[selected]):
-            raise ValueError(f"Source cell ID spot check failed for {implementation}")
-        for percentile in PERCENTILES:
-            if not np.array_equal(
-                _float_column(source, f"{prefix}{percentile}_c")[selected],
-                table[percentile][selected],
-            ):
-                raise ValueError(f"Source percentile spot check failed for {implementation} {percentile}")
-
-
 def _cellwise_table(
-    cell_ids: np.ndarray, latitude: np.ndarray, longitude: np.ndarray, weights: np.ndarray,
+    cell_ids: np.ndarray,
+    latitude: np.ndarray,
+    longitude: np.ndarray,
+    weights: np.ndarray,
     values: dict[str, dict[str, np.ndarray]],
     implementations: tuple[str, ...],
 ) -> tuple[pa.Table, dict[str, np.ndarray]]:
     columns: dict[str, pa.Array] = {
-        "cell_id": pa.array(cell_ids, type=pa.int64()), "latitude": pa.array(latitude),
-        "longitude": pa.array(longitude), "weight": pa.array(weights),
+        "cell_id": pa.array(cell_ids, type=pa.int64()),
+        "latitude": pa.array(latitude),
+        "longitude": pa.array(longitude),
+        "weight": pa.array(weights),
     }
     metrics: dict[str, np.ndarray] = {}
     for implementation in implementations:
         prefix = implementation.replace("-", "_")
         for percentile in PERCENTILES:
-            columns[f"q_{prefix}_{percentile}_c"] = pa.array(values[implementation][percentile])
+            columns[f"q_{prefix}_{percentile}_c"] = pa.array(
+                values[implementation][percentile]
+            )
     for percentile in PERCENTILES:
         matrix = np.column_stack([values[name][percentile] for name in implementations])
         minimum_index, maximum_index = matrix.argmin(axis=1), matrix.argmax(axis=1)
         metric = f"spread_{percentile}_c"
-        spread = matrix[np.arange(len(matrix)), maximum_index] - matrix[np.arange(len(matrix)), minimum_index]
+        spread = (
+            matrix[np.arange(len(matrix)), maximum_index]
+            - matrix[np.arange(len(matrix)), minimum_index]
+        )
         if (spread < 0).any():
             raise ValueError(f"Negative {metric}")
         metrics[metric] = spread
@@ -402,10 +378,15 @@ def _cellwise_table(
 def _global_summary(metrics: dict[str, np.ndarray], weights: np.ndarray) -> pa.Table:
     rows: list[dict[str, object]] = []
     for metric, values in metrics.items():
-        row: dict[str, object] = {"metric": metric, **_weighted_statistics(values, weights)}
+        row: dict[str, object] = {
+            "metric": metric,
+            **_weighted_statistics(values, weights),
+        }
         if metric.startswith("spread_"):
             for threshold in (0.1, 0.2, 0.5, 1.0):
-                row[f"weight_fraction_gt_{str(threshold).replace('.', '_')}_c"] = float(weights[values > threshold].sum() / weights.sum())
+                row[f"weight_fraction_gt_{str(threshold).replace('.', '_')}_c"] = float(
+                    weights[values > threshold].sum() / weights.sum()
+                )
         rows.append(row)
     return pa.Table.from_pylist(rows)
 
@@ -421,10 +402,18 @@ def _weighted_statistics(values: np.ndarray, weights: np.ndarray) -> dict[str, f
     }
 
 
-def _weighted_quantile(values: np.ndarray, weights: np.ndarray, probability: float) -> float:
+def _weighted_quantile(
+    values: np.ndarray, weights: np.ndarray, probability: float
+) -> float:
     order = np.argsort(values, kind="stable")
     cumulative = np.cumsum(weights[order])
-    return float(values[order[np.searchsorted(cumulative, probability * cumulative[-1], side="left")]])
+    return float(
+        values[
+            order[
+                np.searchsorted(cumulative, probability * cumulative[-1], side="left")
+            ]
+        ]
+    )
 
 
 def _c_anchor_summary(
@@ -442,16 +431,22 @@ def _c_anchor_summary(
                 - values[REFERENCE_IMPLEMENTATION][percentile]
             )
             absolute = np.abs(difference)
-            rows.append({
-                "implementation": implementation,
-                "anchor_implementation": REFERENCE_IMPLEMENTATION,
-                "percentile": percentile,
-                "weighted_bias_c": float(np.average(difference, weights=weights)),
-                "weighted_mae_c": float(np.average(absolute, weights=weights)),
-                "weighted_rmse_c": float(np.sqrt(np.average(np.square(difference), weights=weights))),
-                "weighted_p95_absolute_difference_c": _weighted_quantile(absolute, weights, 0.95),
-                "maximum_absolute_difference_c": float(absolute.max()),
-            })
+            rows.append(
+                {
+                    "implementation": implementation,
+                    "anchor_implementation": REFERENCE_IMPLEMENTATION,
+                    "percentile": percentile,
+                    "weighted_bias_c": float(np.average(difference, weights=weights)),
+                    "weighted_mae_c": float(np.average(absolute, weights=weights)),
+                    "weighted_rmse_c": float(
+                        np.sqrt(np.average(np.square(difference), weights=weights))
+                    ),
+                    "weighted_p95_absolute_difference_c": _weighted_quantile(
+                        absolute, weights, 0.95
+                    ),
+                    "maximum_absolute_difference_c": float(absolute.max()),
+                }
+            )
     return pa.Table.from_pylist(rows)
 
 
@@ -463,9 +458,20 @@ def _extrema_frequency(
         minimum = cellwise[f"min_implementation_{percentile}"].to_pylist()
         maximum = cellwise[f"max_implementation_{percentile}"].to_pylist()
         for implementation in implementations:
-            rows.append({"percentile": percentile, "implementation": implementation,
-                         "weight_fraction_argmin": float(weights[np.asarray(minimum) == implementation].sum() / weights.sum()),
-                         "weight_fraction_argmax": float(weights[np.asarray(maximum) == implementation].sum() / weights.sum())})
+            rows.append(
+                {
+                    "percentile": percentile,
+                    "implementation": implementation,
+                    "weight_fraction_argmin": float(
+                        weights[np.asarray(minimum) == implementation].sum()
+                        / weights.sum()
+                    ),
+                    "weight_fraction_argmax": float(
+                        weights[np.asarray(maximum) == implementation].sum()
+                        / weights.sum()
+                    ),
+                }
+            )
     return pa.Table.from_pylist(rows)
 
 
@@ -484,6 +490,7 @@ def _write_figures(
     weighting: Weighting,
 ) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -502,7 +509,9 @@ def _write_figures(
         ("weighted_mean_c", f"{weight_label} mean"),
         ("weighted_p95_c", f"{weight_label} P95"),
     ):
-        axis.plot(x, [summary[column][row].as_py() for row in rows], marker="o", label=label)
+        axis.plot(
+            x, [summary[column][row].as_py() for row in rows], marker="o", label=label
+        )
     label = RESULT_QUANTITY_SPECS[quantity].label
     axis.set(
         xlabel="Percentile",
@@ -518,6 +527,7 @@ def _write_figures(
 
 def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -544,42 +554,19 @@ def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
         axis.set_title(f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)")
         figure.colorbar(image, ax=axis, label="Spread (°C)")
         for suffix in ("png", "pdf"):
-            figure.savefig(directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220)
+            figure.savefig(
+                directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220
+            )
         plt.close(figure)
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.int64)
+    return np.asarray(
+        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.int64
+    )
 
 
 def _float_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.float64)
-
-
-def _atomic_parquet(table: pa.Table, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    os.close(descriptor)
-    temporary_path = Path(temporary)
-    try:
-        pq.write_table(table, temporary_path, compression="zstd")
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _atomic_json(value: dict[str, object], path: Path) -> None:
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _git_commit() -> str | None:
-    completed = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-    return completed.stdout.strip() if completed.returncode == 0 else None
+    return np.asarray(
+        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.float64
+    )

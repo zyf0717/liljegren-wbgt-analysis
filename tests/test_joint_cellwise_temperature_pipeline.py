@@ -13,6 +13,7 @@ from liljegren_analysis.cellwise import (
     analyze_cellwise_quantile_spread,
     compute_joint_cellwise_temperature_quantiles,
 )
+from liljegren_analysis.cellwise.joint_pipeline import _open_manifest
 from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
@@ -54,9 +55,17 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
                     ],
                     "row_ordinal": pa.array([0, 1, 2], type=pa.uint32()),
                     "wbgt_status": wbgt_status,
-                    "wbgt_c": [20.0 + day + offset, 30.0 + day + offset, 40.0 + day + offset],
+                    "wbgt_c": [
+                        20.0 + day + offset,
+                        30.0 + day + offset,
+                        40.0 + day + offset,
+                    ],
                     "tg_status": ["ok", "ok", "ok"],
-                    "tg_c": [30.0 + day + offset, 40.0 + day + offset, 50.0 + day + offset],
+                    "tg_c": [
+                        30.0 + day + offset,
+                        40.0 + day + offset,
+                        50.0 + day + offset,
+                    ],
                     "tnwb_status": ["ok", "ok", "ok"],
                     "tnwb_c": pa.array(tnwb_values, type=pa.float64()),
                 }
@@ -66,6 +75,17 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
 
 
 class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
+    def test_old_replay_manifest_is_not_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = {"schema_version": 2, "replay_strategy": "current"}
+            (root / "manifest.json").write_text(
+                json.dumps({"schema_version": 2, "unit_provenance": {}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                _open_manifest(root / "manifest.json", expected, root / "metadata.json")
+
     def test_default_targets_match_report_scope(self) -> None:
         self.assertEqual(
             DEFAULT_JOINT_IMPLEMENTATIONS,
@@ -120,9 +140,7 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             heatstress = pq.read_table(
                 output / "implementations" / "heatstress.parquet"
             )
-            meteor = pq.read_table(
-                output / "implementations" / "meteor.parquet"
-            )
+            meteor = pq.read_table(output / "implementations" / "meteor.parquet")
             self.assertEqual(heatstress["wbgt_native_valid_n"].to_pylist(), [2, 2, 2])
             self.assertEqual(meteor["wbgt_native_valid_n"].to_pylist(), [2, 2, 0])
             self.assertEqual(meteor["tg_native_valid_n"].to_pylist(), [2, 2, 2])
@@ -140,7 +158,8 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             )
             self.assertEqual(metadata["quantities"], ["wbgt", "tg", "tnwb"])
             self.assertEqual(
-                metadata["replay_strategy"], "implementation-all-quantities-in-memory-v3"
+                metadata["replay_strategy"],
+                "implementation-all-quantities-in-memory-v3",
             )
             self.assertEqual(metadata["joint_observation_count"], 3)
             self.assertEqual(metadata["cells_with_joint_observations"], 2)
@@ -160,7 +179,6 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 output,
                 output_root=root / "tg-analysis",
                 quantity="tg",
-                sample_size=2,
             )
             spread_metadata = json.loads(spread.metadata.read_text())
             self.assertEqual(spread_metadata["quantity"], "tg")
@@ -186,10 +204,7 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             root = Path(temporary)
             hsb_run = root / "hsb-run"
             _write_joint_day(hsb_run, "2025-01-01", 1)
-            path = (
-                hsb_run
-                / "results/2025-01-01/0001/heatstress/results.parquet"
-            )
+            path = hsb_run / "results/2025-01-01/0001/heatstress/results.parquet"
             table = pq.read_table(path)
             pq.write_table(pa.concat_tables([table, table.slice(0, 1)]), path)
 

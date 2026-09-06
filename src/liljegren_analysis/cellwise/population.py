@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import rasterio
 from rasterio.windows import Window
 
+from ..io.artifacts import atomic_json as _atomic_json
+from ..io.artifacts import atomic_parquet as _atomic_parquet
 
 ERA5_SPACING_DEGREES = 0.25
 LANDSCAN_RESOLUTION_DEGREES = 1.0 / 120.0
@@ -110,10 +108,29 @@ def _validate_landscan_raster(source: rasterio.io.DatasetReader) -> None:
     if source.crs is None or source.crs.to_epsg() != 4326:
         raise ValueError("LandScan raster must use EPSG:4326")
     transform = source.transform
-    expected = (LANDSCAN_RESOLUTION_DEGREES, 0.0, -180.0, 0.0, -LANDSCAN_RESOLUTION_DEGREES, 90.0)
-    actual = (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f)
-    if not all(math.isclose(left, right, abs_tol=1e-10) for left, right in zip(actual, expected)):
-        raise ValueError("LandScan raster transform is not the expected global 30-arc-second grid")
+    expected = (
+        LANDSCAN_RESOLUTION_DEGREES,
+        0.0,
+        -180.0,
+        0.0,
+        -LANDSCAN_RESOLUTION_DEGREES,
+        90.0,
+    )
+    actual = (
+        transform.a,
+        transform.b,
+        transform.c,
+        transform.d,
+        transform.e,
+        transform.f,
+    )
+    if not all(
+        math.isclose(left, right, abs_tol=1e-10)
+        for left, right in zip(actual, expected)
+    ):
+        raise ValueError(
+            "LandScan raster transform is not the expected global 30-arc-second grid"
+        )
     if source.nodata != LANDSCAN_NODATA:
         raise ValueError(f"LandScan raster nodata must be {LANDSCAN_NODATA}")
 
@@ -174,39 +191,6 @@ def _source_cell_id(latitude_units: int, longitude_units: int) -> str:
         f"era5-global-{latitude_hemisphere}{abs(latitude_units):06d}-"
         f"{longitude_hemisphere}{abs(longitude_units):07d}"
     )
-
-
-def _atomic_parquet(table: pa.Table, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    os.close(descriptor)
-    temporary_path = Path(temporary_name)
-    try:
-        pq.write_table(table, temporary_path, compression="zstd")
-        with temporary_path.open("rb") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _atomic_json(value: dict[str, object], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:

@@ -1,6 +1,5 @@
 """Streaming cellwise temporal temperature distribution summaries."""
 
-from .pipeline import compute_cellwise_wbgt_quantiles
 from .joint_pipeline import (
     DEFAULT_DATE_WORKERS,
     DEFAULT_JOINT_IMPLEMENTATIONS,
@@ -44,7 +43,6 @@ __all__ = [
     "DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT",
     "DEFAULT_REPLAY_WORKERS",
     "analyze_cellwise_quantile_spread",
-    "compute_cellwise_wbgt_quantiles",
     "compute_joint_cellwise_temperature_quantiles",
     "compute_era5_population_weights",
     "analyze_cellwise_iso7243_classification",

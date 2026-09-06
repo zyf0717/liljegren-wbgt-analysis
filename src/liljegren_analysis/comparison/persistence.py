@@ -14,6 +14,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..io.artifacts import atomic_json as _atomic_json
 from ..results import RESULT_SCHEMA_ID
 from .config import (
     DEFAULT_PAIRWISE_IMPLEMENTATIONS,
@@ -23,24 +24,49 @@ from .config import (
 )
 from .distributions import ABS_HISTOGRAM_VERSION
 
-
 _TABLE_COLUMNS = {
     "pairwise": (
-        "result_date", "quantity", "implementation_a", "implementation_b", "n",
-        "sum_difference_c", "sum_squared_difference_c2", "sum_absolute_difference_c",
-        "min_difference_c", "max_difference_c", "max_absolute_difference_c", "area_weight_sum",
-        "area_weighted_difference_sum_c", "area_weighted_squared_difference_sum_c2",
-        "area_weighted_absolute_difference_sum_c", "n_absolute_difference_gt_0_1_c",
-        "n_absolute_difference_gt_0_2_c", "n_absolute_difference_gt_0_5_c",
-        "area_weight_absolute_difference_gt_0_1_c", "area_weight_absolute_difference_gt_0_2_c",
+        "result_date",
+        "quantity",
+        "implementation_a",
+        "implementation_b",
+        "n",
+        "sum_difference_c",
+        "sum_squared_difference_c2",
+        "sum_absolute_difference_c",
+        "min_difference_c",
+        "max_difference_c",
+        "max_absolute_difference_c",
+        "area_weight_sum",
+        "area_weighted_difference_sum_c",
+        "area_weighted_squared_difference_sum_c2",
+        "area_weighted_absolute_difference_sum_c",
+        "n_absolute_difference_gt_0_1_c",
+        "n_absolute_difference_gt_0_2_c",
+        "n_absolute_difference_gt_0_5_c",
+        "area_weight_absolute_difference_gt_0_1_c",
+        "area_weight_absolute_difference_gt_0_2_c",
         "area_weight_absolute_difference_gt_0_5_c",
     ),
     "abs_histogram": (
-        "result_date", "quantity", "implementation_a", "implementation_b", "abs_bin_id",
-        "abs_bin_lower_c", "abs_bin_upper_c", "n", "area_weight_sum",
+        "result_date",
+        "quantity",
+        "implementation_a",
+        "implementation_b",
+        "abs_bin_id",
+        "abs_bin_lower_c",
+        "abs_bin_upper_c",
+        "n",
+        "area_weight_sum",
     ),
     "quantity_status": (
-        "result_date", "quantity", "implementation", "status", "value_present", "n", "area_weight_sum",
+        "result_date",
+        "quantity",
+        "implementation",
+        "status",
+        "value_present",
+        "n",
+        "area_weight_sum",
     ),
 }
 PAIRWISE_SCHEMA_VERSION = 7
@@ -143,7 +169,10 @@ def persist_date_partitions(
             filename = f"{name}.parquet"
             pq.write_table(table, temporary / filename, compression="zstd")
             filenames.append(filename)
-        _atomic_json({"result_date": result_date.isoformat(), "files": filenames}, temporary / "manifest.json")
+        _atomic_json(
+            {"result_date": result_date.isoformat(), "files": filenames},
+            temporary / "manifest.json",
+        )
         backup = dates / f".{result_date.isoformat()}.{uuid.uuid4().hex}.old"
         if destination.exists():
             os.replace(destination, backup)
@@ -185,7 +214,9 @@ def _validate_cross_table_totals(tables: dict[str, pa.Table]) -> None:
             raise ValueError("Daily histogram totals differ from pairwise totals")
     by_pair: dict[tuple[str, str], list[tuple[int, float]]] = {}
     for row in totals.values():
-        by_pair.setdefault((row["implementation_a"], row["implementation_b"]), []).append((row["n"], row["area_weight_sum"]))
+        by_pair.setdefault(
+            (row["implementation_a"], row["implementation_b"]), []
+        ).append((row["n"], row["area_weight_sum"]))
     if any(
         len({count for count, _ in rows}) != 1
         or not np.allclose(
@@ -199,7 +230,9 @@ def _validate_cross_table_totals(tables: dict[str, pa.Table]) -> None:
         raise ValueError("Joint quantity populations differ across quantities")
     by_implementation: dict[str, list[tuple[int, float]]] = {}
     for row in tables["quantity_status"].to_pylist():
-        by_implementation.setdefault(row["implementation"], []).append((row["n"], row["area_weight_sum"], row["quantity"]))
+        by_implementation.setdefault(row["implementation"], []).append(
+            (row["n"], row["area_weight_sum"], row["quantity"])
+        )
     for rows in by_implementation.values():
         quantities: dict[str, tuple[int, float]] = {}
         for count, weight, quantity in rows:
@@ -244,17 +277,3 @@ def _validate_reset_target(path: Path) -> None:
     protected = {Path(path.anchor), Path.home().resolve(), Path.cwd().resolve()}
     if path in protected or path.parent == path:
         raise ValueError(f"Refusing to reset broad output path: {path}")
-
-
-def _atomic_json(value: dict[str, object], path: Path) -> None:
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)

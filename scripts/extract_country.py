@@ -7,12 +7,11 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from liljegren_analysis import (
+from liljegren_analysis.country import (
     CountryExtractionProgress,
     extract_countries_observations,
     extract_country_observations,
 )
-
 
 REPOSITORY = Path(__file__).parents[1]
 DEFAULT_RUNS = (

@@ -30,9 +30,11 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             (root / "metadata.json").write_text(
                 json.dumps(
                     {
-                        "wbgt_bin_min_c": -40.0,
-                        "wbgt_bin_max_c": 60.0,
-                        "wbgt_bin_width_c": 0.02,
+                        "schema_version": 2,
+                        "support_scope": "all-implementations-all-quantities",
+                        "temperature_bin_min_c": -40.0,
+                        "temperature_bin_max_c": 60.0,
+                        "temperature_bin_width_c": 0.02,
                         "probabilities": [0.5, 0.9, 0.95, 0.99],
                         "implementations": list(IMPLEMENTATIONS),
                         "histogram_version": 3,
@@ -42,7 +44,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             for index, implementation in enumerate(IMPLEMENTATIONS):
                 rows: dict[str, object] = {
                     "cell_id": [0, 1],
-                    "n_valid": [10, 10],
+                    "n_joint": [10, 10],
                 }
                 for percentile, base in (
                     ("p50", 25.0),
@@ -51,15 +53,15 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                     ("p99", 34.0),
                 ):
                     values = np.asarray([base + index, base + index + 0.5])
-                    rows[f"{percentile}_c"] = values
-                    rows[f"{percentile}_lower_c"] = values - 0.01
-                    rows[f"{percentile}_upper_c"] = values + 0.01
+                    rows[f"wbgt_{percentile}_c"] = values
+                    rows[f"wbgt_{percentile}_lower_c"] = values - 0.01
+                    rows[f"wbgt_{percentile}_upper_c"] = values + 0.01
                 pq.write_table(
                     pa.table(rows), implementation_root / f"{implementation}.parquet"
                 )
 
             output = analyze_cellwise_quantile_spread(
-                root, output_root=Path(temporary) / "analysis", sample_size=2
+                root, output_root=Path(temporary) / "analysis"
             )
 
             cellwise = pq.read_table(output.cellwise_spread)
@@ -97,7 +99,6 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             unweighted = analyze_cellwise_quantile_spread(
                 root,
                 output_root=Path(temporary) / "analysis-unweighted",
-                sample_size=2,
                 weighting="none",
             )
             self.assertEqual(
@@ -118,7 +119,6 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             population_weighted = analyze_cellwise_quantile_spread(
                 root,
                 output_root=Path(temporary) / "analysis-population",
-                sample_size=2,
                 weighting="population",
                 population_weights_path=population_path,
             )
@@ -126,6 +126,15 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
             population_metadata = json.loads(population_weighted.metadata.read_text())
             self.assertEqual(population_metadata["weighting"], "population")
+
+    def test_rejects_old_cellwise_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "metadata.json").write_text(
+                json.dumps({"schema_version": 1}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "Unsupported cellwise input schema"):
+                analyze_cellwise_quantile_spread(root)
 
 
 if __name__ == "__main__":

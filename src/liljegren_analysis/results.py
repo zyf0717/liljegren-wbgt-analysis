@@ -127,11 +127,9 @@ def validate_result_schema(schema: pa.Schema) -> None:
     }
     missing = required - set(fields)
     if missing:
-        legacy = {"status", "value_c"}.issubset(fields)
-        detail = " legacy status/value_c columns are unsupported" if legacy else ""
         raise ValueError(
             f"Unsupported result schema {RESULT_SCHEMA_ID}: "
-            f"missing columns {sorted(missing)};{detail}"
+            f"missing columns {sorted(missing)}"
         )
     invalid_status = {
         spec.status_column: str(fields[spec.status_column].type)

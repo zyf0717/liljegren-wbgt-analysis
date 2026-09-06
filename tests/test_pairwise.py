@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import polars as pl
 from polars.testing import assert_frame_equal
 
-from liljegren_analysis import (
+from liljegren_analysis.comparison import (
     completed_pairwise_dates,
     compute_daily_pairwise,
     initialize_pairwise_output,

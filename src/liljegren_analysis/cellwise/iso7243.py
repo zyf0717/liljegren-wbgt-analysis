@@ -15,8 +15,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..classification import class_definitions, validate_thresholds
+from ..io.artifacts import atomic_json as _atomic_json
+from ..io.artifacts import atomic_parquet as _atomic_parquet
 from .paths import DEFAULT_ISO7243_INPUT_ROOT, DEFAULT_ISO7243_OUTPUT_ROOT
-
 
 ISO7243_SCHEMA_VERSION = 1
 PERCENTILES = ("p50", "p90", "p95", "p99")
@@ -65,7 +66,9 @@ def analyze_cellwise_iso7243_classification(
             paths.metadata,
         )
     ):
-        raise FileExistsError(f"ISO 7243 output already exists at {root}; pass force=True")
+        raise FileExistsError(
+            f"ISO 7243 output already exists at {root}; pass force=True"
+        )
     thresholds = validate_thresholds(thresholds_c)
     metadata = _load_input_metadata(source_root)
     implementations = tuple(metadata["implementations"])
@@ -162,9 +165,7 @@ def _load_class_ids(
     implementations: tuple[str, ...],
 ) -> tuple[np.ndarray, np.ndarray]:
     count = len(cell_ids)
-    classes = np.empty(
-        (len(implementations), len(PERCENTILES), count), dtype=np.uint8
-    )
+    classes = np.empty((len(implementations), len(PERCENTILES), count), dtype=np.uint8)
     complete = np.ones(count, dtype=bool)
     minimum = float(metadata["temperature_bin_min_c"])
     maximum = float(metadata["temperature_bin_max_c"])
@@ -178,7 +179,9 @@ def _load_class_ids(
             )
         )
     for implementation_index, implementation in enumerate(implementations):
-        table = pq.read_table(root / "implementations" / f"{implementation}.parquet", columns=columns)
+        table = pq.read_table(
+            root / "implementations" / f"{implementation}.parquet", columns=columns
+        )
         if not np.array_equal(_integer_column(table, "cell_id"), cell_ids):
             raise ValueError(f"Cell universe/order differs for {implementation}")
         valid = _integer_column(table, "n_joint") > 0
@@ -229,20 +232,28 @@ def _write_pair_differences(
         with pq.ParquetWriter(temporary_path, schema, compression="zstd") as writer:
             for implementation_a in range(len(implementations)):
                 classes_a = classes[implementation_a]
-                for implementation_b in range(implementation_a + 1, len(implementations)):
+                for implementation_b in range(
+                    implementation_a + 1, len(implementations)
+                ):
                     classes_b = classes[implementation_b]
                     writer.write_table(
                         pa.table(
                             {
                                 "cell_id": pa.array(cell_ids, type=pa.int32()),
                                 "implementation_a_id": pa.array(
-                                    np.full(len(cell_ids), implementation_a, dtype=np.uint8)
+                                    np.full(
+                                        len(cell_ids), implementation_a, dtype=np.uint8
+                                    )
                                 ),
                                 "implementation_b_id": pa.array(
-                                    np.full(len(cell_ids), implementation_b, dtype=np.uint8)
+                                    np.full(
+                                        len(cell_ids), implementation_b, dtype=np.uint8
+                                    )
                                 ),
                                 "n_compared": pa.array(
-                                    np.full(len(cell_ids), len(PERCENTILES), dtype=np.uint8)
+                                    np.full(
+                                        len(cell_ids), len(PERCENTILES), dtype=np.uint8
+                                    )
                                 ),
                                 "n_higher": pa.array(
                                     (classes_a > classes_b).sum(axis=0).astype(np.uint8)
@@ -262,27 +273,15 @@ def _write_pair_differences(
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.int64)
+    return np.asarray(
+        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.int64
+    )
 
 
 def _float_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.float64)
-
-
-def _atomic_parquet(table: pa.Table, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    return np.asarray(
+        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.float64
     )
-    os.close(descriptor)
-    temporary_path = Path(temporary_name)
-    try:
-        pq.write_table(table, temporary_path, compression="zstd")
-        with temporary_path.open("rb") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
 
 
 def _atomic_csv(value: str, path: Path) -> None:
@@ -319,23 +318,6 @@ def _classes_csv(thresholds: tuple[float, ...]) -> str:
             )
         lines.append(f'{class_id},"{label}","{definition}"')
     return "\n".join(lines) + "\n"
-
-
-def _atomic_json(value: dict[str, object], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:

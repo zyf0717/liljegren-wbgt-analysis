@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis import compute_daily_pairwise
+from liljegren_analysis.comparison import compute_daily_pairwise
 from liljegren_analysis.comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 
 
