@@ -1,133 +1,81 @@
-from __future__ import annotations
-
 import json
-import tempfile
-import unittest
-from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from iso7243_fixtures import CELLS, write_days
+from liljegren_analysis.cellwise.iso7243 import analyze_cellwise_iso7243_classification
 from liljegren_analysis.cellwise.iso7243_plots import (
+    configure_percent_colorbar,
     plot_cellwise_iso7243_classification,
     summarize_cellwise_iso7243_classification,
 )
-from liljegren_analysis.comparison.config import (
-    EXPECTED_IMPLEMENTATION_PAIRS,
-    EXPECTED_IMPLEMENTATIONS,
-)
 
 
-class CellwiseISO7243PlotTests(unittest.TestCase):
-    def test_streamed_summary_and_figure_weightings(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "changes"
-            root.mkdir()
-            source_ids = [
-                "era5-global-n000000-e0000000",
-                "era5-global-n002500-e0000000",
-            ]
-            pq.write_table(
-                pa.table(
-                    {
-                        "cell_id": pa.array([0, 2], type=pa.int32()),
-                        "source_cell_id": source_ids,
-                        "latitude": [0.0, 0.25],
-                        "longitude": [0.0, 0.0],
-                    }
-                ),
-                root / "cell_lookup.parquet",
-            )
-            rows: list[dict[str, int]] = []
-            for implementation_a in range(len(EXPECTED_IMPLEMENTATIONS)):
-                for implementation_b in range(
-                    implementation_a + 1, len(EXPECTED_IMPLEMENTATIONS)
-                ):
-                    rows.extend(
-                        (
-                            {
-                                "cell_id": 0,
-                                "implementation_a_id": implementation_a,
-                                "implementation_b_id": implementation_b,
-                                "n_compared": 4,
-                                "n_higher": 1 if (implementation_a, implementation_b) == (0, 1) else 0,
-                                "n_lower": 1 if (implementation_a, implementation_b) == (0, 1) else 0,
-                            },
-                            {
-                                "cell_id": 2,
-                                "implementation_a_id": implementation_a,
-                                "implementation_b_id": implementation_b,
-                                "n_compared": 4,
-                                "n_higher": 0,
-                                "n_lower": 0,
-                            },
-                        )
-                    )
-            pq.write_table(pa.Table.from_pylist(rows), root / "cell_pair_differences.parquet")
-            (root / "metadata.json").write_text(
-                json.dumps(
-                    {
-                        "row_count": 2 * EXPECTED_IMPLEMENTATION_PAIRS,
-                        "implementation_pair_count": EXPECTED_IMPLEMENTATION_PAIRS,
-                        "quantiles": ["p50", "p90", "p95", "p99"],
-                        "implementation_ids": {
-                            name: index
-                            for index, name in enumerate(EXPECTED_IMPLEMENTATIONS)
-                        },
-                    }
-                )
-            )
-            population_path = Path(temporary) / "population.parquet"
-            pq.write_table(
-                pa.table(
-                    {
-                        "source_cell_id": source_ids,
-                        "population": pa.array([10, 0], type=pa.int64()),
-                    }
-                ),
-                population_path,
-            )
-
-            summary = summarize_cellwise_iso7243_classification(
-                root, population_weights_path=population_path
-            )
-            np.testing.assert_allclose(
-                summary.changed_fraction,
-                [1.0 / (2 * EXPECTED_IMPLEMENTATION_PAIRS), 0.0],
-            )
-            np.testing.assert_allclose(
-                summary.histogram_shares[0],
-                [
-                    (2 * EXPECTED_IMPLEMENTATION_PAIRS - 1)
-                    / (2 * EXPECTED_IMPLEMENTATION_PAIRS),
-                    0.0,
-                    1.0 / (2 * EXPECTED_IMPLEMENTATION_PAIRS),
-                    0.0,
-                    0.0,
-                ],
-            )
-            np.testing.assert_allclose(
-                summary.histogram_shares[2],
-                [
-                    (EXPECTED_IMPLEMENTATION_PAIRS - 1)
-                    / EXPECTED_IMPLEMENTATION_PAIRS,
-                    0.0,
-                    1.0 / EXPECTED_IMPLEMENTATION_PAIRS,
-                    0.0,
-                    0.0,
-                ],
-            )
-            np.testing.assert_allclose(summary.pair_changed_fraction[0], [0.5, 0.0])
-
-            outputs = plot_cellwise_iso7243_classification(
-                root,
-                output_directory=Path(temporary) / "figures",
-                population_weights_path=population_path,
-            )
-            self.assertGreater(outputs.png.stat().st_size, 0)
-            self.assertGreater(outputs.pairwise_png.stat().st_size, 0)
+def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
+    run = tmp_path / "run"
+    write_days(run, 12, complex_rows=False)
+    out = analyze_cellwise_iso7243_classification(
+        run, start_date="2025-01-01", end_date="2025-01-12",
+        thresholds_c=[25., 30.], output_root=tmp_path / "out", date_workers=1)
+    weights = tmp_path / "population.parquet"
+    pq.write_table(pa.table({"source_cell_id": CELLS, "population": [10, 0, 1000]}), weights)
+    summary = summarize_cellwise_iso7243_classification(
+        out.metadata.parent, population_weights_path=weights)
+    np.testing.assert_allclose(summary.changed_fraction, [1 / 3, 0, np.nan], equal_nan=True)
+    assert summary.histogram_shares.shape == (3, 20)
+    np.testing.assert_allclose(summary.histogram_shares.sum(axis=1), 1.)
+    # Five of fifteen pairs disagree for the first cell; unsupported third cell excluded.
+    assert summary.histogram_shares[0, -1] == pytest.approx(5 / 30)
+    assert summary.histogram_shares[2, -1] == pytest.approx(5 / 15)
+    np.testing.assert_allclose(summary.pair_changed_fraction[0], [1, 0, np.nan], equal_nan=True)
+    figures = plot_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    assert figures.png.stat().st_size > 0
+    assert figures.pairwise_png.stat().st_size > 0
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_legacy_product_rejected(tmp_path):
+    (tmp_path / "metadata.json").write_text(json.dumps({"quantiles": ["p50", "p90", "p95", "p99"]}))
+    with pytest.raises(ValueError, match="hourly"):
+        summarize_cellwise_iso7243_classification(tmp_path)
+
+
+def test_no_supported_cells_remain_undefined(tmp_path):
+    from iso7243_fixtures import NAMES
+    from liljegren_analysis.cellwise.non_consensus_plots import plot_cellwise_iso7243_non_consensus
+
+    run = tmp_path / "run"
+    write_days(run, 1)
+    path = run / "results/2025-01-01/0001" / NAMES[0] / "results.parquet"
+    table = pq.read_table(path)
+    table = table.set_column(table.schema.get_field_index("wbgt_status"), "wbgt_status",
+                             pa.array(["invalid"] * len(table)))
+    pq.write_table(table, path)
+    out = analyze_cellwise_iso7243_classification(
+        run, start_date="2025-01-01", end_date="2025-01-01",
+        thresholds_c=[25.], output_root=tmp_path / "out", date_workers=1)
+    weights = tmp_path / "population.parquet"
+    pq.write_table(pa.table({"source_cell_id": CELLS, "population": [10, 0, 1000]}), weights)
+    summary = summarize_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    assert np.isnan(summary.changed_fraction).all()
+    assert np.isnan(summary.pair_changed_fraction).all()
+    assert np.equal(summary.histogram_shares, 0).all()
+    assert plot_cellwise_iso7243_non_consensus(out.metadata.parent).png.stat().st_size > 0
+    assert plot_cellwise_iso7243_classification(
+        out.metadata.parent, population_weights_path=weights).png.stat().st_size > 0
+
+
+@pytest.mark.parametrize("upper,label", [(37., "≥ 37"), (100., "100")])
+def test_colorbar_endpoint(upper, label):
+    figure, axis = plt.subplots()
+    image = axis.scatter([0], [0], c=[0], vmin=0, vmax=upper)
+    bar = figure.colorbar(image)
+    configure_percent_colorbar(bar, upper)
+    assert bar.get_ticks()[-1] == upper
+    assert bar.ax.get_yticklabels()[-1].get_text() == label
+    plt.close(figure)

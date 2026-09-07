@@ -83,17 +83,48 @@ needed:
 uv run python scripts/compute_era5_population_weights.py
 ```
 
-Generate ISO 7243 classification artifacts and figures:
+Generate hourly WBGT ISO 7243 classification artifacts and figures:
 
 ```bash
 uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --hsb-run ../HeatStressBench/.hsb/runs/wbgt-comparison-20260902-150355 \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
   --thresholds-c 25 26 28 30 33
 uv run python scripts/plot_cellwise_iso7243_classification.py
-
-uv run python scripts/analyze_cellwise_iso7243_non_consensus.py \
-  --thresholds-c 25 26 28 30 33
 uv run python scripts/plot_cellwise_iso7243_non_consensus.py
 ```
+
+The analysis classifies raw **hourly WBGT only**. A cell-hour must have an `ok`
+status and finite WBGT in all six selected implementations; Tg/Tnwb do not
+affect its validity. Both pairwise differences and non-consensus use this same
+denominator. Threshold equality enters the higher class. Pairwise `n_higher`
+and `n_lower` describe class(A) relative to class(B), while maps show their sum
+as a percentage of valid hours. Unsupported cells have zero counts and NaN
+rates. Weighted histograms describe cell-pair rates, in five-percentage-point
+bins, rather than weighting individual hours.
+
+Outputs are under
+`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2/`.
+The previous quantile-based output is preserved and rejected by hourly plot
+readers. `analyze_cellwise_iso7243_non_consensus.py` accepts the same arguments
+and computes/reuses the same shared product; it is unnecessary to scan twice.
+
+Use repeated `--implementation` options to override the six targets, and
+`--date-workers` / `--batch-size` to override defaults of four processes and
+250,000 rows. Each worker decodes one implementation at a time with Arrow
+threads disabled. Atomic daily checkpoints in `.work/` are retained for resume;
+configuration and input fingerprints must match. Completed compatible products
+are reused after integrity checks. `--force` rebuilds final artifacts and permits
+a new checkpoint configuration, preserving old checkpoint generations.
+Completion metadata records hourly support, thresholds, input fingerprints,
+counts, timings, and worker peak RSS. A writer lock prevents concurrent runs
+from publishing to the same directory.
+
+For the 2025 six-target run, expect approximately 111 GiB of compressed selected
+column reads. Reserve 10 GiB of disk for outputs/checkpoints and approximately
+3–4 GiB of RAM for four workers; actual elapsed time and peak RSS are recorded
+in metadata. Annual per-cell counts are uint32, aggregated using uint64. No
+individual hourly classifications or observation-pair expansion is persisted.
 
 ## Country analysis
 

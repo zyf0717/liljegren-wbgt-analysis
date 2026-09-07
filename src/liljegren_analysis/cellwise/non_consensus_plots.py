@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +9,8 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from .non_consensus import DEFAULT_OUTPUT_ROOT
+from .iso7243 import load_hourly_metadata
+from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
 
@@ -33,9 +34,7 @@ def plot_cellwise_iso7243_non_consensus(
         if output_directory is not None
         else root / "figures"
     )
-    metadata = json.loads((root / "metadata.json").read_text())
-    if metadata.get("analysis") != "iso7243-cellwise-non-consensus-percent-v1":
-        raise ValueError("Input is not a cellwise ISO 7243 non-consensus product")
+    load_hourly_metadata(root)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     values = pq.read_table(root / "cellwise_non_consensus.parquet")
     cell_ids = _integers(lookup, "cell_id")
@@ -43,7 +42,12 @@ def plot_cellwise_iso7243_non_consensus(
         raise ValueError("Non-consensus values do not match the cell lookup")
     percent = _floats(values, "non_consensus_percent")
     valid = np.isfinite(percent)
-    if not valid.any() or (percent[valid] < 0.0).any() or (percent[valid] > 100.0).any():
+    joint = _integers(values, "n_joint")
+    changed = _integers(values, "n_non_consensus")
+    expected = np.divide(100.0 * changed, joint, out=np.full(len(joint), np.nan), where=joint > 0)
+    if ((joint < 0).any() or (changed < 0).any() or (changed > joint).any()
+        or not np.allclose(percent, expected, equal_nan=True)
+        or (percent[valid] < 0.0).any() or (percent[valid] > 100.0).any()):
         raise ValueError("Non-consensus percentages are invalid")
     target.mkdir(parents=True, exist_ok=True)
     png = target / "iso7243_non_consensus_percent.png"
@@ -63,7 +67,7 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     import matplotlib.pyplot as plt
 
     valid = np.isfinite(percent)
-    upper = max(1.0, float(np.ceil(np.quantile(percent[valid], 0.99))))
+    upper = _dynamic_color_upper_percent(percent)
     figure, axis = plt.subplots(figsize=(10.0, 4.8), layout="constrained")
     map_x, map_y = equal_earth_coordinates(longitude[valid], latitude[valid])
     image = axis.scatter(
@@ -79,12 +83,13 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
         rasterized=True,
     )
     configure_equal_earth_axis(axis)
-    axis.set_title("Annual ISO 7243 non-consensus rate")
-    figure.colorbar(
+    # axis.set_title("Annual ISO 7243 non-consensus rate")
+    colorbar = figure.colorbar(
         image,
         ax=axis,
-        label=f"Joint-valid rows without unanimity (%) — shared P99 scale ({upper:g}%)",
+        label="WBGT class non-consensus (% valid hours) — P99 cutoff",
     )
+    configure_percent_colorbar(colorbar, upper)
     figure.savefig(png, dpi=220)
     plt.close(figure)
 

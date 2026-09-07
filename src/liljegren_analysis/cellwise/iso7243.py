@@ -1,323 +1,417 @@
-"""Annual ISO 7243 classification differences from cellwise WBGT quantiles."""
+"""Resumable hourly WBGT class differences and non-consensus on shared support."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import resource
 import tempfile
 from collections.abc import Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date
+from itertools import combinations
+from multiprocessing import get_context
 from pathlib import Path
+from time import monotonic, time_ns
+from zipfile import BadZipFile
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from ..classification import class_definitions, validate_thresholds
-from ..io.artifacts import atomic_json as _atomic_json
-from ..io.artifacts import atomic_parquet as _atomic_parquet
-from .paths import DEFAULT_ISO7243_INPUT_ROOT, DEFAULT_ISO7243_OUTPUT_ROOT
+from ..classification import validate_thresholds
+from ..io.artifacts import atomic_json, atomic_parquet, git_commit
+from ..results import validate_result_schema
+from ._pipeline import date_range, hsb_run_paths as normalize_runs
+from ._pipeline import input_files, input_fingerprint, validate_run_inventory
+from .grid import CellGrid, grid_from_source_cell_ids, load_grid
+from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS, _identity_batch
+from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 
-ISO7243_SCHEMA_VERSION = 1
-PERCENTILES = ("p50", "p90", "p95", "p99")
-DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_INPUT_ROOT
+ISO7243_SCHEMA_VERSION = 2
+ANALYSIS = "iso7243-hourly-wbgt-classification-v2"
+SUPPORT_SCOPE = "all-implementations-wbgt-only"
 DEFAULT_OUTPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
+DEFAULT_DATE_WORKERS = 4
+DEFAULT_BATCH_SIZE = 250_000
+_COLUMNS = ("cycle_ordinal", "row_id", "row_ordinal", "wbgt_status", "wbgt_c")
+_WORKER = {}
 
 
 @dataclass(frozen=True)
 class ISO7243ClassificationOutputs:
-    """Artifacts written by :func:`analyze_cellwise_iso7243_classification`."""
+    """One complete product with identical pairwise and unanimity denominators."""
 
     cell_pair_differences: Path
+    cellwise_non_consensus: Path
     cell_lookup: Path
     classes: Path
     metadata: Path
 
 
+def _outputs(root: Path) -> ISO7243ClassificationOutputs:
+    return ISO7243ClassificationOutputs(
+        root / "cell_pair_differences.parquet",
+        root / "cellwise_non_consensus.parquet",
+        root / "cell_lookup.parquet", root / "classes.csv", root / "metadata.json",
+    )
+
+
 def analyze_cellwise_iso7243_classification(
-    input_root: str | Path = DEFAULT_INPUT_ROOT,
+    hsb_run_paths: str | Path | Sequence[str | Path],
     *,
+    start_date: str | date,
+    end_date: str | date,
     thresholds_c: Sequence[float],
+    implementations: Sequence[str] = DEFAULT_JOINT_IMPLEMENTATIONS,
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+    date_workers: int = DEFAULT_DATE_WORKERS,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     force: bool = False,
 ) -> ISO7243ClassificationOutputs:
-    """Write unweighted directional ISO 7243 differences for all cell pairs.
+    """Classify raw hourly WBGT once and persist annual directional counts.
 
-    Input implementations are read sequentially and reduced to four ``uint8``
-    class-ID arrays. Each implementation pair is then emitted as one Parquet
-    row group, avoiding a materialized cross join.
+    Compatible checkpoints and completed outputs are reused automatically.
+    Force rebuilds final artifacts; incompatible configurations get separate
+    checkpoint generations. Source observations are never persisted here.
     """
-
-    source_root = Path(input_root).expanduser().resolve()
-    root = Path(output_root).expanduser().resolve()
-    paths = ISO7243ClassificationOutputs(
-        root / "cell_pair_differences.parquet",
-        root / "cell_lookup.parquet",
-        root / "classes.csv",
-        root / "metadata.json",
-    )
-    if not force and any(
-        path.exists()
-        for path in (
-            paths.cell_pair_differences,
-            paths.cell_lookup,
-            paths.classes,
-            paths.metadata,
-        )
-    ):
-        raise FileExistsError(
-            f"ISO 7243 output already exists at {root}; pass force=True"
-        )
     thresholds = validate_thresholds(thresholds_c)
-    metadata = _load_input_metadata(source_root)
-    implementations = tuple(metadata["implementations"])
-    grid = pq.read_table(source_root / "grid.parquet")
-    cell_ids = _integer_column(grid, "cell_id")
-    if not len(cell_ids):
-        raise ValueError("Input grid is empty")
-    if not np.array_equal(cell_ids, np.arange(len(cell_ids), dtype=np.int64)):
-        raise ValueError("Input grid cell_id values are not contiguous")
-    if cell_ids[-1] > np.iinfo(np.int32).max:
-        raise ValueError("Input grid cell_id values exceed int32 output range")
-
-    class_ids, complete = _load_class_ids(
-        source_root, cell_ids, thresholds, metadata, implementations
-    )
-    if not complete.any():
-        raise ValueError("No cells have complete valid WBGT quantiles")
-    retained_ids = cell_ids[complete].astype(np.int32, copy=False)
-    class_ids = class_ids[:, :, complete]
-    _write_pair_differences(
-        class_ids, retained_ids, implementations, paths.cell_pair_differences
-    )
-    lookup = grid.select(["cell_id", "source_cell_id", "latitude", "longitude"]).filter(
-        pa.array(complete)
-    )
-    lookup = lookup.set_column(0, "cell_id", pa.array(retained_ids, type=pa.int32()))
-    _atomic_parquet(lookup, paths.cell_lookup)
-    _atomic_csv(_classes_csv(thresholds), paths.classes)
-    _atomic_json(
-        {
-            "schema_version": ISO7243_SCHEMA_VERSION,
-            "input_root": str(source_root),
-            "input_fingerprints": {
-                "metadata_json_sha256": _sha256(source_root / "metadata.json"),
-                "grid_parquet_sha256": _sha256(source_root / "grid.parquet"),
-                "implementation_parquet_sha256": {
-                    implementation: _sha256(
-                        source_root / "implementations" / f"{implementation}.parquet"
-                    )
-                    for implementation in implementations
-                },
-            },
-            "thresholds_c": list(thresholds),
-            "quantiles": list(PERCENTILES),
-            "implementation_ids": {
-                implementation: index
-                for index, implementation in enumerate(implementations)
-            },
-            "canonical_cell_count": len(cell_ids),
-            "complete_case_cell_count": len(retained_ids),
-            "excluded_cell_count": int((~complete).sum()),
-            "implementation_pair_count": len(implementations)
-            * (len(implementations) - 1)
-            // 2,
-            "row_count": len(retained_ids)
-            * len(implementations)
-            * (len(implementations) - 1)
-            // 2,
-            "weighting": "none",
-        },
-        paths.metadata,
-    )
-    return paths
-
-
-def _load_input_metadata(root: Path) -> dict[str, object]:
-    path = root / "metadata.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing cellwise metadata: {path}")
-    metadata = json.loads(path.read_text())
-    if metadata.get("schema_version") != 2:
-        raise ValueError("ISO 7243 analysis requires a joint cellwise quantile product")
-    implementations = metadata.get("implementations")
-    if (
-        not isinstance(implementations, list)
-        or len(implementations) < 2
-        or not all(isinstance(value, str) and value for value in implementations)
-        or len(set(implementations)) != len(implementations)
-    ):
-        raise ValueError("Input metadata does not contain valid implementations")
-    if metadata.get("probabilities") != [0.5, 0.9, 0.95, 0.99]:
-        raise ValueError("Input metadata does not contain the required quantiles")
-    for key in ("temperature_bin_min_c", "temperature_bin_max_c"):
-        if key not in metadata:
-            raise ValueError(f"Input metadata is missing {key}")
-    return metadata
-
-
-def _load_class_ids(
-    root: Path,
-    cell_ids: np.ndarray,
-    thresholds: tuple[float, ...],
-    metadata: dict[str, object],
-    implementations: tuple[str, ...],
-) -> tuple[np.ndarray, np.ndarray]:
-    count = len(cell_ids)
-    classes = np.empty((len(implementations), len(PERCENTILES), count), dtype=np.uint8)
-    complete = np.ones(count, dtype=bool)
-    minimum = float(metadata["temperature_bin_min_c"])
-    maximum = float(metadata["temperature_bin_max_c"])
-    columns = ["cell_id", "n_joint"]
-    for percentile in PERCENTILES:
-        columns.extend(
-            (
-                f"wbgt_{percentile}_c",
-                f"wbgt_{percentile}_lower_c",
-                f"wbgt_{percentile}_upper_c",
-            )
+    names = tuple(implementations)
+    if not 2 <= len(names) <= 256 or len(set(names)) != len(names):
+        raise ValueError("Select 2–256 unique implementations")
+    if any(not isinstance(name, str) or not name or Path(name).name != name
+           or name in (".", "..") for name in names):
+        raise ValueError("Invalid implementation name")
+    if date_workers < 1 or batch_size < 1:
+        raise ValueError("date_workers and batch_size must be positive")
+    dates = date_range(start_date, end_date)
+    if len(dates) * 24 > np.iinfo(np.uint32).max:
+        raise ValueError("Date range exceeds uint32 per-cell counter capacity")
+    runs = normalize_runs(hsb_run_paths)
+    validate_run_inventory(runs, dates, names, allow_unexpected=True)
+    files = {name: input_files(runs, dates, name) for name in names}
+    all_files = tuple(sorted(path for paths in files.values() for path in paths))
+    fingerprint = input_fingerprint(all_files)
+    root = Path(output_root).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".writer.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(f"Another ISO 7243 writer holds {root}") from error
+        return _analyze_locked(
+            root, runs, dates, names, files, all_files, fingerprint, thresholds,
+            date_workers, batch_size, force,
         )
-    for implementation_index, implementation in enumerate(implementations):
-        table = pq.read_table(
-            root / "implementations" / f"{implementation}.parquet", columns=columns
-        )
-        if not np.array_equal(_integer_column(table, "cell_id"), cell_ids):
-            raise ValueError(f"Cell universe/order differs for {implementation}")
-        valid = _integer_column(table, "n_joint") > 0
-        for percentile_index, percentile in enumerate(PERCENTILES):
-            estimate = _float_column(table, f"wbgt_{percentile}_c")
-            lower = _float_column(table, f"wbgt_{percentile}_lower_c")
-            upper = _float_column(table, f"wbgt_{percentile}_upper_c")
-            valid &= (
-                np.isfinite(estimate)
-                & np.isfinite(lower)
-                & np.isfinite(upper)
-                & (estimate >= minimum)
-                & (estimate < maximum)
-                & (lower <= estimate)
-                & (estimate < upper)
-            )
-            classes[implementation_index, percentile_index] = np.searchsorted(
-                thresholds, np.nan_to_num(estimate, nan=minimum), side="right"
-            ).astype(np.uint8)
-        complete &= valid
-        del table, estimate, lower, upper
-    return classes, complete
 
 
-def _write_pair_differences(
-    classes: np.ndarray,
-    cell_ids: np.ndarray,
-    implementations: tuple[str, ...],
-    path: Path,
-) -> None:
-    schema = pa.schema(
-        [
-            ("cell_id", pa.int32()),
-            ("implementation_a_id", pa.uint8()),
-            ("implementation_b_id", pa.uint8()),
-            ("n_compared", pa.uint8()),
-            ("n_higher", pa.uint8()),
-            ("n_lower", pa.uint8()),
-        ]
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    os.close(descriptor)
-    temporary_path = Path(temporary_name)
+def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
+                    thresholds, date_workers, batch_size, force):
+    started = monotonic()
+    outputs = _outputs(root)
+    request = {
+        "schema_version": ISO7243_SCHEMA_VERSION, "analysis": ANALYSIS,
+        "observation_basis": "hourly", "classification_quantity": "wbgt",
+        "support_scope": SUPPORT_SCOPE,
+        "start_date": dates[0].isoformat(), "end_date": dates[-1].isoformat(),
+        "thresholds_c": list(thresholds), "implementations": list(names),
+        "input_runs": [str(run) for run in runs], "input_fingerprint": fingerprint,
+    }
+    request_hash = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    manifest_path = root / ".work" / "manifest.json"
+    if manifest_path.exists():
+        if json.loads(manifest_path.read_text()) != request and not force:
+            raise ValueError("Incompatible ISO 7243 resume configuration; use a new root or force")
+    if outputs.metadata.exists():
+        previous = json.loads(outputs.metadata.read_text())
+        if any(previous.get(key) != value for key, value in request.items()) and not force:
+            raise ValueError("Existing ISO 7243 product is incompatible")
+        if not force:
+            load_hourly_metadata(root)
+            return outputs
+        archive = root / ".work" / f"previous-metadata-{time_ns()}.json"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(outputs.metadata, archive)
+    atomic_json(request, manifest_path)
+    work = root / ".work" / request_hash
+    work.mkdir(parents=True, exist_ok=True)
+    by_date = {
+        day: {name: tuple(path for path in files[name]
+                          if path.parents[2].name == day.isoformat()) for name in names}
+        for day in dates
+    }
+    grid_path = work / "grid.parquet"
+    if not grid_path.exists():
+        atomic_parquet(_build_grid(by_date[dates[0]], batch_size).table, grid_path)
+    grid = load_grid(grid_path)
+    if grid.cell_count > np.iinfo(np.int32).max:
+        raise ValueError("Grid exceeds int32 cell-ID capacity")
+    signature = hashlib.sha256(f"{request_hash}:{grid.fingerprint}".encode()).hexdigest()
+    pair_count = len(names) * (len(names) - 1) // 2
+    total = np.zeros((2 + 2 * pair_count, grid.cell_count), dtype=np.uint64)
+    pending, provenance = [], {}
+    reused = 0
+    for day in dates:
+        checkpoint = _read_checkpoint(work / f"{day.isoformat()}.npz", signature, day, total.shape)
+        if checkpoint is None:
+            pending.append(day)
+        else:
+            counts, info = checkpoint
+            total += counts
+            provenance[day.isoformat()] = info
+            reused += 1
+    print(f"ISO 7243: {len(dates)} dates, {reused} cached, {len(pending)} to scan", flush=True)
+    state = (names, thresholds, str(grid_path), batch_size, signature, str(work))
+    if date_workers == 1:
+        _initialize_worker(*state)
+        for day in pending:
+            _run_day(day, by_date[day])
+            _reduce_day(work, day, signature, total, provenance)
+    elif pending:
+        with ProcessPoolExecutor(
+            max_workers=min(date_workers, len(pending)), mp_context=get_context("spawn"),
+            initializer=_initialize_worker, initargs=state,
+        ) as executor:
+            futures = {executor.submit(_run_day, day, by_date[day]): day for day in pending}
+            try:
+                for future in as_completed(futures):
+                    day = futures[future]
+                    future.result()
+                    _reduce_day(work, day, signature, total, provenance)
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+    if input_fingerprint(all_files) != fingerprint:
+        raise ValueError("Raw inputs changed during classification; outputs not published")
+    _validate_counts(total, len(dates) * 24)
+    _write_outputs(outputs, grid, total, names, thresholds)
+    artifacts = {path.name: _sha256(path) for path in (
+        outputs.cell_pair_differences, outputs.cellwise_non_consensus,
+        outputs.cell_lookup, outputs.classes,
+    )}
+    atomic_json({
+        **request, "complete": True, "grid_fingerprint": grid.fingerprint,
+        "implementation_ids": {name: index for index, name in enumerate(names)},
+        "implementation_pair_count": pair_count, "cell_count": grid.cell_count,
+        "row_count": grid.cell_count * pair_count,
+        "cells_with_joint_observations": int(np.count_nonzero(total[0])),
+        "joint_observation_count": int(total[0].sum(dtype=np.uint64)),
+        "non_consensus_observation_count": int(total[1].sum(dtype=np.uint64)),
+        "pair_observation_count": int(total[0].sum(dtype=np.uint64)) * pair_count,
+        "direction_definition": "higher/lower means class(A) >/< class(B)",
+        "artifact_sha256": artifacts, "git_commit": git_commit(),
+        "execution_engine": "daily-wbgt-class-arrays-v2", "date_workers": date_workers,
+        "batch_size": batch_size, "arrow_use_threads": False,
+        "elapsed_seconds_this_invocation": monotonic() - started,
+        "dates_reused": reused, "dates_scanned": len(pending),
+        "parent_peak_rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024,
+        "daily_provenance": provenance,
+    }, outputs.metadata)
+    return outputs
+
+
+def _build_grid(files: dict[str, tuple[Path, ...]], batch_size: int) -> CellGrid:
+    source_ids: set[str] = set()
+    for paths in files.values():
+        for path in paths:
+            for batch in pq.ParquetFile(path).iter_batches(
+                columns=["row_id"], batch_size=batch_size, use_threads=False,
+            ):
+                ids = batch.column(0)
+                if ids.null_count:
+                    raise ValueError("Null result identity")
+                source_ids.update(pc.utf8_slice_codeunits(ids, 0, 28).to_pylist())
+    return grid_from_source_cell_ids(sorted(source_ids))
+
+
+def _initialize_worker(names, thresholds, grid_path, batch_size, signature, work):
+    global _WORKER
+    grid = load_grid(Path(grid_path))
+    _WORKER = dict(names=names, thresholds=thresholds,
+                   source_ids=grid.table["source_cell_id"].combine_chunks(),
+                   cell_count=grid.cell_count, batch_size=batch_size,
+                   signature=signature, work=Path(work))
+
+
+def _run_day(day: date, files: dict[str, tuple[Path, ...]]) -> None:
+    started = monotonic()
+    counts, rows = _scan_day(day, files, **{
+        key: _WORKER[key] for key in ("names", "thresholds", "source_ids", "cell_count", "batch_size")
+    })
+    info = {"elapsed_seconds": monotonic() - started, "rows_decoded": rows,
+            "peak_rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024}
+    path = _WORKER["work"] / f"{day.isoformat()}.npz"
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
-        with pq.ParquetWriter(temporary_path, schema, compression="zstd") as writer:
-            for implementation_a in range(len(implementations)):
-                classes_a = classes[implementation_a]
-                for implementation_b in range(
-                    implementation_a + 1, len(implementations)
-                ):
-                    classes_b = classes[implementation_b]
-                    writer.write_table(
-                        pa.table(
-                            {
-                                "cell_id": pa.array(cell_ids, type=pa.int32()),
-                                "implementation_a_id": pa.array(
-                                    np.full(
-                                        len(cell_ids), implementation_a, dtype=np.uint8
-                                    )
-                                ),
-                                "implementation_b_id": pa.array(
-                                    np.full(
-                                        len(cell_ids), implementation_b, dtype=np.uint8
-                                    )
-                                ),
-                                "n_compared": pa.array(
-                                    np.full(
-                                        len(cell_ids), len(PERCENTILES), dtype=np.uint8
-                                    )
-                                ),
-                                "n_higher": pa.array(
-                                    (classes_a > classes_b).sum(axis=0).astype(np.uint8)
-                                ),
-                                "n_lower": pa.array(
-                                    (classes_a < classes_b).sum(axis=0).astype(np.uint8)
-                                ),
-                            },
-                            schema=schema,
-                        )
-                    )
-        with temporary_path.open("rb") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _integer_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(
-        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.int64
-    )
-
-
-def _float_column(table: pa.Table, column: str) -> np.ndarray:
-    return np.asarray(
-        table[column].combine_chunks().to_numpy(zero_copy_only=False), dtype=np.float64
-    )
-
-
-def _atomic_csv(value: str, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(value)
+        with os.fdopen(descriptor, "wb") as stream:
+            np.savez_compressed(stream, counts=counts, signature=_WORKER["signature"],
+                                day=day.isoformat(), info=json.dumps(info))
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
+        os.replace(temporary, path)
     finally:
-        temporary_path.unlink(missing_ok=True)
+        Path(temporary).unlink(missing_ok=True)
 
 
-def _classes_csv(thresholds: tuple[float, ...]) -> str:
-    """Return the small, stable threshold sidecar without a dataframe dependency."""
+def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_size):
+    size = cell_count * 24
+    class_dtype = np.min_scalar_type(len(thresholds))
+    classes = np.zeros((len(names), size), dtype=class_dtype)
+    joint = np.ones(size, dtype=bool)
+    reference_seen = np.zeros(size, dtype=bool)
+    reference = np.zeros((3, size), dtype=np.uint32)
+    scopes: dict[tuple[str, str], int] = {}
+    rows = 0
+    for index, name in enumerate(names):
+        seen = np.zeros(size, dtype=bool)
+        for path in files[name]:
+            scope_key = (str(path.parents[3]), path.parents[1].name)
+            scope = scopes.setdefault(scope_key, len(scopes) + 1)
+            reader = pq.ParquetFile(path)
+            validate_result_schema(reader.schema_arrow)
+            for batch in reader.iter_batches(columns=_COLUMNS, batch_size=batch_size, use_threads=False):
+                cells, hours, cycles, ordinals = _identity_batch(
+                    batch, source_cell_ids=source_ids, current_date=day,
+                )
+                flat = cells * 24 + hours
+                if len(np.unique(flat)) != len(flat) or seen[flat].any():
+                    raise ValueError(f"Duplicate cell/hour identity for {name} on {day}")
+                seen[flat] = True
+                known = reference_seen[flat]
+                if (np.any(reference[0, flat[known]] != scope)
+                    or np.any(reference[1, flat[known]] != cycles[known])
+                    or np.any(reference[2, flat[known]] != ordinals[known])):
+                    raise ValueError(f"Conflicting result provenance for {name} on {day}")
+                fresh = flat[~known]
+                reference[0, fresh] = scope
+                reference[1, fresh] = cycles[~known]
+                reference[2, fresh] = ordinals[~known]
+                reference_seen[flat] = True
+                values = batch.column("wbgt_c")
+                valid = pc.fill_null(pc.and_(
+                    pc.equal(batch.column("wbgt_status"), "ok"), pc.is_finite(values),
+                ), False).to_numpy(zero_copy_only=False)
+                joint[flat] &= valid
+                classes[index, flat[valid]] = np.searchsorted(
+                    thresholds, values.to_numpy(zero_copy_only=False)[valid], side="right",
+                ).astype(class_dtype)
+                rows += batch.num_rows
+        joint &= seen
+    pairs = tuple(combinations(range(len(names)), 2))
+    counts = np.empty((2 + 2 * len(pairs), cell_count), dtype=np.uint8)
+    counts[0] = joint.reshape(cell_count, 24).sum(axis=1, dtype=np.uint8)
+    non_consensus = np.zeros(size, dtype=bool)
+    for index, (a, b) in enumerate(pairs):
+        higher = joint & (classes[a] > classes[b])
+        lower = joint & (classes[a] < classes[b])
+        counts[2 + 2 * index] = higher.reshape(cell_count, 24).sum(axis=1, dtype=np.uint8)
+        counts[3 + 2 * index] = lower.reshape(cell_count, 24).sum(axis=1, dtype=np.uint8)
+        non_consensus |= higher | lower
+    counts[1] = non_consensus.reshape(cell_count, 24).sum(axis=1, dtype=np.uint8)
+    _validate_counts(counts, 24)
+    return counts, rows
 
-    definitions = class_definitions(thresholds)
+
+def _validate_counts(counts: np.ndarray, maximum: int) -> None:
+    if np.any(counts[0] > maximum) or np.any(counts[1] > counts[0]):
+        raise ValueError("Invalid joint/non-consensus counts")
+    changed_sum = np.zeros(counts.shape[1], dtype=np.uint64)
+    for index in range(2, len(counts), 2):
+        changed = counts[index].astype(np.uint64) + counts[index + 1]
+        if np.any(changed > counts[1]):
+            raise ValueError("Pair disagreement exceeds non-consensus support")
+        changed_sum += changed
+    if np.any(counts[1] > changed_sum):
+        raise ValueError("Non-consensus exceeds all pair disagreements")
+
+
+def _read_checkpoint(path, signature, day, shape):
+    if not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            if archive["signature"].item() != signature or archive["day"].item() != day.isoformat():
+                return None
+            counts = archive["counts"]
+            if counts.shape != shape or counts.dtype != np.uint8:
+                return None
+            _validate_counts(counts, 24)
+            return counts, json.loads(archive["info"].item())
+    except (OSError, ValueError, KeyError, EOFError, BadZipFile):
+        return None
+
+
+def _reduce_day(work, day, signature, total, provenance):
+    checkpoint = _read_checkpoint(work / f"{day.isoformat()}.npz", signature, day, total.shape)
+    if checkpoint is None:
+        raise ValueError(f"Invalid completed checkpoint for {day}")
+    counts, info = checkpoint
+    total += counts
+    provenance[day.isoformat()] = info
+    print(f"ISO 7243 {day}: joint={int(counts[0].sum()):,}, "
+          f"non-consensus={int(counts[1].sum()):,}, "
+          f"scan={info['elapsed_seconds']:.1f}s, RSS={info['peak_rss_mib']:.0f} MiB", flush=True)
+
+
+def _write_outputs(outputs, grid, counts, names, thresholds):
+    if np.any(counts > np.iinfo(np.uint32).max):
+        raise ValueError("Per-cell counts overflow uint32")
+    ids = np.arange(grid.cell_count, dtype=np.int32)
+    schema = pa.schema([
+        ("cell_id", pa.int32()), ("implementation_a_id", pa.uint8()),
+        ("implementation_b_id", pa.uint8()), ("n_compared", pa.uint32()),
+        ("n_higher", pa.uint32()), ("n_lower", pa.uint32()),
+    ])
+    path = outputs.cell_pair_differences
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    os.close(descriptor)
+    try:
+        with pq.ParquetWriter(temporary, schema, compression="zstd") as writer:
+            for index, (a, b) in enumerate(combinations(range(len(names)), 2)):
+                writer.write_table(pa.Table.from_arrays([
+                    pa.array(ids), pa.array(np.full(len(ids), a, dtype=np.uint8)),
+                    pa.array(np.full(len(ids), b, dtype=np.uint8)),
+                    pa.array(counts[0], type=pa.uint32()),
+                    pa.array(counts[2 + 2 * index], type=pa.uint32()),
+                    pa.array(counts[3 + 2 * index], type=pa.uint32()),
+                ], schema=schema))
+        with open(temporary, "rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    percent = np.divide(100.0 * counts[1], counts[0],
+                        out=np.full(len(ids), np.nan), where=counts[0] > 0)
+    atomic_parquet(pa.table({
+        "cell_id": ids, "n_joint": pa.array(counts[0], type=pa.uint32()),
+        "n_non_consensus": pa.array(counts[1], type=pa.uint32()),
+        "non_consensus_percent": percent,
+    }), outputs.cellwise_non_consensus)
+    atomic_parquet(grid.table.set_column(0, "cell_id", pa.array(ids)), outputs.cell_lookup)
+    bounds = (-np.inf, *thresholds, np.inf)
     lines = ["class_id,class_label,threshold_definition"]
-    for class_id, label in zip(
-        definitions["class_id"], definitions["class_label"], strict=True
-    ):
-        if class_id == 0:
-            definition = f"wbgt_c < {thresholds[0]:g}"
-        elif class_id == len(thresholds):
-            definition = f"wbgt_c >= {thresholds[-1]:g}"
+    for index, (lower, upper) in enumerate(zip(bounds, bounds[1:])):
+        if index == 0:
+            label, definition = f"< {upper:g} C", f"wbgt_c < {upper:g}"
+        elif index == len(thresholds):
+            label, definition = f">= {lower:g} C", f"wbgt_c >= {lower:g}"
         else:
-            definition = (
-                f"{thresholds[class_id - 1]:g} <= wbgt_c < {thresholds[class_id]:g}"
-            )
-        lines.append(f'{class_id},"{label}","{definition}"')
-    return "\n".join(lines) + "\n"
+            label, definition = f"[{lower:g}, {upper:g}) C", f"{lower:g} <= wbgt_c < {upper:g}"
+        lines.append(f'{index},"{label}","{definition}"')
+    descriptor, temporary = tempfile.mkstemp(dir=outputs.classes.parent, prefix=".classes.")
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write("\n".join(lines) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, outputs.classes)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _sha256(path: Path) -> str:
@@ -326,3 +420,23 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def load_hourly_metadata(root: Path) -> dict[str, object]:
+    """Reject legacy, incomplete, or modified products before reuse/plotting."""
+    path = root / "metadata.json"
+    if not path.is_file():
+        raise ValueError(f"Missing completion metadata: {path}")
+    metadata = json.loads(path.read_text())
+    expected = dict(schema_version=ISO7243_SCHEMA_VERSION, analysis=ANALYSIS,
+                    complete=True, observation_basis="hourly",
+                    classification_quantity="wbgt", support_scope=SUPPORT_SCOPE)
+    if any(metadata.get(key) != value for key, value in expected.items()):
+        raise ValueError("Input is not a completed hourly WBGT-only ISO 7243 product")
+    artifacts = metadata.get("artifact_sha256", {})
+    for name in ("cell_pair_differences.parquet", "cellwise_non_consensus.parquet",
+                 "cell_lookup.parquet", "classes.csv"):
+        artifact = root / name
+        if not artifact.is_file() or artifacts.get(name) != _sha256(artifact):
+            raise ValueError(f"Incomplete or modified ISO 7243 artifact: {artifact}")
+    return metadata

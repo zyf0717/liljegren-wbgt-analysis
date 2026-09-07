@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
+from .iso7243 import load_hourly_metadata
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
@@ -71,118 +71,87 @@ def summarize_cellwise_iso7243_classification(
     *,
     population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
 ) -> ISO7243PlotSummary:
-    """Stream the product into map values and unweighted/weighted histograms."""
-
+    """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()
-    metadata = _load_metadata(root / "metadata.json")
+    metadata = load_hourly_metadata(root)
     implementation_pairs = _implementation_pairs(metadata)
-    lookup = pq.read_table(
-        root / "cell_lookup.parquet",
-        columns=["cell_id", "source_cell_id", "latitude", "longitude"],
-    )
+    lookup = pq.read_table(root / "cell_lookup.parquet")
     cell_ids = _integer_column(lookup, "cell_id")
-    if not len(cell_ids) or len(cell_ids) != len(np.unique(cell_ids)) or (cell_ids < 0).any():
+    if not np.array_equal(cell_ids, np.arange(len(cell_ids))) or len(cell_ids) != metadata["cell_count"]:
         raise ValueError("Cell lookup has invalid cell_id values")
+    non_consensus = pq.read_table(root / "cellwise_non_consensus.parquet")
+    if not np.array_equal(_integer_column(non_consensus, "cell_id"), cell_ids):
+        raise ValueError("Non-consensus lookup differs")
+    joint = _integer_column(non_consensus, "n_joint")
+    non_unanimous = _integer_column(non_consensus, "n_non_consensus")
+    if (joint < 0).any() or (non_unanimous < 0).any() or (non_unanimous > joint).any():
+        raise ValueError("Invalid hourly support counts")
+    if int(joint.sum()) != metadata["joint_observation_count"]:
+        raise ValueError("Joint observation count differs from metadata")
     source_ids = lookup["source_cell_id"].combine_chunks().to_pylist()
-    geometry_weights = _geometry_weights(source_ids)
-    population_weights = _population_weights(source_ids, population_weights_path)
-    max_cell_id = int(cell_ids.max())
-    weights_by_cell = np.full((3, max_cell_id + 1), np.nan, dtype=np.float64)
-    weights_by_cell[0, cell_ids] = 1.0
-    weights_by_cell[1, cell_ids] = geometry_weights
-    weights_by_cell[2, cell_ids] = population_weights
-
-    changed_sum = np.zeros(max_cell_id + 1, dtype=np.float64)
-    compared_sum = np.zeros(max_cell_id + 1, dtype=np.float64)
-    lookup_positions = np.full(max_cell_id + 1, -1, dtype=np.int32)
-    lookup_positions[cell_ids] = np.arange(len(cell_ids), dtype=np.int32)
+    weights = np.vstack((np.ones(len(cell_ids)), _geometry_weights(source_ids),
+                         _population_weights(source_ids, population_weights_path)))
+    changed_sum = np.zeros(len(cell_ids), dtype=np.uint64)
     pair_changed_fraction = np.full(
-        (len(implementation_pairs), len(cell_ids)), np.nan, dtype=np.float32
+        (len(implementation_pairs), len(cell_ids)), np.nan, dtype=np.float64,
     )
+    seen = np.zeros(pair_changed_fraction.shape, dtype=bool)
     pair_index_by_code = _pair_index_by_code(metadata, implementation_pairs)
-    histogram = np.zeros((3, 5), dtype=np.float64)
+    implementation_count = len(metadata["implementation_ids"])
+    histogram = np.zeros((3, 20), dtype=np.float64)
     totals = np.zeros(3, dtype=np.float64)
     product = pq.ParquetFile(root / "cell_pair_differences.parquet")
     for batch in product.iter_batches(
-        columns=[
-            "cell_id",
-            "n_compared",
-            "n_higher",
-            "n_lower",
-            "implementation_a_id",
-            "implementation_b_id",
-        ],
-        batch_size=1_000_000,
+        columns=["cell_id", "n_compared", "n_higher", "n_lower",
+                 "implementation_a_id", "implementation_b_id"],
+        batch_size=250_000, use_threads=False,
     ):
-        batch_ids = np.asarray(batch.column(0), dtype=np.int64)
-        n_compared = np.asarray(batch.column(1), dtype=np.uint8)
-        n_changed = np.asarray(batch.column(2), dtype=np.uint8) + np.asarray(
-            batch.column(3), dtype=np.uint8
+        ids, compared, higher, lower, a, b = (
+            np.asarray(batch.column(i), dtype=np.int64) for i in range(6)
         )
-        implementation_a = np.asarray(batch.column(4), dtype=np.uint8)
-        implementation_b = np.asarray(batch.column(5), dtype=np.uint8)
-        positions = np.full(len(batch_ids), -1, dtype=np.int32)
-        in_range = (batch_ids >= 0) & (batch_ids <= max_cell_id)
-        positions[in_range] = lookup_positions[batch_ids[in_range]]
-        implementation_count = len(metadata["implementation_ids"])
-        pair_indices = pair_index_by_code[
-            implementation_a * implementation_count + implementation_b
-        ]
-        if (
-            (batch_ids < 0).any()
-            or (batch_ids > max_cell_id).any()
-            or (positions < 0).any()
-            or (pair_indices < 0).any()
-            or (n_compared != 4).any()
-            or (n_changed > 4).any()
-            or (n_changed > n_compared).any()
-        ):
-            raise ValueError("Cell-pair differences do not match the lookup or count schema")
-        np.add.at(changed_sum, batch_ids, n_changed)
-        np.add.at(compared_sum, batch_ids, n_compared)
-        for pair_index in np.unique(pair_indices):
-            pair_rows = pair_indices == pair_index
-            pair_positions = positions[pair_rows]
-            if np.isfinite(pair_changed_fraction[pair_index, pair_positions]).any():
-                raise ValueError("Cell-pair differences contain duplicate implementation pairs")
-            pair_changed_fraction[pair_index, pair_positions] = (
-                n_changed[pair_rows] / n_compared[pair_rows]
-            )
+        if ((ids < 0).any() or (ids >= len(cell_ids)).any()
+            or (a < 0).any() or (b < 0).any()
+            or (a >= implementation_count).any() or (b >= implementation_count).any()):
+            raise ValueError("Cell-pair IDs are out of range")
+        pair_indices = pair_index_by_code[a * implementation_count + b]
+        changed = higher + lower
+        if ((pair_indices < 0).any() or (compared != joint[ids]).any()
+            or (higher < 0).any() or (lower < 0).any()
+            or (changed > non_unanimous[ids]).any()):
+            raise ValueError("Cell-pair counts disagree with shared hourly support")
+        keys = pair_indices * len(cell_ids) + ids
+        if len(np.unique(keys)) != len(keys) or seen[pair_indices, ids].any():
+            raise ValueError("Duplicate cell-pair counts")
+        seen[pair_indices, ids] = True
+        np.add.at(changed_sum, ids, changed.astype(np.uint64))
+        supported = compared > 0
+        fractions = np.divide(changed, compared, out=np.full(len(ids), np.nan),
+                              where=supported)
+        pair_changed_fraction[pair_indices, ids] = fractions
         for index in range(3):
-            weights = weights_by_cell[index, batch_ids]
-            histogram[index] += np.bincount(n_changed, weights=weights, minlength=5)
-            totals[index] += weights.sum()
-    if product.metadata.num_rows != int(metadata["row_count"]):
-        raise ValueError("Cell-pair row count disagrees with metadata")
-    if not np.isfinite(totals).all() or (totals <= 0.0).any():
-        raise ValueError("No positive mass available for one or more histogram weightings")
-    if (compared_sum[cell_ids] <= 0.0).any():
-        raise ValueError("One or more lookup cells have no cell-pair differences")
-    expected_compared = 4 * int(metadata["implementation_pair_count"])
-    if not np.equal(compared_sum[cell_ids], expected_compared).all():
-        raise ValueError("Cell-pair differences are incomplete for one or more lookup cells")
-    if not np.isfinite(pair_changed_fraction).all():
-        raise ValueError("Cell-pair differences are incomplete for one or more implementation pairs")
+            mass = weights[index, ids[supported]]
+            histogram[index] += np.histogram(
+                100.0 * fractions[supported], bins=np.arange(0.0, 105.0, 5.0),
+                weights=mass,
+            )[0]
+            totals[index] += mass.sum()
+    if (product.metadata.num_rows != metadata["row_count"]
+        or product.metadata.num_rows != len(cell_ids) * len(implementation_pairs)
+        or not seen.all()):
+        raise ValueError("Cell-pair product is incomplete")
+    if np.any(changed_sum < non_unanimous):
+        raise ValueError("Non-consensus exceeds all pair disagreements")
+    mean = np.divide(changed_sum, joint.astype(np.float64) * len(implementation_pairs),
+                     out=np.full(len(cell_ids), np.nan), where=joint > 0)
     return ISO7243PlotSummary(
         latitude=_float_column(lookup, "latitude"),
         longitude=_float_column(lookup, "longitude"),
-        changed_fraction=changed_sum[cell_ids] / compared_sum[cell_ids],
-        histogram_shares=histogram / totals[:, np.newaxis],
+        changed_fraction=mean,
+        histogram_shares=np.divide(histogram, totals[:, None],
+                                  out=np.zeros_like(histogram), where=totals[:, None] > 0),
         implementation_pairs=implementation_pairs,
         pair_changed_fraction=pair_changed_fraction,
     )
-
-
-def _load_metadata(path: Path) -> dict[str, object]:
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing ISO 7243 metadata: {path}")
-    metadata = json.loads(path.read_text())
-    required = ("row_count", "implementation_pair_count", "quantiles", "implementation_ids")
-    if any(key not in metadata for key in required):
-        raise ValueError("ISO 7243 metadata is incomplete")
-    if metadata["quantiles"] != ["p50", "p90", "p95", "p99"]:
-        raise ValueError("ISO 7243 product does not contain the expected quantiles")
-    return metadata
 
 
 def _implementation_pairs(metadata: dict[str, object]) -> tuple[tuple[str, str], ...]:
@@ -272,22 +241,24 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         rasterized=True,
     )
     configure_equal_earth_axis(map_axis)
-    map_axis.set_title("Mean classification disagreement across implementation pairs")
-    figure.colorbar(
+    # map_axis.set_title("Mean classification disagreement across implementation pairs")
+    colorbar = figure.colorbar(
         image,
         ax=map_axis,
-        label="Changed classifications (%) — capped at 50%",
+        label="Mean pairwise WBGT class disagreement\n(% valid hours)",
     )
-    x = np.arange(5)
+    configure_percent_colorbar(colorbar, 50.0)
+    x = np.arange(2.5, 100.0, 5.0)
     for axis, label, shares in zip(
         axes.flat[1:], _WEIGHTINGS, summary.histogram_shares, strict=True
     ):
-        axis.bar(x, 100.0 * shares, color="#386cb0")
+        axis.bar(x, 100.0 * shares, width=5.0, color="#386cb0")
         axis.set(
-            xlabel="Classification differences per cell-pair",
+            xlabel="WBGT class disagreement (% valid hours)",
             ylabel="Cell-pair share (%)",
             title=label,
-            xticks=x,
+            xticks=np.arange(0, 101, 25),
+            xlim=(0.0, 100.0),
             ylim=(0.0, 100.0),
         )
     figure.savefig(png, dpi=220)
@@ -338,12 +309,13 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)
     assert image is not None
-    figure.colorbar(
+    colorbar = figure.colorbar(
         image,
         ax=axes.ravel().tolist(),
-        label=f"Classification differences (%) — shared P99 scale ({color_upper_percent:g}%)",
+        label="WBGT class disagreement (% valid hours) — shared P99 cutoff",
         shrink=0.86,
     )
+    configure_percent_colorbar(colorbar, color_upper_percent)
     figure.savefig(png, dpi=220)
     plt.close(figure)
 
@@ -353,8 +325,18 @@ def _dynamic_color_upper_percent(values: np.ndarray) -> float:
 
     finite = values[np.isfinite(values)]
     if not len(finite):
-        raise ValueError("Pairwise map values are not finite")
+        return 1.0
     return max(1.0, float(np.ceil(np.quantile(finite, 0.99))))
+
+
+def configure_percent_colorbar(colorbar, upper: float) -> None:
+    """Include the endpoint and explicitly mark saturated percentage colours."""
+    ticks = colorbar.get_ticks()
+    ticks = np.unique(np.append(ticks[(ticks >= 0) & (ticks <= upper)], upper))
+    colorbar.set_ticks(ticks, labels=[
+        f"≥ {tick:g}" if tick == upper and upper < 100 else f"{tick:g}"
+        for tick in ticks
+    ])
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:
