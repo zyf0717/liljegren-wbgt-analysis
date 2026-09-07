@@ -551,8 +551,18 @@ def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
             rasterized=True,
         )
         configure_equal_earth_axis(axis)
-        axis.set_title(f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)")
-        figure.colorbar(image, ax=axis, label="Spread (°C)")
+        # axis.set_title(f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)")
+        colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
+        ticks = colorbar.get_ticks()
+        colorbar.set_ticks(
+            ticks,
+            labels=[
+                f"≥ {tick:g}"
+                if np.isclose(tick, SPREAD_MAP_COLOR_LIMITS_C[1])
+                else f"{tick:g}"
+                for tick in ticks
+            ],
+        )
         for suffix in ("png", "pdf"):
             figure.savefig(
                 directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220
