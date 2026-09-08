@@ -296,56 +296,56 @@ def _accumulate_population_affected(
 
 
 def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
-    rows = []
+    def row(
+        comparison_type: str,
+        implementation_a: str | None,
+        implementation_b: str | None,
+        populations: np.ndarray,
+    ) -> dict[str, object]:
+        values: dict[str, object] = {
+            "comparison_type": comparison_type,
+            "implementation_a": implementation_a,
+            "implementation_b": implementation_b,
+        }
+        for threshold, population in zip(
+            POPULATION_AFFECTED_THRESHOLDS_PERCENT, populations, strict=True
+        ):
+            suffix = f"ge_{threshold}_percent"
+            values[f"estimated_population_affected_{suffix}"] = int(population)
+            values[f"percent_total_population_{suffix}"] = (
+                100.0 * int(population) / summary.total_population
+            )
+        return values
+
+    rows: list[dict[str, object]] = []
     for pair_index, (implementation_a, implementation_b) in enumerate(
         summary.implementation_pairs
     ):
-        for threshold, population in zip(
-            POPULATION_AFFECTED_THRESHOLDS_PERCENT,
-            summary.population_affected[pair_index],
-            strict=True,
-        ):
-            rows.append(
-                {
-                    "comparison_type": "pairwise_disagreement",
-                    "implementation_a": implementation_a,
-                    "implementation_b": implementation_b,
-                    "minimum_rate_percent": threshold,
-                    "estimated_population_affected": int(population),
-                    "percent_total_population": (
-                        100.0 * int(population) / summary.total_population
-                    ),
-                }
-            )
-    for threshold, population in zip(
-        POPULATION_AFFECTED_THRESHOLDS_PERCENT,
-        summary.population_affected[-1],
-        strict=True,
-    ):
         rows.append(
-            {
-                "comparison_type": "non_consensus",
-                "implementation_a": None,
-                "implementation_b": None,
-                "minimum_rate_percent": threshold,
-                "estimated_population_affected": int(population),
-                "percent_total_population": (
-                    100.0 * int(population) / summary.total_population
-                ),
-            }
+            row(
+                "pairwise_disagreement",
+                implementation_a,
+                implementation_b,
+                summary.population_affected[pair_index],
+            )
+        )
+    rows.append(row("non_consensus", None, None, summary.population_affected[-1]))
+    fields = [
+        ("comparison_type", pa.string()),
+        ("implementation_a", pa.string()),
+        ("implementation_b", pa.string()),
+    ]
+    for threshold in POPULATION_AFFECTED_THRESHOLDS_PERCENT:
+        suffix = f"ge_{threshold}_percent"
+        fields.extend(
+            [
+                (f"estimated_population_affected_{suffix}", pa.int64()),
+                (f"percent_total_population_{suffix}", pa.float64()),
+            ]
         )
     return pa.Table.from_pylist(
         rows,
-        schema=pa.schema(
-            [
-                ("comparison_type", pa.string()),
-                ("implementation_a", pa.string()),
-                ("implementation_b", pa.string()),
-                ("minimum_rate_percent", pa.uint8()),
-                ("estimated_population_affected", pa.int64()),
-                ("percent_total_population", pa.float64()),
-            ]
-        ),
+        schema=pa.schema(fields),
     )
 
 

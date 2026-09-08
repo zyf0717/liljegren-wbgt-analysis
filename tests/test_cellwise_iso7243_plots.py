@@ -48,15 +48,23 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     population_csv = pcsv.read_csv(figures.population_affected_csv)
     assert population_csv.column_names == [
         "comparison_type", "implementation_a", "implementation_b",
-        "minimum_rate_percent", "estimated_population_affected",
-        "percent_total_population",
+        "estimated_population_affected_ge_5_percent",
+        "percent_total_population_ge_5_percent",
+        "estimated_population_affected_ge_10_percent",
+        "percent_total_population_ge_10_percent",
+        "estimated_population_affected_ge_20_percent",
+        "percent_total_population_ge_20_percent",
+        "estimated_population_affected_ge_30_percent",
+        "percent_total_population_ge_30_percent",
     ]
-    assert population_csv.num_rows == 64
-    assert population_csv["estimated_population_affected"][:5].to_pylist() == [10] * 5
-    np.testing.assert_allclose(
-        population_csv["percent_total_population"][:5].to_pylist(),
-        [1000 / 1010] * 5,
-    )
+    assert population_csv.num_rows == 16
+    for threshold in (5, 10, 20, 30):
+        assert population_csv[
+            f"estimated_population_affected_ge_{threshold}_percent"
+        ][0].as_py() == 10
+        assert population_csv[
+            f"percent_total_population_ge_{threshold}_percent"
+        ][0].as_py() == pytest.approx(1000 / 1010)
 
 
 def test_legacy_product_rejected(tmp_path):
