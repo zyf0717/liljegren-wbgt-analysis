@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from iso7243_fixtures import CELLS, write_days
+from iso7243_fixtures import CELLS, reference_pairwise_counts, write_days
 from liljegren_analysis.cellwise.iso7243 import analyze_cellwise_iso7243_classification
 from liljegren_analysis.cellwise.iso7243_plots import (
     configure_percent_colorbar,
@@ -45,6 +45,30 @@ def test_legacy_product_rejected(tmp_path):
         summarize_cellwise_iso7243_classification(tmp_path)
 
 
+def test_pairwise_plot_uses_each_pairs_support(tmp_path):
+    run = tmp_path / "run"
+    write_days(run, 1)
+    out = analyze_cellwise_iso7243_classification(
+        run, start_date="2025-01-01", end_date="2025-01-01",
+        thresholds_c=[25., 30.], sample_scope="pairwise",
+        output_root=tmp_path / "out", date_workers=1)
+    weights = tmp_path / "population.parquet"
+    pq.write_table(pa.table({"source_cell_id": CELLS, "population": [10, 0, 1000]}), weights)
+    summary = summarize_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    reference = reference_pairwise_counts(run, ["2025-01-01"])
+    expected = np.divide(reference[:, 1] + reference[:, 2], reference[:, 0],
+                         out=np.full((15, 3), np.nan), where=reference[:, 0] > 0)
+    np.testing.assert_allclose(summary.pair_changed_fraction, expected, equal_nan=True)
+    np.testing.assert_allclose(summary.changed_fraction, np.nanmean(expected, axis=0))
+    assert summary.pair_changed_fraction[0, 0] == pytest.approx(3 / 24)
+    # Cell 2 has no all-target support, but ten pairs have valid data there.
+    assert np.isfinite(summary.pair_changed_fraction[:, 2]).sum() == 10
+    assert summary.changed_fraction[2] == 0
+    np.testing.assert_allclose(summary.histogram_shares.sum(axis=1), 1.)
+    output = plot_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    assert output.pairwise_png.stat().st_size > 0
+
+
 def test_no_supported_cells_remain_undefined(tmp_path):
     from iso7243_fixtures import NAMES
     from liljegren_analysis.cellwise.non_consensus_plots import plot_cellwise_iso7243_non_consensus
@@ -70,7 +94,7 @@ def test_no_supported_cells_remain_undefined(tmp_path):
         out.metadata.parent, population_weights_path=weights).png.stat().st_size > 0
 
 
-@pytest.mark.parametrize("upper,label", [(37., "≥ 37"), (100., "100")])
+@pytest.mark.parametrize("upper,label", [(37., "≥ 37"), (41., "≥ 41"), (100., "100")])
 def test_colorbar_endpoint(upper, label):
     figure, axis = plt.subplots()
     image = axis.scatter([0], [0], c=[0], vmin=0, vmax=upper)
@@ -78,4 +102,6 @@ def test_colorbar_endpoint(upper, label):
     configure_percent_colorbar(bar, upper)
     assert bar.get_ticks()[-1] == upper
     assert bar.ax.get_yticklabels()[-1].get_text() == label
+    if upper == 41:
+        assert 40 not in bar.get_ticks()
     plt.close(figure)

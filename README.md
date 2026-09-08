@@ -76,6 +76,14 @@ Analyze cross-implementation spread:
 uv run python scripts/analyze_cellwise_quantile_spread.py --quantity wbgt
 ```
 
+Each spread analysis also writes `implementation_extrema_frequency.csv`: one
+row per implementation and extremum (`min`/`max`), with `p50`, `p90`, `p95`,
+and `p99` columns containing fractions (0–1). Shares use the selected
+weighting (`geometry` by default; `--weighting none` counts cells equally)
+over complete-case cells. Exact ties go to the first target in implementation
+order, matching the existing Parquet extrema frequencies; each percentile
+sums to 1 separately for minima and maxima.
+
 Create global population weights when population-weighted summaries are
 needed:
 
@@ -94,7 +102,8 @@ uv run python scripts/plot_cellwise_iso7243_classification.py
 uv run python scripts/plot_cellwise_iso7243_non_consensus.py
 ```
 
-The analysis classifies raw **hourly WBGT only**. A cell-hour must have an `ok`
+The analysis classifies raw **hourly WBGT only**. By default (`--sample-scope
+all-implementations`), a cell-hour must have an `ok`
 status and finite WBGT in all six selected implementations; Tg/Tnwb do not
 affect its validity. Both pairwise differences and non-consensus use this same
 denominator. Threshold equality enters the higher class. Pairwise `n_higher`
@@ -102,6 +111,21 @@ and `n_lower` describe class(A) relative to class(B), while maps show their sum
 as a percentage of valid hours. Unsupported cells have zero counts and NaN
 rates. Weighted histograms describe cell-pair rates, in five-percentage-point
 bins, rather than weighting individual hours.
+
+Use `--sample-scope pairwise` (Python: `sample_scope="pairwise"`) to require valid
+WBGT only in A and B for each pair. Each pair then has its own `n_compared`;
+missing or invalid WBGT in another target does not exclude that comparison.
+Non-consensus always requires valid WBGT across all selected targets, in either
+mode. The overview averages the supported pair rates equally within each cell;
+it does not pool counts from different pair denominators. Plot readers detect
+the scope from metadata and support both modes.
+
+Select a separate `--output-root` for pairwise results, for example
+`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2-pairwise/`,
+and pass that directory as `--input-root` to the plotting scripts. Switching
+scope in an existing output root is rejected unless `--force` is used.
+Checkpoints cannot be shared between scopes. Existing all-implementation v2
+products and checkpoints remain reusable with the default setting.
 
 Outputs are under
 `data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2/`.
@@ -125,6 +149,9 @@ column reads. Reserve 10 GiB of disk for outputs/checkpoints and approximately
 3–4 GiB of RAM for four workers; actual elapsed time and peak RSS are recorded
 in metadata. Annual per-cell counts are uint32, aggregated using uint64. No
 individual hourly classifications or observation-pair expansion is persisted.
+Pairwise mode additionally holds approximately 48 MiB of validity masks per
+worker on this grid and stores one extra daily counter per cell-pair. It still
+uses a single raw-data scan for both products.
 
 ## Country analysis
 

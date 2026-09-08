@@ -74,6 +74,7 @@ def summarize_cellwise_iso7243_classification(
     """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()
     metadata = load_hourly_metadata(root)
+    sample_scope = metadata.get("sample_scope", "all-implementations")
     implementation_pairs = _implementation_pairs(metadata)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     cell_ids = _integer_column(lookup, "cell_id")
@@ -92,6 +93,7 @@ def summarize_cellwise_iso7243_classification(
     weights = np.vstack((np.ones(len(cell_ids)), _geometry_weights(source_ids),
                          _population_weights(source_ids, population_weights_path)))
     changed_sum = np.zeros(len(cell_ids), dtype=np.uint64)
+    compared_sum = np.zeros(len(cell_ids), dtype=np.uint64)
     pair_changed_fraction = np.full(
         (len(implementation_pairs), len(cell_ids)), np.nan, dtype=np.float64,
     )
@@ -115,15 +117,19 @@ def summarize_cellwise_iso7243_classification(
             raise ValueError("Cell-pair IDs are out of range")
         pair_indices = pair_index_by_code[a * implementation_count + b]
         changed = higher + lower
-        if ((pair_indices < 0).any() or (compared != joint[ids]).any()
-            or (higher < 0).any() or (lower < 0).any()
-            or (changed > non_unanimous[ids]).any()):
+        if ((pair_indices < 0).any() or (compared < joint[ids]).any()
+            or (higher < 0).any() or (lower < 0).any() or (changed > compared).any()):
+            raise ValueError("Cell-pair counts disagree with hourly support")
+        if sample_scope == "all-implementations" and (
+            (compared != joint[ids]).any() or (changed > non_unanimous[ids]).any()
+        ):
             raise ValueError("Cell-pair counts disagree with shared hourly support")
         keys = pair_indices * len(cell_ids) + ids
         if len(np.unique(keys)) != len(keys) or seen[pair_indices, ids].any():
             raise ValueError("Duplicate cell-pair counts")
         seen[pair_indices, ids] = True
         np.add.at(changed_sum, ids, changed.astype(np.uint64))
+        np.add.at(compared_sum, ids, compared.astype(np.uint64))
         supported = compared > 0
         fractions = np.divide(changed, compared, out=np.full(len(ids), np.nan),
                               where=supported)
@@ -141,8 +147,11 @@ def summarize_cellwise_iso7243_classification(
         raise ValueError("Cell-pair product is incomplete")
     if np.any(changed_sum < non_unanimous):
         raise ValueError("Non-consensus exceeds all pair disagreements")
-    mean = np.divide(changed_sum, joint.astype(np.float64) * len(implementation_pairs),
-                     out=np.full(len(cell_ids), np.nan), where=joint > 0)
+    if int(compared_sum.sum()) != metadata["pair_observation_count"]:
+        raise ValueError("Pair observation count differs from metadata")
+    supported_pairs = np.isfinite(pair_changed_fraction).sum(axis=0)
+    mean = np.divide(np.nansum(pair_changed_fraction, axis=0), supported_pairs,
+                     out=np.full(len(cell_ids), np.nan), where=supported_pairs > 0)
     return ISO7243PlotSummary(
         latitude=_float_column(lookup, "latitude"),
         longitude=_float_column(lookup, "longitude"),
@@ -332,7 +341,11 @@ def _dynamic_color_upper_percent(values: np.ndarray) -> float:
 def configure_percent_colorbar(colorbar, upper: float) -> None:
     """Include the endpoint and explicitly mark saturated percentage colours."""
     ticks = colorbar.get_ticks()
-    ticks = np.unique(np.append(ticks[(ticks >= 0) & (ticks <= upper)], upper))
+    ticks = ticks[(ticks >= 0) & (ticks < upper)]
+    if len(ticks) > 1:
+        spacing = float(np.median(np.diff(ticks)))
+        ticks = ticks[upper - ticks >= spacing / 2]
+    ticks = np.unique(np.append(ticks, upper))
     colorbar.set_ticks(ticks, labels=[
         f"≥ {tick:g}" if tick == upper and upper < 100 else f"{tick:g}"
         for tick in ticks

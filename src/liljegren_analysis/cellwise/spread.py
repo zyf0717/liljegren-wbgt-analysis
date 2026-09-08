@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..comparison.config import REFERENCE_IMPLEMENTATION
+from ..io.artifacts import atomic_csv as _atomic_csv
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 from ..io.artifacts import git_commit as _git_commit
@@ -47,6 +48,7 @@ class QuantileSpreadOutputs:
     extrema_frequency: Path
     metadata: Path
     figure_directory: Path
+    extrema_frequency_csv: Path
 
 
 def analyze_cellwise_quantile_spread(
@@ -126,11 +128,13 @@ def analyze_cellwise_quantile_spread(
     summary_path = target_root / "global_quantile_spread_summary.parquet"
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
     extrema_path = target_root / "implementation_extrema_frequency.parquet"
+    extrema_csv_path = target_root / "implementation_extrema_frequency.csv"
     metadata_path = target_root / "metadata.json"
     _atomic_parquet(cellwise, cellwise_path)
     _atomic_parquet(summary, summary_path)
     _atomic_parquet(c_anchor, anchor_path)
     _atomic_parquet(extrema, extrema_path)
+    _atomic_csv(_extrema_fractions(extrema, implementations), extrema_csv_path)
     _atomic_json(
         {
             "schema_version": ANALYSIS_SCHEMA_VERSION,
@@ -149,6 +153,8 @@ def analyze_cellwise_quantile_spread(
             "complete_case_cell_count": len(ids),
             "canonical_cell_count": len(cell_ids),
             "weighting": weighting,
+            "extrema_tie_policy": "first-in-implementation-order",
+            "extrema_csv_units": "fraction-of-complete-case-weight",
             "weight_source": weight_source,
             "weight_sum": float(weights.sum()),
             "canonical_weight_sum": float(canonical_weights.sum()),
@@ -179,6 +185,7 @@ def analyze_cellwise_quantile_spread(
         extrema_path,
         metadata_path,
         figure_directory,
+        extrema_csv_path,
     )
 
 
@@ -473,6 +480,32 @@ def _extrema_frequency(
                 }
             )
     return pa.Table.from_pylist(rows)
+
+
+def _extrema_fractions(
+    extrema: pa.Table, implementations: tuple[str, ...]
+) -> pa.Table:
+    """Pivot the existing extrema shares into fraction-valued percentile columns."""
+    lookup = {
+        (row["implementation"], row["percentile"]): row
+        for row in extrema.to_pylist()
+    }
+    return pa.Table.from_pylist(
+        [
+            {
+                "implementation": implementation,
+                "extremum": extremum,
+                **{
+                    percentile: lookup[implementation, percentile][
+                        f"weight_fraction_arg{extremum}"
+                    ]
+                    for percentile in PERCENTILES
+                },
+            }
+            for implementation in implementations
+            for extremum in ("min", "max")
+        ]
+    )
 
 
 def _primary_map_metric(summary: pa.Table) -> str:

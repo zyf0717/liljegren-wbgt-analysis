@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
 
 
@@ -28,6 +29,22 @@ def atomic_parquet(table: pa.Table, path: Path) -> None:
     temporary_path = Path(temporary)
     try:
         pq.write_table(table, temporary_path, compression="zstd")
+        with temporary_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def atomic_csv(table: pa.Table, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    os.close(descriptor)
+    temporary_path = Path(temporary)
+    try:
+        pcsv.write_csv(table, temporary_path)
         with temporary_path.open("rb") as stream:
             os.fsync(stream.fileno())
         os.replace(temporary_path, path)

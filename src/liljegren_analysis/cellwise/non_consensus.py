@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from ..comparison.config import SampleScope
+
 from .iso7243 import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_DATE_WORKERS,
@@ -29,6 +31,7 @@ def analyze_cellwise_iso7243_non_consensus(
     end_date: str | date,
     thresholds_c: Sequence[float],
     implementations: Sequence[str] = DEFAULT_JOINT_IMPLEMENTATIONS,
+    sample_scope: SampleScope = "all-implementations",
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     date_workers: int = DEFAULT_DATE_WORKERS,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -37,7 +40,7 @@ def analyze_cellwise_iso7243_non_consensus(
     """Compute/reuse both hourly products and return the non-consensus paths."""
     outputs = analyze_cellwise_iso7243_classification(
         hsb_run_paths, start_date=start_date, end_date=end_date,
-        thresholds_c=thresholds_c, implementations=implementations,
+        thresholds_c=thresholds_c, implementations=implementations, sample_scope=sample_scope,
         output_root=output_root, date_workers=date_workers,
         batch_size=batch_size, force=force,
     )

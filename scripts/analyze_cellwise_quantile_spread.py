@@ -41,6 +41,7 @@ def main() -> None:
         ),
     )
     print(outputs.cellwise_spread)
+    print(outputs.extrema_frequency_csv)
 
 
 if __name__ == "__main__":

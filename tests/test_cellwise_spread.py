@@ -7,11 +7,18 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
 
 from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
 from liljegren_analysis.cellwise.grid import grid_from_source_cell_ids
-from liljegren_analysis.cellwise.spread import analyze_cellwise_quantile_spread
+from liljegren_analysis.cellwise.spread import (
+    PERCENTILES,
+    _cellwise_table,
+    _extrema_frequency,
+    _extrema_fractions,
+    analyze_cellwise_quantile_spread,
+)
 from liljegren_analysis.comparison.config import REFERENCE_IMPLEMENTATION
 
 IMPLEMENTATIONS = DEFAULT_JOINT_IMPLEMENTATIONS
@@ -95,6 +102,18 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 pq.read_table(output.extrema_frequency).num_rows,
                 4 * len(IMPLEMENTATIONS),
             )
+            csv = pcsv.read_csv(output.extrema_frequency_csv)
+            self.assertEqual(
+                csv.column_names, ["implementation", "extremum", *PERCENTILES]
+            )
+            self.assertEqual(csv.num_rows, 2 * len(IMPLEMENTATIONS))
+            self.assertEqual(csv["p50"].to_pylist(), [1.0] + [0.0] * 10 + [1.0])
+            self.assertEqual(
+                csv.to_pylist(),
+                _extrema_fractions(
+                    pq.read_table(output.extrema_frequency), IMPLEMENTATIONS
+                ).to_pylist(),
+            )
 
             unweighted = analyze_cellwise_quantile_spread(
                 root,
@@ -126,6 +145,53 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
             population_metadata = json.loads(population_weighted.metadata.read_text())
             self.assertEqual(population_metadata["weighting"], "population")
+            self.assertEqual(
+                population_metadata["extrema_csv_units"], "fraction-of-complete-case-weight"
+            )
+            self.assertEqual(
+                population_metadata["extrema_tie_policy"], "first-in-implementation-order"
+            )
+
+    def test_extrema_csv_fractions_preserve_weights_ties_and_percentiles(self) -> None:
+        implementations = ("a", "b", "c")
+        matrices = (
+            [[1, 1, 3], [3, 2, 1]],
+            [[3, 1, 2], [1, 3, 2]],
+            [[2, 2, 2], [2, 2, 2]],
+            [[1, 2, 3], [1, 3, 2]],
+        )
+        values = {
+            name: {
+                percentile: np.asarray(matrix, dtype=float)[:, index]
+                for percentile, matrix in zip(PERCENTILES, matrices, strict=True)
+            }
+            for index, name in enumerate(implementations)
+        }
+        for weights in (np.array([1.0, 3.0]), np.ones(2)):
+            with self.subTest(weights=weights):
+                table, _ = _cellwise_table(
+                    np.arange(2), np.zeros(2), np.zeros(2), weights, values, implementations
+                )
+                result = _extrema_fractions(
+                    _extrema_frequency(table, weights, implementations), implementations
+                )
+                first = weights[0] / weights.sum()
+                remaining = 1.0 - first
+                np.testing.assert_allclose(
+                    result["p50"].to_numpy(), [first, remaining, 0, 0, remaining, first]
+                )
+                np.testing.assert_allclose(
+                    result["p90"].to_numpy(), [remaining, first, first, remaining, 0, 0]
+                )
+                np.testing.assert_allclose(
+                    result["p95"].to_numpy(), [1, 1, 0, 0, 0, 0]
+                )
+                np.testing.assert_allclose(
+                    result["p99"].to_numpy(), [1, 0, 0, remaining, 0, first]
+                )
+                for percentile in PERCENTILES:
+                    fractions = result[percentile].to_numpy().reshape(3, 2)
+                    np.testing.assert_allclose(fractions.sum(axis=0), [1, 1])
 
     def test_rejects_old_cellwise_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

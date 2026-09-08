@@ -3,6 +3,8 @@
 import argparse
 from pathlib import Path
 
+from ..comparison.config import SAMPLE_SCOPES
+
 from .iso7243 import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_DATE_WORKERS,
@@ -26,6 +28,8 @@ def run(*, non_consensus: bool = False) -> None:
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--thresholds-c", required=True, nargs="+", type=float)
     parser.add_argument("--implementation", action="append")
+    parser.add_argument("--sample-scope", choices=SAMPLE_SCOPES, default="all-implementations",
+                        help="validity for pairwise counts; non-consensus always uses all targets")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--date-workers", type=_positive_int, default=DEFAULT_DATE_WORKERS)
     parser.add_argument("--batch-size", type=_positive_int, default=DEFAULT_BATCH_SIZE)
@@ -36,6 +40,7 @@ def run(*, non_consensus: bool = False) -> None:
         args.hsb_run, start_date=args.start_date, end_date=args.end_date,
         thresholds_c=args.thresholds_c,
         implementations=args.implementation or DEFAULT_JOINT_IMPLEMENTATIONS,
+        sample_scope=args.sample_scope,
         output_root=args.output_root, date_workers=args.date_workers,
         batch_size=args.batch_size, force=args.force,
     )

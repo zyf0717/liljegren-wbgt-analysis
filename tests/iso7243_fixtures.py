@@ -92,3 +92,29 @@ def reference_counts(root, days, thresholds=(25.0, 30.0)):
                     result[3 + 2 * pair, ci] += classes[a] < classes[b]
                     pair += 1
     return result
+
+
+def reference_pairwise_counts(root, days, thresholds=(25.0, 30.0)):
+    """Independent pair intersections; each result contains compared/higher/lower."""
+    result = np.zeros((15, 3, len(CELLS)), dtype=np.uint64)
+    for day in days:
+        records = []
+        for name in NAMES:
+            rows = pq.read_table(
+                root / "results" / day / "0001" / name / "results.parquet"
+            ).to_pylist()
+            records.append({row["row_id"]: row for row in rows
+                            if row["wbgt_status"] == "ok" and row["wbgt_c"] is not None
+                            and np.isfinite(row["wbgt_c"])})
+        pair = 0
+        for a in range(len(NAMES)):
+            for b in range(a + 1, len(NAMES)):
+                for identity in records[a].keys() & records[b].keys():
+                    ci = CELLS.index(identity[:28])
+                    ca = sum(records[a][identity]["wbgt_c"] >= cut for cut in thresholds)
+                    cb = sum(records[b][identity]["wbgt_c"] >= cut for cut in thresholds)
+                    result[pair, 0, ci] += 1
+                    result[pair, 1, ci] += ca > cb
+                    result[pair, 2, ci] += ca < cb
+                pair += 1
+    return result
