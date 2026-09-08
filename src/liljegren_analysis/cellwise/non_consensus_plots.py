@@ -87,7 +87,7 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     colorbar = figure.colorbar(
         image,
         ax=axis,
-        label="WBGT class non-consensus (% valid hours) — P99 cutoff",
+        label="WBGT classification non-consensus (% valid hours)",
     )
     configure_percent_colorbar(colorbar, upper)
     figure.savefig(png, dpi=220)
