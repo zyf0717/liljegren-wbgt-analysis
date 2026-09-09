@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from iso7243_fixtures import NAMES, reference_counts, reference_pairwise_counts, write_day, write_days
+from iso7243_fixtures import NAMES, PAIR_COUNT, reference_counts, reference_pairwise_counts, write_day, write_days
 from liljegren_analysis.cellwise import iso7243
 from liljegren_analysis.cellwise.non_consensus import analyze_cellwise_iso7243_non_consensus
 
@@ -37,10 +37,10 @@ def test_raw_reference_direction_and_wbgt_only_support(tmp_path, batch_size):
     np.testing.assert_allclose(non["non_consensus_percent"].to_pylist(),
                                [100 / 6, 0, np.nan], equal_nan=True)
     pairs = pq.read_table(output.cell_pair_differences)
-    assert pairs.num_rows == 45
+    assert pairs.num_rows == 3 * PAIR_COUNT
     assert pairs.schema.field("n_compared").type == pa.uint32()
     assert pairs.schema.field("n_higher").type == pa.uint32()
-    for pair in range(15):
+    for pair in range(PAIR_COUNT):
         rows = pairs.slice(pair * 3, 3)
         np.testing.assert_array_equal(rows["n_compared"], expected[0])
         np.testing.assert_array_equal(rows["n_higher"], expected[2 + 2 * pair])
@@ -98,7 +98,7 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
     out = analyze(run, tmp_path / "pairwise", sample_scope="pairwise", batch_size=batch_size)
     expected = reference_pairwise_counts(run, ["2025-01-01"])
     pairs = pq.read_table(out.cell_pair_differences)
-    for pi in range(15):
+    for pi in range(PAIR_COUNT):
         for ci, column in enumerate(("n_compared", "n_higher", "n_lower")):
             np.testing.assert_array_equal(pairs.slice(pi * 3, 3)[column], expected[pi, ci])
     assert pairs["n_compared"][0].as_py() == 24

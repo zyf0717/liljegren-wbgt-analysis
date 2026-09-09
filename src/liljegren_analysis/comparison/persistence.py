@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
@@ -17,10 +18,10 @@ import pyarrow.parquet as pq
 from ..io.artifacts import atomic_json as _atomic_json
 from ..results import RESULT_SCHEMA_ID
 from .config import (
-    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
-    PAIRWISE_IMPLEMENTATION_SET_VERSION,
     SAMPLE_SCOPES,
     SampleScope,
+    pairwise_implementation_set_version,
+    pairwise_implementations,
 )
 from .distributions import ABS_HISTOGRAM_VERSION
 
@@ -76,7 +77,9 @@ AREA_WEIGHT_RTOL = 1e-10
 AREA_WEIGHT_ATOL = 1e-6
 
 
-def pairwise_metadata(sample_scope: str) -> dict[str, object]:
+def pairwise_metadata(
+    sample_scope: str, implementations: Sequence[str] | None = None
+) -> dict[str, object]:
     """Return the canonical metadata for one pairwise product scope."""
 
     if sample_scope not in SAMPLE_SCOPES:
@@ -90,20 +93,35 @@ def pairwise_metadata(sample_scope: str) -> dict[str, object]:
         "abs_histogram_version": ABS_HISTOGRAM_VERSION,
     }
     if sample_scope == "all-implementations":
+        selected = pairwise_implementations(implementations)
         metadata.update(
             {
                 "implementation_scope": "configured",
-                "implementation_set_version": PAIRWISE_IMPLEMENTATION_SET_VERSION,
-                "implementations": list(DEFAULT_PAIRWISE_IMPLEMENTATIONS),
+                "implementations": list(selected),
             }
         )
+        set_version = pairwise_implementation_set_version(selected)
+        if set_version is not None:
+            metadata["implementation_set_version"] = set_version
     else:
-        metadata["implementation_scope"] = "data-derived"
+        if implementations is None:
+            metadata["implementation_scope"] = "data-derived"
+        else:
+            metadata.update(
+                {
+                    "implementation_scope": "configured",
+                    "implementations": list(pairwise_implementations(implementations)),
+                }
+            )
     return metadata
 
 
 def initialize_pairwise_output(
-    output_root: str | Path, sample_scope: str, *, overwrite: bool = False
+    output_root: str | Path,
+    sample_scope: str,
+    *,
+    implementations: Sequence[str] | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """Validate or explicitly reset one versioned pairwise output scope."""
 
@@ -111,7 +129,7 @@ def initialize_pairwise_output(
     if overwrite and root.exists():
         _validate_reset_target(root)
         shutil.rmtree(root)
-    _write_metadata(root, sample_scope)
+    _write_metadata(root, sample_scope, implementations)
     return root
 
 
@@ -146,7 +164,11 @@ def completed_pairwise_dates(
 
 
 def persist_date_partitions(
-    output_root: Path, result_date: date, tables: dict[str, pa.Table], sample_scope: str
+    output_root: Path,
+    result_date: date,
+    tables: dict[str, pa.Table],
+    sample_scope: str,
+    implementations: Sequence[str] | None = None,
 ) -> Path:
     """Validate then atomically replace one date directory and its manifest."""
 
@@ -158,7 +180,7 @@ def persist_date_partitions(
         _validate_table(name, table, result_date)
     _validate_cross_table_totals(tables)
     root = pairwise_product_root(output_root, sample_scope)
-    _write_metadata(root, sample_scope)
+    _write_metadata(root, sample_scope, implementations)
     dates = root / "dates"
     dates.mkdir(parents=True, exist_ok=True)
     destination = dates / result_date.isoformat()
@@ -247,8 +269,12 @@ def _validate_cross_table_totals(tables: dict[str, pa.Table]) -> None:
             raise ValueError("Quantity status totals differ across quantities")
 
 
-def _write_metadata(root: Path, sample_scope: str) -> None:
-    metadata = pairwise_metadata(sample_scope)
+def _write_metadata(
+    root: Path,
+    sample_scope: str,
+    implementations: Sequence[str] | None = None,
+) -> None:
+    metadata = pairwise_metadata(sample_scope, implementations)
     path = root / "metadata.json"
     if path.exists():
         if json.loads(path.read_text()) != metadata:

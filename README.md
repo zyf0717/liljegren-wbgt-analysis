@@ -31,13 +31,13 @@ statistics are written atomically as resumable date partitions.
 ```bash
 uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
-  --end-date 2025-12-31 \
-  --workers 4
+  --end-date 2025-12-31
 ```
 
 The default `all-implementations` scope uses common validity across the six
 configured implementations and all three quantities. Use `--sample-scope
-pairwise` for pair-specific support.
+pairwise` for pair-specific support. The default uses one process worker;
+Polars selects its thread-pool size automatically.
 
 Pool daily partitions into annual Parquet tables and the reference-comparison
 workbook:
@@ -66,7 +66,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
 ```
 
 It stores a canonical grid, one wide Parquet table per implementation, and
-metadata under `data/cellwise/temperature-quantiles/`. Work masks and histogram
+metadata under `data/cellwise/6-targets/temperature-quantiles/`. Work masks and histogram
 checkpoints remain resumable until all artifacts have been atomically
 published.
 
@@ -118,13 +118,15 @@ The classification plotting workflow also writes
 for all-target non-consensus, these report the LandScan population residing in
 cells where the annual rate is at least 5%, 10%, 20%, or 30% of valid hours.
 Each qualifying cell's population is counted once per comparison and threshold;
-the statistic is not a population-hour total. The CSV retains exact integer
-population estimates and their percentage of the complete configured population
-dataset in one row per comparison, with dedicated columns for each rate
-threshold. The grouped-bar figure displays that percentage of total population.
+the statistic is not a population-hour total. The CSV has one row per comparison
+and `5%`, `10%`, `20%`, and `30%` columns. Each value combines a compact affected
+population estimate in billions or millions with the percentage of the complete
+configured population dataset in parentheses. Values use up to three significant
+figures and no more than two decimal places. The grouped-bar figure displays that
+percentage of total population.
 The workflow additionally writes
 `figures/iso7243_non_consensus_population_affected.png`, a line chart of total
-population percentage against the four annual non-consensus rate.
+population percentage against the four annual non-consensus rate thresholds.
 
 Use `--sample-scope pairwise` (Python: `sample_scope="pairwise"`) to require valid
 WBGT only in A and B for each pair. Each pair then has its own `n_compared`;
@@ -135,14 +137,14 @@ it does not pool counts from different pair denominators. Plot readers detect
 the scope from metadata and support both modes.
 
 Select a separate `--output-root` for pairwise results, for example
-`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2-pairwise/`,
+`data/cellwise/6-targets/iso7243-classification/2025-hourly-wbgt-v2-pairwise/`,
 and pass that directory as `--input-root` to the plotting scripts. Switching
 scope in an existing output root is rejected unless `--force` is used.
-Checkpoints cannot be shared between scopes. Existing all-implementation v2
-products and checkpoints remain reusable with the default setting.
+Checkpoints cannot be shared between scopes. Custom target sets must use
+separate output roots from the default six-target products.
 
 Outputs are under
-`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2/`.
+`data/cellwise/6-targets/iso7243-classification/2025-hourly-wbgt-v2/`.
 The previous quantile-based output is preserved and rejected by hourly plot
 readers. `analyze_cellwise_iso7243_non_consensus.py` accepts the same arguments
 and computes/reuses the same shared product; it is unnecessary to scan twice.

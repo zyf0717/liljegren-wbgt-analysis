@@ -310,10 +310,10 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
         for threshold, population in zip(
             POPULATION_AFFECTED_THRESHOLDS_PERCENT, populations, strict=True
         ):
-            suffix = f"ge_{threshold}_percent"
-            values[f"estimated_population_affected_{suffix}"] = int(population)
-            values[f"percent_total_population_{suffix}"] = (
-                100.0 * int(population) / summary.total_population
+            population_percent = 100.0 * int(population) / summary.total_population
+            values[f"{threshold}%"] = (
+                f"{_format_population(int(population))} "
+                f"({_format_three_significant_figures(population_percent)}%)"
             )
         return values
 
@@ -336,17 +336,26 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
         ("implementation_b", pa.string()),
     ]
     for threshold in POPULATION_AFFECTED_THRESHOLDS_PERCENT:
-        suffix = f"ge_{threshold}_percent"
-        fields.extend(
-            [
-                (f"estimated_population_affected_{suffix}", pa.int64()),
-                (f"percent_total_population_{suffix}", pa.float64()),
-            ]
-        )
+        fields.append((f"{threshold}%", pa.string()))
     return pa.Table.from_pylist(
         rows,
         schema=pa.schema(fields),
     )
+
+
+def _format_population(population: int) -> str:
+    if population >= 1_000_000_000:
+        return f"{_format_three_significant_figures(population / 1e9)}B"
+    if population >= 100_000:
+        return f"{_format_three_significant_figures(population / 1e6)}M"
+    return f"{population:,}"
+
+
+def _format_three_significant_figures(value: float) -> str:
+    if value == 0.0:
+        return "0"
+    decimals = min(2, max(0, 2 - int(np.floor(np.log10(abs(value))))))
+    return f"{value:.{decimals}f}"
 
 
 def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:

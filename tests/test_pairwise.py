@@ -143,6 +143,47 @@ class PairwiseTests(unittest.TestCase):
                     date(2025, 1, 1), (root,), "all-implementations"
                 )
 
+    def test_all_implementations_replaces_defaults_with_explicit_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "hsb"
+            for implementation, values in (
+                ("alpha", [1.0, 2.0]),
+                ("beta", [0.5, 1.5]),
+                ("unselected", [100.0, 100.0]),
+            ):
+                _write_results(root, implementation, values)
+
+            _, summaries, _, _ = compute_daily_pairwise(
+                date(2025, 1, 1),
+                (root,),
+                "all-implementations",
+                implementations=("alpha", "beta"),
+            )
+
+            assert summaries.pairwise.num_rows == 3
+            assert set(summaries.quantity_status["implementation"].to_pylist()) == {
+                "alpha",
+                "beta",
+            }
+            assert pairwise_metadata(
+                "all-implementations", ("alpha", "beta")
+            )["implementations"] == ["alpha", "beta"]
+
+    def test_legacy_six_target_metadata_remains_readable(self) -> None:
+        legacy = (
+            "argonne-liljegren-c",
+            "heatstress",
+            "kong-huber-pywbgt",
+            "kwodzicki-pywbgt",
+            "meteor",
+            "thermofeel",
+        )
+
+        metadata = pairwise_metadata("all-implementations", legacy)
+
+        assert metadata["implementation_set_version"] == 1
+        assert metadata["implementations"] == list(legacy)
+
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
