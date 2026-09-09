@@ -99,7 +99,8 @@ class ClassificationTests(unittest.TestCase):
                         ("two", 30.0),
                     )
                 )
-            pd.DataFrame(rows).to_parquet(cache)
+            source = pd.DataFrame(rows)
+            source.to_parquet(cache)
 
             analysis = analyze_era5_country_cache(
                 cache, date(2025, 1, 1), date(2025, 1, 1), (25.0,)
@@ -107,9 +108,11 @@ class ClassificationTests(unittest.TestCase):
 
             self.assertEqual(analysis.observation_summary.loc[0, "result_rows"], 12)
             self.assertEqual(
-                set(analysis.classification.classified["implementation"]),
-                set(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
+                analysis.observation_summary.loc[0, "implementations"],
+                len(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
             )
+            self.assertIsNone(analysis.classification.classified)
+            self.assertIsNone(analysis.classification.paired)
             pair_summary = analysis.classification.outputs[
                 "pair_change_summary.csv"
             ]
@@ -126,6 +129,28 @@ class ClassificationTests(unittest.TestCase):
                 ],
                 1,
             )
+            selected = source.loc[
+                source["implementation"].isin(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS)
+            ].copy()
+            expected = analyze_wbgt_classification(
+                selected,
+                (25.0,),
+                pair_keys=[
+                    "result_date",
+                    "run_id",
+                    "cycle_ordinal",
+                    "row_id",
+                    "cell_id",
+                ],
+                month_column="result_date",
+                implementations=DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
+            )
+            for filename, expected_frame in expected.outputs.items():
+                pd.testing.assert_frame_equal(
+                    analysis.classification.outputs[filename],
+                    expected_frame,
+                    check_dtype=False,
+                )
 
     def test_nasa_adapter_loads_matched_result_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -187,6 +212,108 @@ class ClassificationTests(unittest.TestCase):
                     0, "n_non_consensus"
                 ],
                 1,
+            )
+
+    def test_era5_streaming_matches_shared_engine_across_months(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "observations.parquet"
+            rows = []
+            for result_date, samples in (
+                (date(2025, 1, 31), (("one", (24.0, 26.0, 24.0)), ("two", (30.0,) * 3))),
+                (date(2025, 2, 1), (("three", (24.0, 26.0, None)), ("four", (30.0,) * 3))),
+            ):
+                for implementation_index, implementation in enumerate(("a", "b", "c")):
+                    for row_id, values in samples:
+                        value = values[implementation_index]
+                        rows.append(
+                            {
+                                "result_date": result_date,
+                                "run_id": "0001",
+                                "implementation": implementation,
+                                "cycle_ordinal": 1,
+                                "row_id": row_id,
+                                "cell_id": "cell",
+                                "wbgt_status": "ok" if value is not None else "failed",
+                                "wbgt_c": value,
+                                "tg_status": "ok",
+                                "tg_c": 30.0,
+                                "tnwb_status": "ok",
+                                "tnwb_c": 20.0,
+                            }
+                        )
+            source = pd.DataFrame(rows)
+            source.to_parquet(cache)
+
+            analysis = analyze_era5_country_cache(
+                cache,
+                date(2025, 1, 1),
+                date(2025, 2, 28),
+                (25.0,),
+                implementations=("a", "b", "c"),
+            )
+            valid = source["wbgt_status"].eq("ok") & source["wbgt_c"].notna()
+            expected = analyze_wbgt_classification(
+                source.loc[valid].copy(),
+                (25.0,),
+                pair_keys=[
+                    "result_date",
+                    "run_id",
+                    "cycle_ordinal",
+                    "row_id",
+                    "cell_id",
+                ],
+                month_column="result_date",
+                implementations=("a", "b", "c"),
+            )
+
+            for filename, expected_frame in expected.outputs.items():
+                pd.testing.assert_frame_equal(
+                    analysis.classification.outputs[filename],
+                    expected_frame,
+                    check_dtype=False,
+                )
+            coverage = pd.concat(
+                [
+                    source.assign(
+                        quantity=quantity,
+                        quantity_status=source[f"{quantity}_status"],
+                        quantity_value_present=(
+                            source[f"{quantity}_status"].eq("ok")
+                            & source[f"{quantity}_c"].notna()
+                        ),
+                    )[
+                        [
+                            "quantity",
+                            "implementation",
+                            "quantity_status",
+                            "quantity_value_present",
+                        ]
+                    ]
+                    for quantity in ("wbgt", "tg", "tnwb")
+                ]
+            )
+            coverage = (
+                coverage.groupby(
+                    [
+                        "quantity",
+                        "implementation",
+                        "quantity_status",
+                        "quantity_value_present",
+                    ],
+                    as_index=False,
+                    sort=True,
+                )
+                .size()
+                .rename(columns={"size": "n"})
+            )
+            pd.testing.assert_frame_equal(
+                analysis.quantity_coverage, coverage, check_dtype=False
+            )
+            self.assertEqual(
+                analysis.outputs["monthly_non_consensus_summary.csv"][
+                    "n_joint"
+                ].tolist(),
+                [2, 1],
             )
 
     def test_country_classification_default_matches_iso7243_targets(self) -> None:

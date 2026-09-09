@@ -18,11 +18,11 @@ DEFAULT_CLASSIFICATION_IMPLEMENTATIONS = DEFAULT_ISO7243_IMPLEMENTATIONS
 
 @dataclass(frozen=True)
 class ClassificationAnalysis:
-    """Classified observations, implementation pairs, and tabular summaries."""
+    """Optional row-level results and tabular classification summaries."""
 
     classes: pd.DataFrame
-    classified: pd.DataFrame
-    paired: pd.DataFrame
+    classified: pd.DataFrame | None
+    paired: pd.DataFrame | None
     outputs: Mapping[str, pd.DataFrame]
 
 

@@ -194,6 +194,8 @@ Alongside pairwise change and transition CSVs, both workflows write
 `non_consensus_summary.csv` and `monthly_non_consensus_summary.csv` on complete
 all-target WBGT support. NASA POWER also writes location and, when applicable,
 country non-consensus summaries.
+The ERA5-country classifier streams the cache in bounded-memory daily slices;
+row-level classified and paired DataFrames are therefore not materialized.
 
 NASA POWER classification uses
 `scripts/analyze_nasa_power_classification.py` with an HSB run root and explicit
