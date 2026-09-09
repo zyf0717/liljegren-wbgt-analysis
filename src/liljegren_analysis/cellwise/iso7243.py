@@ -30,7 +30,8 @@ from ..results import validate_result_schema
 from ._pipeline import date_range, hsb_run_paths as normalize_runs
 from ._pipeline import input_files, input_fingerprint, validate_run_inventory
 from .grid import CellGrid, grid_from_source_cell_ids, load_grid
-from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS, _identity_batch
+from ._joint_io import identity_batch
+from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 
 ISO7243_SCHEMA_VERSION = 2
@@ -293,7 +294,7 @@ def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_si
             reader = pq.ParquetFile(path)
             validate_result_schema(reader.schema_arrow)
             for batch in reader.iter_batches(columns=_COLUMNS, batch_size=batch_size, use_threads=False):
-                cells, hours, cycles, ordinals = _identity_batch(
+                cells, hours, cycles, ordinals = identity_batch(
                     batch, source_cell_ids=source_ids, current_date=day,
                 )
                 flat = cells * 24 + hours
@@ -344,7 +345,7 @@ def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_si
 
 
 def _pair_counts(counts: np.ndarray, sample_scope: SampleScope):
-    """Keep the legacy common-support checkpoint layout; pairwise adds denominators."""
+    """Decode the common prefix and scope-dependent pair-count stride."""
     stride = 3 if sample_scope == "pairwise" else 2
     for index in range(2, len(counts), stride):
         if sample_scope == "pairwise":
@@ -467,7 +468,7 @@ def _sha256(path: Path) -> str:
 
 
 def load_hourly_metadata(root: Path) -> dict[str, object]:
-    """Reject legacy, incomplete, or modified products before reuse/plotting."""
+    """Reject incomplete, incompatible, or modified products before reuse."""
     path = root / "metadata.json"
     if not path.is_file():
         raise ValueError(f"Missing completion metadata: {path}")
@@ -475,10 +476,10 @@ def load_hourly_metadata(root: Path) -> dict[str, object]:
     expected = dict(schema_version=ISO7243_SCHEMA_VERSION, analysis=ANALYSIS,
                     complete=True, observation_basis="hourly",
                     classification_quantity="wbgt")
-    sample_scope = metadata.get("sample_scope", "all-implementations")
+    sample_scope = metadata.get("sample_scope")
     expected_support = PAIRWISE_SUPPORT_SCOPE if sample_scope == "pairwise" else SUPPORT_SCOPE
     if (sample_scope not in SAMPLE_SCOPES or metadata.get("support_scope") != expected_support
-        or metadata.get("non_consensus_support_scope", SUPPORT_SCOPE) != SUPPORT_SCOPE):
+        or metadata.get("non_consensus_support_scope") != SUPPORT_SCOPE):
         raise ValueError("Invalid hourly WBGT sample scope")
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise ValueError("Input is not a completed hourly WBGT-only ISO 7243 product")

@@ -169,20 +169,10 @@ class PairwiseTests(unittest.TestCase):
                 "all-implementations", ("alpha", "beta")
             )["implementations"] == ["alpha", "beta"]
 
-    def test_legacy_six_target_metadata_remains_readable(self) -> None:
-        legacy = (
-            "argonne-liljegren-c",
-            "heatstress",
-            "kong-huber-pywbgt",
-            "kwodzicki-pywbgt",
-            "meteor",
-            "thermofeel",
-        )
-
-        metadata = pairwise_metadata("all-implementations", legacy)
-
+    def test_default_target_metadata_has_stable_set_version(self) -> None:
+        metadata = pairwise_metadata("all-implementations")
         assert metadata["implementation_set_version"] == 1
-        assert metadata["implementations"] == list(legacy)
+        assert metadata["implementations"] == list(DEFAULT_PAIRWISE_IMPLEMENTATIONS)
 
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -95,7 +95,7 @@ def summarize_cellwise_iso7243_classification(
     """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()
     metadata = load_hourly_metadata(root)
-    sample_scope = metadata.get("sample_scope", "all-implementations")
+    sample_scope = metadata["sample_scope"]
     implementation_pairs = _implementation_pairs(metadata)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     cell_ids = _integer_column(lookup, "cell_id")
@@ -381,7 +381,6 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         rasterized=True,
     )
     configure_equal_earth_axis(map_axis)
-    # map_axis.set_title("Mean classification disagreement across implementation pairs")
     colorbar = figure.colorbar(
         image,
         ax=map_axis,

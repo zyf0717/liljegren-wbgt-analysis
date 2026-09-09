@@ -116,18 +116,18 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
     assert metadata["pair_observation_count"] == int(expected[:, 0].sum())
 
 
-def test_scope_isolation_and_legacy_default_reuse(tmp_path):
+def test_scope_isolation_and_incomplete_metadata_rejection(tmp_path):
     run = tmp_path / "run"
     write_day(run)
     root = tmp_path / "out"
     out = analyze(run, root)
-    # Earlier all-implementation metadata did not carry these additive fields.
     metadata = json.loads(out.metadata.read_text())
     metadata.pop("sample_scope")
     metadata.pop("non_consensus_support_scope")
     out.metadata.write_text(json.dumps(metadata))
-    with patch.object(iso7243, "_scan_day", side_effect=AssertionError("must reuse")):
+    with pytest.raises(ValueError, match="sample scope"):
         analyze(run, root)
+    analyze(run, root, force=True)
     with pytest.raises(ValueError, match="Incompatible"):
         analyze(run, root, sample_scope="pairwise")
     analyze(run, root, sample_scope="pairwise", force=True)

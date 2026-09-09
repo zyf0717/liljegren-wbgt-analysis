@@ -83,7 +83,6 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
         rasterized=True,
     )
     configure_equal_earth_axis(axis)
-    # axis.set_title("Annual ISO 7243 non-consensus rate")
     colorbar = figure.colorbar(
         image,
         ax=axis,

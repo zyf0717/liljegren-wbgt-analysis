@@ -27,15 +27,6 @@ DEFAULT_PAIRWISE_IMPLEMENTATIONS = (
 PAIRWISE_IMPLEMENTATION_SET_VERSION = 1
 _PAIRWISE_IMPLEMENTATION_SET_VERSIONS = {
     DEFAULT_PAIRWISE_IMPLEMENTATIONS: PAIRWISE_IMPLEMENTATION_SET_VERSION,
-    (
-        "argonne-liljegren-c",
-        "mdljts-wbgt",
-        "heatstress",
-        "kong-huber-pywbgt",
-        "kwodzicki-pywbgt",
-        "meteor",
-        "thermofeel",
-    ): 2,
 }
 
 
@@ -68,19 +59,4 @@ def pairwise_implementation_set_version(
     return _PAIRWISE_IMPLEMENTATION_SET_VERSIONS.get(tuple(implementations))
 
 
-IMPLEMENTATION_SET_VERSION = 2
-EXPECTED_IMPLEMENTATIONS = (
-    "argonne-liljegren-c",
-    "mdljts-wbgt",
-    "heatstress",
-    "heatstress-jl",
-    "heatstress-r",
-    "kong-huber-pywbgt",
-    "kwodzicki-pywbgt",
-    "meteor",
-    "thermofeel",
-)
 REFERENCE_IMPLEMENTATION = "argonne-liljegren-c"
-EXPECTED_IMPLEMENTATION_PAIRS = (
-    len(EXPECTED_IMPLEMENTATIONS) * (len(EXPECTED_IMPLEMENTATIONS) - 1) // 2
-)

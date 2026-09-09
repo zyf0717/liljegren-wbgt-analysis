@@ -85,7 +85,7 @@ def test_percentage_display_caps_precision_at_two_decimal_places(value, expected
     assert _format_three_significant_figures(value) == expected
 
 
-def test_legacy_product_rejected(tmp_path):
+def test_incompatible_product_rejected(tmp_path):
     (tmp_path / "metadata.json").write_text(json.dumps({"quantiles": ["p50", "p90", "p95", "p99"]}))
     with pytest.raises(ValueError, match="hourly"):
         summarize_cellwise_iso7243_classification(tmp_path)
