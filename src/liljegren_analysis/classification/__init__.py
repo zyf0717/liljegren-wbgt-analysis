@@ -2,7 +2,9 @@
 
 from .core import (
     ClassificationAnalysis,
+    DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
     analyze_wbgt_classification,
+    classification_implementations,
     class_definitions,
     validate_thresholds,
     write_outputs,
@@ -12,11 +14,13 @@ from .nasa_power import NasaPowerClassificationAnalysis, analyze_nasa_power_run
 
 __all__ = [
     "ClassificationAnalysis",
+    "DEFAULT_CLASSIFICATION_IMPLEMENTATIONS",
     "Era5ClassificationAnalysis",
     "NasaPowerClassificationAnalysis",
     "analyze_era5_country_cache",
     "analyze_nasa_power_run",
     "analyze_wbgt_classification",
+    "classification_implementations",
     "class_definitions",
     "validate_thresholds",
     "write_outputs",

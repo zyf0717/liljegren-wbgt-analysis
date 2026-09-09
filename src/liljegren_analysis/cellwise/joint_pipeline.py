@@ -19,6 +19,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from ..comparison.config import DEFAULT_ISO7243_IMPLEMENTATIONS
 from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
@@ -65,14 +66,7 @@ HOURS_PER_DAY = 24
 REPLAY_STRATEGY = "implementation-all-quantities-in-memory-v3"
 DEFAULT_DATE_WORKERS = 4
 DEFAULT_REPLAY_WORKERS = 2
-DEFAULT_JOINT_IMPLEMENTATIONS = (
-    "argonne-liljegren-c",
-    "heatstress",
-    "meteor",
-    "thermofeel",
-    "kwodzicki-pywbgt",
-    "kong-huber-pywbgt",
-)
+DEFAULT_JOINT_IMPLEMENTATIONS = DEFAULT_ISO7243_IMPLEMENTATIONS
 
 
 @dataclass(frozen=True)

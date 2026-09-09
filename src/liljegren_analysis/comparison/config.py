@@ -8,6 +8,14 @@ from typing import Literal
 
 SampleScope = Literal["pairwise", "all-implementations"]
 SAMPLE_SCOPES: tuple[SampleScope, ...] = ("pairwise", "all-implementations")
+DEFAULT_ISO7243_IMPLEMENTATIONS = (
+    "argonne-liljegren-c",
+    "heatstress",
+    "meteor",
+    "thermofeel",
+    "kwodzicki-pywbgt",
+    "kong-huber-pywbgt",
+)
 DEFAULT_PAIRWISE_IMPLEMENTATIONS = (
     "argonne-liljegren-c",
     "heatstress",

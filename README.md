@@ -188,6 +188,13 @@ uv run python scripts/analyze_era5_country_classification.py \
   --thresholds-c 21 25 28 31
 ```
 
+ERA5-country and NASA POWER classification default to the same six targets as
+the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.
+Alongside pairwise change and transition CSVs, both workflows write
+`non_consensus_summary.csv` and `monthly_non_consensus_summary.csv` on complete
+all-target WBGT support. NASA POWER also writes location and, when applicable,
+country non-consensus summaries.
+
 NASA POWER classification uses
 `scripts/analyze_nasa_power_classification.py` with an HSB run root and explicit
 date, threshold, and location scope.

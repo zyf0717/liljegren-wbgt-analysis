@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
 from liljegren_analysis.classification import (
+    DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
     analyze_era5_country_cache,
     analyze_nasa_power_run,
     analyze_wbgt_classification,
@@ -40,35 +42,87 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(summary["a_higher_class"], 1)
         self.assertEqual(summary["b_higher_class"], 1)
         self.assertEqual(analysis.classified["class_id"].tolist(), [0, 1, 2, 1])
+        non_consensus = analysis.outputs["non_consensus_summary.csv"].iloc[0]
+        self.assertEqual(non_consensus["n_joint"], 2)
+        self.assertEqual(non_consensus["n_non_consensus"], 2)
+        self.assertEqual(non_consensus["non_consensus_percent"], 100.0)
+
+    def test_shared_engine_non_consensus_requires_all_target_support(self) -> None:
+        observations = pd.DataFrame(
+            {
+                "sample_id": [1, 1, 1, 2, 2],
+                "timestamp": pd.to_datetime(["2025-01-01T00:00:00Z"] * 5),
+                "implementation": ["a", "b", "c", "a", "b"],
+                "wbgt_c": [24.0, 26.0, 24.0, 24.0, 26.0],
+            }
+        )
+
+        analysis = analyze_wbgt_classification(
+            observations,
+            (25.0,),
+            pair_keys=["sample_id", "timestamp"],
+            month_column="timestamp",
+            implementations=("a", "b", "c"),
+        )
+
+        summary = analysis.outputs["non_consensus_summary.csv"].iloc[0]
+        self.assertEqual(summary["n_joint"], 1)
+        self.assertEqual(summary["n_non_consensus"], 1)
 
     def test_era5_adapter_reads_only_preselected_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / "observations.parquet"
-            pd.DataFrame(
-                {
-                    "result_date": [date(2025, 1, 1)] * 4,
-                    "run_id": [1] * 4,
-                    "implementation": ["a", "b", "a", "b"],
-                    "cycle_ordinal": [1] * 4,
-                    "row_id": ["one", "one", "two", "two"],
-                    "cell_id": ["cell", "cell", "cell", "cell"],
-                    "wbgt_status": ["ok"] * 4,
-                    "wbgt_c": [24.0, 26.0, 30.0, 30.0],
-                    "tg_status": ["ok"] * 4,
-                    "tg_c": [30.0] * 4,
-                    "tnwb_status": ["ok"] * 4,
-                    "tnwb_c": [20.0] * 4,
-                }
-            ).to_parquet(cache)
+            rows = []
+            for implementation in (*DEFAULT_CLASSIFICATION_IMPLEMENTATIONS, "extra"):
+                rows.extend(
+                    {
+                        "result_date": date(2025, 1, 1),
+                        "run_id": 1,
+                        "implementation": implementation,
+                        "cycle_ordinal": 1,
+                        "row_id": row_id,
+                        "cell_id": "cell",
+                        "wbgt_status": "ok",
+                        "wbgt_c": value,
+                        "tg_status": "ok",
+                        "tg_c": 30.0,
+                        "tnwb_status": "ok",
+                        "tnwb_c": 20.0,
+                    }
+                    for row_id, value in (
+                        (
+                            "one",
+                            24.0
+                            if implementation == "argonne-liljegren-c"
+                            else 26.0,
+                        ),
+                        ("two", 30.0),
+                    )
+                )
+            pd.DataFrame(rows).to_parquet(cache)
 
             analysis = analyze_era5_country_cache(
                 cache, date(2025, 1, 1), date(2025, 1, 1), (25.0,)
             )
 
-            self.assertEqual(analysis.observation_summary.loc[0, "result_rows"], 4)
+            self.assertEqual(analysis.observation_summary.loc[0, "result_rows"], 12)
             self.assertEqual(
-                analysis.classification.outputs["pair_change_summary.csv"].loc[
-                    0, "n_changed"
+                set(analysis.classification.classified["implementation"]),
+                set(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
+            )
+            pair_summary = analysis.classification.outputs[
+                "pair_change_summary.csv"
+            ]
+            pair = pair_summary.loc[
+                pair_summary["implementation_a"].eq("argonne-liljegren-c")
+                & pair_summary["implementation_b"].eq("heatstress")
+            ].iloc[0]
+            self.assertEqual(
+                pair["n_changed"], 1
+            )
+            self.assertEqual(
+                analysis.outputs["non_consensus_summary.csv"].loc[
+                    0, "n_non_consensus"
                 ],
                 1,
             )
@@ -89,7 +143,12 @@ class ClassificationTests(unittest.TestCase):
                     "latitude_deg_north": [0.0, 0.0],
                 }
             ).to_csv(root / "dataset" / "workload.csv", index=False)
-            for implementation, values in (("a", [24.0, 30.0]), ("b", [26.0, 30.0])):
+            for implementation in (*DEFAULT_CLASSIFICATION_IMPLEMENTATIONS, "extra"):
+                values = (
+                    [24.0, 30.0]
+                    if implementation == "argonne-liljegren-c"
+                    else [26.0, 30.0]
+                )
                 directory = root / "results" / "2025" / "0001" / implementation
                 directory.mkdir(parents=True)
                 pd.DataFrame(
@@ -112,8 +171,29 @@ class ClassificationTests(unittest.TestCase):
 
             self.assertEqual(analysis.workload_summary.loc[0, "workload_rows"], 2)
             self.assertEqual(
-                analysis.outputs["location_pair_change_summary.csv"].loc[0, "n_changed"], 1
+                set(analysis.status_summary["implementation"]),
+                set(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
             )
+            pair_summary = analysis.outputs["location_pair_change_summary.csv"]
+            pair = pair_summary.loc[
+                pair_summary["implementation_a"].eq("argonne-liljegren-c")
+                & pair_summary["implementation_b"].eq("heatstress")
+            ].iloc[0]
+            self.assertEqual(
+                pair["n_changed"], 1
+            )
+            self.assertEqual(
+                analysis.outputs["location_non_consensus_summary.csv"].loc[
+                    0, "n_non_consensus"
+                ],
+                1,
+            )
+
+    def test_country_classification_default_matches_iso7243_targets(self) -> None:
+        self.assertEqual(
+            DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
+            DEFAULT_JOINT_IMPLEMENTATIONS,
+        )
 
 
 if __name__ == "__main__":

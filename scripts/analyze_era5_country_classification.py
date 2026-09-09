@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--thresholds-c", required=True, nargs="+", type=float, metavar="CELSIUS"
     )
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        dest="implementations",
+        help="target implementation; repeat to replace the default six-target set",
+    )
     arguments = parser.parse_args()
     if arguments.start_date > arguments.end_date:
         parser.error("--start-date must not be after --end-date")
@@ -37,6 +43,7 @@ def main() -> int:
             arguments.start_date,
             arguments.end_date,
             arguments.thresholds_c,
+            implementations=arguments.implementations,
         )
         write_outputs(analysis.outputs, arguments.output_root)
     except (OSError, ValueError) as error:

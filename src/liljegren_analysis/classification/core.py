@@ -10,6 +10,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..comparison.config import DEFAULT_ISO7243_IMPLEMENTATIONS
+
+
+DEFAULT_CLASSIFICATION_IMPLEMENTATIONS = DEFAULT_ISO7243_IMPLEMENTATIONS
+
 
 @dataclass(frozen=True)
 class ClassificationAnalysis:
@@ -32,6 +37,27 @@ def validate_thresholds(thresholds_c: Sequence[float]) -> tuple[float, ...]:
     ):
         raise ValueError("thresholds_c must be finite and strictly increasing")
     return thresholds
+
+
+def classification_implementations(
+    implementations: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """Resolve and validate the target set used by country classifications."""
+
+    if isinstance(implementations, str):
+        raise TypeError("implementations must be a sequence, not a string")
+    selected = (
+        DEFAULT_CLASSIFICATION_IMPLEMENTATIONS
+        if implementations is None
+        else tuple(implementations)
+    )
+    if len(selected) < 2:
+        raise ValueError("implementations must contain at least two targets")
+    if any(not implementation for implementation in selected):
+        raise ValueError("implementation names must not be empty")
+    if len(set(selected)) != len(selected):
+        raise ValueError("implementations must be unique")
+    return selected
 
 
 def class_definitions(thresholds_c: Sequence[float]) -> pd.DataFrame:
@@ -57,6 +83,7 @@ def analyze_wbgt_classification(
     pair_keys: Sequence[str],
     month_column: str,
     summary_dimensions: Sequence[str] = (),
+    implementations: Sequence[str] | None = None,
 ) -> ClassificationAnalysis:
     """Classify valid WBGT values and compare every implementation pair.
 
@@ -74,6 +101,20 @@ def analyze_wbgt_classification(
         raise ValueError("observations is empty")
 
     thresholds = validate_thresholds(thresholds_c)
+    selected = (
+        tuple(sorted(observations["implementation"].unique()))
+        if implementations is None
+        else classification_implementations(implementations)
+    )
+    available = set(observations["implementation"])
+    missing_implementations = sorted(set(selected) - available)
+    if missing_implementations:
+        raise ValueError(
+            f"classification implementations are missing: {missing_implementations}"
+        )
+    observations = observations.loc[
+        observations["implementation"].isin(selected)
+    ].copy()
     classes = class_definitions(thresholds)
     classified = observations.copy()
     values = pd.to_numeric(classified["wbgt_c"], errors="coerce")
@@ -118,14 +159,71 @@ def analyze_wbgt_classification(
     _add_summaries(
         outputs, paired, classes, ["result_month", *pair_columns], "monthly_pair"
     )
+    complete = _complete_implementation_observations(
+        classified, pair_keys, len(selected)
+    )
+    outputs["non_consensus_summary.csv"] = _summarize_non_consensus(complete, [])
+    outputs["monthly_non_consensus_summary.csv"] = _summarize_non_consensus(
+        complete, ["result_month"]
+    )
     for dimension in summary_dimensions:
         if dimension not in paired.columns:
             raise ValueError(f"summary dimension is missing from pair keys: {dimension}")
         _add_summaries(
             outputs, paired, classes, [dimension, *pair_columns], f"{dimension}_pair"
         )
+        outputs[f"{dimension}_non_consensus_summary.csv"] = (
+            _summarize_non_consensus(complete, [dimension])
+        )
 
     return ClassificationAnalysis(classes, classified, paired, outputs)
+
+
+def _complete_implementation_observations(
+    classified: pd.DataFrame,
+    pair_keys: Sequence[str],
+    implementation_count: int,
+) -> pd.DataFrame:
+    dimensions = [column for column in pair_keys if column in classified.columns]
+    complete = (
+        classified.groupby(dimensions, as_index=False, sort=True)
+        .agg(
+            result_month=("result_month", "first"),
+            n_implementations=("implementation", "nunique"),
+            n_classes=("class_id", "nunique"),
+        )
+    )
+    complete = complete.loc[
+        complete["n_implementations"].eq(implementation_count)
+    ].copy()
+    complete["non_consensus"] = complete["n_classes"].gt(1)
+    return complete
+
+
+def _summarize_non_consensus(
+    complete: pd.DataFrame, group_columns: list[str]
+) -> pd.DataFrame:
+    if group_columns:
+        summary = (
+            complete.groupby(group_columns, as_index=False, sort=True)
+            .agg(
+                n_joint=("non_consensus", "size"),
+                n_non_consensus=("non_consensus", "sum"),
+            )
+        )
+    else:
+        summary = pd.DataFrame(
+            {
+                "n_joint": [len(complete)],
+                "n_non_consensus": [int(complete["non_consensus"].sum())],
+            }
+        )
+    summary["non_consensus_percent"] = (
+        100.0 * summary["n_non_consensus"] / summary["n_joint"]
+    ).round(4)
+    return summary[
+        [*group_columns, "n_joint", "n_non_consensus", "non_consensus_percent"]
+    ]
 
 
 def write_outputs(outputs: Mapping[str, pd.DataFrame], output_directory: str | Path) -> None:

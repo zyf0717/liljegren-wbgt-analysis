@@ -11,7 +11,11 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from .core import ClassificationAnalysis, analyze_wbgt_classification
+from .core import (
+    ClassificationAnalysis,
+    analyze_wbgt_classification,
+    classification_implementations,
+)
 
 
 @dataclass(frozen=True)
@@ -30,7 +34,12 @@ class Era5ClassificationAnalysis:
 
 
 def analyze_era5_country_cache(
-    cache_path: str | Path, start_date: date, end_date: date, thresholds_c: Sequence[float]
+    cache_path: str | Path,
+    start_date: date,
+    end_date: date,
+    thresholds_c: Sequence[float],
+    *,
+    implementations: Sequence[str] | None = None,
 ) -> Era5ClassificationAnalysis:
     """Analyze one preselected country Parquet cache without SQL or spill state."""
 
@@ -46,6 +55,13 @@ def analyze_era5_country_cache(
     ].copy()
     if observations.empty:
         raise ValueError("country cache has no rows in the requested date range")
+    selected = classification_implementations(implementations)
+    missing = sorted(set(selected) - set(observations["implementation"]))
+    if missing:
+        raise ValueError(f"classification implementations are missing: {missing}")
+    observations = observations.loc[
+        observations["implementation"].isin(selected)
+    ].copy()
     identity = ["result_date", "run_id", "implementation", "cycle_ordinal", "row_id"]
     duplicates = int(observations.duplicated(identity).sum())
     if duplicates:
@@ -73,6 +89,7 @@ def analyze_era5_country_cache(
         observations.loc[_valid(observations, "wbgt")].copy(), thresholds_c,
         pair_keys=["result_date", "run_id", "cycle_ordinal", "row_id", "cell_id"],
         month_column="result_date",
+        implementations=selected,
     )
     return Era5ClassificationAnalysis(classification, summary, coverage)
 
