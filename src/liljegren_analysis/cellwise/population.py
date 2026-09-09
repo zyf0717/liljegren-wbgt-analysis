@@ -19,7 +19,7 @@ ERA5_SPACING_DEGREES = 0.25
 LANDSCAN_RESOLUTION_DEGREES = 1.0 / 120.0
 LANDSCAN_PIXELS_PER_ERA5_CELL = 30
 LANDSCAN_NODATA = -2_147_483_647
-POPULATION_SCHEMA_VERSION = 1
+POPULATION_SCHEMA_VERSION = 2
 DEFAULT_LANDSCAN_PATH = Path(
     "data/population/landscan-global-2024/landscan-global-2024.tif"
 )
@@ -43,7 +43,9 @@ def compute_era5_population_weights(
     """Write global ERA5 population totals and normalized LandScan weights.
 
     The 30-arc-second LandScan grid aligns exactly with 0.25-degree ERA5 cell
-    boundaries. Raster data are read one ERA5 latitude band at a time.
+    boundaries at +/-0.125 degrees from each grid point. Longitude wraps at
+    the dateline; latitude clips at the poles. Raster data are read one ERA5
+    latitude band at a time.
     """
 
     raster_path = Path(input_raster).expanduser().resolve()
@@ -87,6 +89,7 @@ def compute_era5_population_weights(
             "era5_spacing_degrees": ERA5_SPACING_DEGREES,
             "era5_cell_count": table.num_rows,
             "grid_definition": "global-era5-0.25-degree-v1",
+            "population_cell_bounds": "grid-point +/-0.125 degrees; longitude wraps, latitude clips",
             "population_total": total_population,
             "population_weight_definition": "population / global_population_total",
             "polar_row_source_pixel_height": LANDSCAN_PIXELS_PER_ERA5_CELL // 2,
@@ -159,12 +162,17 @@ def _landscan_row_bounds(latitude_units: int) -> tuple[int, int]:
 
 
 def _sum_latitude_band(values: np.ndarray) -> np.ndarray:
+    """Sum pixel counts into longitude cells centered on ERA5 grid points."""
     if values.ndim != 2 or values.shape[1] % LANDSCAN_PIXELS_PER_ERA5_CELL:
         raise ValueError("LandScan latitude band has invalid dimensions")
     valid = values != LANDSCAN_NODATA
     if np.any(values[valid] < 0):
         raise ValueError("LandScan raster contains negative population values")
     population = np.where(valid, values, 0).astype(np.int64, copy=False)
+    # The raster begins at -180 degrees, the center of the first ERA5 cell.
+    # Its western half comes from the raster's final 15 columns. Moving those
+    # columns to the front aligns every 30-pixel block with centered bounds.
+    population = np.roll(population, LANDSCAN_PIXELS_PER_ERA5_CELL // 2, axis=1)
     return population.reshape(
         values.shape[0],
         values.shape[1] // LANDSCAN_PIXELS_PER_ERA5_CELL,

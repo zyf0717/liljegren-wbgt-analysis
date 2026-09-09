@@ -91,6 +91,12 @@ needed:
 uv run python scripts/compute_era5_population_weights.py
 ```
 
+Population weights use cells centered on ERA5 grid points, extending 0.125°
+in each direction, wrapping longitude at the dateline and clipping latitude
+at the poles. Population metadata schema v2 corrects a half-cell longitude
+offset in v1. Rebuild v1 weights with `--force`, then rerun classification
+plotting and any spread analyses using `--weighting population`.
+
 Generate hourly WBGT ISO 7243 classification artifacts and figures:
 
 ```bash
