@@ -86,6 +86,11 @@ def pc_slice(values: pa.ChunkedArray, stop: int) -> pa.ChunkedArray:
     [
         ({"country_iso_a3": "JPN"}, [21, 25, 28, 31], "JPN MoE"),
         (
+            {"country_iso_a3": "THA", "country_name": "Thailand"},
+            [30, 32, 34],
+            "Thailand workload limits",
+        ),
+        (
             {"country_iso_a3": "USA", "selection_bounds": [-125, 24, -67, 50]},
             [25, 26, 28, 30],
             "CONUS OSHA",

@@ -261,6 +261,8 @@ def country_classification_label(metadata: dict[str, object]) -> str | None:
     country_iso_a3 = selection.get("country_iso_a3")
     if country_iso_a3 == "JPN" and thresholds == (21.0, 25.0, 28.0, 31.0):
         return "JPN MoE"
+    if country_iso_a3 == "THA" and thresholds == (30.0, 32.0, 34.0):
+        return "Thailand workload limits"
     if (
         country_iso_a3 == "USA"
         and "selection_bounds" in selection

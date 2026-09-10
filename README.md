@@ -222,6 +222,18 @@ uv run python scripts/analyze_cellwise_iso7243_classification.py \
   --thresholds-c 21 25 28 31 \
   --output-root data/country/jpn/cellwise/6-targets/iso7243/2025
 
+# Thailand workload limits: heavy 30 C, moderate 32 C, light 34 C
+uv run python scripts/extract_country.py THA
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/tha/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 30 32 34 \
+  --output-root data/cellwise/tha
+uv run python scripts/plot_cellwise_iso7243_classification.py \
+  --input-root data/cellwise/tha
+uv run python scripts/plot_cellwise_iso7243_non_consensus.py \
+  --input-root data/cellwise/tha
+
 uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --country-cache data/country/usa/observations.parquet \
   --start-date 2025-01-01 --end-date 2025-12-31 \
