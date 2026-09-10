@@ -69,24 +69,24 @@ def configure_equal_earth_axis(
 
     longitude_line = np.linspace(-180.0, 180.0, 361)
     latitude_line = np.linspace(-90.0, 90.0, 181)
-    for latitude in (-60.0, -30.0, 0.0, 30.0, 60.0):
+    for graticule_latitude in (-60.0, -30.0, 0.0, 30.0, 60.0):
         x, y = equal_earth_coordinates(
-            longitude_line, np.full_like(longitude_line, latitude)
+            longitude_line, np.full_like(longitude_line, graticule_latitude)
         )
         axis.plot(x, y, color="0.7", linewidth=0.35, zorder=0)
-    for longitude in (-120.0, -60.0, 0.0, 60.0, 120.0):
+    for graticule_longitude in (-120.0, -60.0, 0.0, 60.0, 120.0):
         x, y = equal_earth_coordinates(
-            np.full_like(latitude_line, longitude), latitude_line
+            np.full_like(latitude_line, graticule_longitude), latitude_line
         )
         axis.plot(x, y, color="0.7", linewidth=0.35, zorder=0)
-    for longitude in (-180.0, 180.0):
+    for boundary_longitude in (-180.0, 180.0):
         x, y = equal_earth_coordinates(
-            np.full_like(latitude_line, longitude), latitude_line
+            np.full_like(latitude_line, boundary_longitude), latitude_line
         )
         axis.plot(x, y, color="0.25", linewidth=0.6, zorder=0)
-    for latitude in (-90.0, 90.0):
+    for boundary_latitude in (-90.0, 90.0):
         x, y = equal_earth_coordinates(
-            longitude_line, np.full_like(longitude_line, latitude)
+            longitude_line, np.full_like(longitude_line, boundary_latitude)
         )
         axis.plot(x, y, color="0.25", linewidth=0.6, zorder=0)
     axis.set(

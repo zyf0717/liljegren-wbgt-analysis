@@ -61,6 +61,13 @@ class EqualEarthProjectionTests(unittest.TestCase):
             latitude=np.array([24.0, 49.5]),
         )
         try:
+            x, y = equal_earth_coordinates(
+                np.array([-125.0, -66.5]), np.array([24.0, 49.5])
+            )
+            self.assertLess(axis.get_xlim()[0], x.min())
+            self.assertGreater(axis.get_xlim()[1], x.max())
+            self.assertLess(axis.get_ylim()[0], y.min())
+            self.assertGreater(axis.get_ylim()[1], y.max())
             self.assertLess(np.ptp(axis.get_xlim()), 0.5 * 2 * EQUAL_EARTH_X_LIMIT)
             self.assertLess(np.ptp(axis.get_ylim()), 0.5 * 2 * EQUAL_EARTH_Y_LIMIT)
         finally:
