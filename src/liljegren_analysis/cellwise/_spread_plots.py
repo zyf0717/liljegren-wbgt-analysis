@@ -8,7 +8,11 @@ from typing import Literal
 import numpy as np
 import pyarrow as pa
 
-from .projection import configure_equal_earth_axis, plot_equal_earth_cells
+from .projection import (
+    configure_equal_earth_axis,
+    plot_equal_earth_cells,
+    regional_map_figure_size,
+)
 
 PERCENTILES = ("p50", "p90", "p95", "p99")
 SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
@@ -68,7 +72,12 @@ def _write_spread_maps(
     longitude = _float_column(cellwise, "longitude")
     latitude = _float_column(cellwise, "latitude")
     for metric in SPREAD_METRICS:
-        figure, axis = plt.subplots(figsize=(10, 4.8), layout="constrained")
+        figure_size = (
+            regional_map_figure_size(longitude, latitude)
+            if region_label is not None
+            else (10.0, 4.8)
+        )
+        figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
         values = _float_column(cellwise, metric)
         image = plot_equal_earth_cells(
             axis,

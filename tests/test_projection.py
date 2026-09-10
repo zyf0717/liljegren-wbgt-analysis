@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 import numpy as np
@@ -12,6 +15,7 @@ from liljegren_analysis.cellwise.projection import (
     configure_equal_earth_axis,
     equal_earth_coordinates,
     plot_equal_earth_cells,
+    regional_map_figure_size,
 )
 
 
@@ -74,6 +78,19 @@ class EqualEarthProjectionTests(unittest.TestCase):
             self.assertLess(np.ptp(axis.get_ylim()), 0.5 * 2 * EQUAL_EARTH_Y_LIMIT)
         finally:
             plt.close(figure)
+
+    def test_regional_canvas_follows_projected_aspect_ratio(self) -> None:
+        tall = regional_map_figure_size(
+            longitude=np.array([97.25, 105.75]),
+            latitude=np.array([5.75, 20.5]),
+        )
+        wide = regional_map_figure_size(
+            longitude=np.array([-124.75, -67.0]),
+            latitude=np.array([24.5, 49.25]),
+        )
+
+        self.assertLess(tall[0], tall[1])
+        self.assertGreater(wide[0], wide[1])
 
     def test_regional_cells_are_contiguous_projected_polygons(self) -> None:
         figure, axis = plt.subplots()

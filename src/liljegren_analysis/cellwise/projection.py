@@ -61,6 +61,23 @@ EQUAL_EARTH_Y_LIMIT = float(
 ERA5_CELL_SIZE_DEGREES = 0.25
 
 
+def regional_map_figure_size(
+    longitude: np.ndarray, latitude: np.ndarray
+) -> tuple[float, float]:
+    """Fit a standalone regional map canvas to its projected aspect ratio."""
+
+    x, y = equal_earth_coordinates(longitude, latitude)
+    valid = np.isfinite(x) & np.isfinite(y)
+    if not valid.any():
+        raise ValueError("Map extent contains no finite coordinates")
+    y_span = float(np.ptp(y[valid]))
+    if y_span <= 0.0:
+        return (10.0, 4.8)
+    aspect = float(np.ptp(x[valid])) / y_span
+    height = 6.4 if aspect < 1.0 else 4.8
+    return (float(np.clip(height * aspect + 1.5, 4.5, 10.0)), height)
+
+
 def plot_equal_earth_cells(
     axis: Any,
     longitude: np.ndarray,

@@ -11,7 +11,11 @@ import pyarrow.parquet as pq
 from .non_consensus import DEFAULT_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
-from .projection import configure_equal_earth_axis, plot_equal_earth_cells
+from .projection import (
+    configure_equal_earth_axis,
+    plot_equal_earth_cells,
+    regional_map_figure_size,
+)
 
 
 @dataclass(frozen=True)
@@ -77,7 +81,12 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
 
     valid = np.isfinite(percent)
     upper = _dynamic_color_upper_percent(percent)
-    figure, axis = plt.subplots(figsize=(10.0, 4.8), layout="constrained")
+    figure_size = (
+        regional_map_figure_size(longitude, latitude)
+        if region_label is not None
+        else (10.0, 4.8)
+    )
+    figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
     image = plot_equal_earth_cells(
         axis,
         longitude[valid],
