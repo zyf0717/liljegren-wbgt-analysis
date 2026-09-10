@@ -193,7 +193,9 @@ def _iter_country_batches(
     reader = _country_reader(str(source.path), source.fingerprint)
     routed = source.scopes[current_date, implementation]
     row_groups = sorted({group for _, groups in routed for group in groups})
-    read_columns = list(dict.fromkeys((*columns, *_ROUTING_COLUMNS, "cell_id")))
+    read_columns = list(
+        dict.fromkeys((*columns, *_ROUTING_COLUMNS, "row_id", "cell_id"))
+    )
     day = pa.scalar(current_date, type=pa.date32())
     target = pa.scalar(implementation, type=pa.string())
     for batch in reader.iter_batches(

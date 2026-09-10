@@ -12,6 +12,10 @@ from liljegren_analysis.cellwise import (
     DEFAULT_REPLAY_WORKERS,
     compute_joint_cellwise_temperature_quantiles,
 )
+from liljegren_analysis.comparison.distributions import (
+    DEFAULT_WBGT_HISTOGRAM,
+    WBGTHistogramSpec,
+)
 
 
 def _positive_int(value: str) -> int:
@@ -44,6 +48,21 @@ def main() -> None:
         help="deterministic exact-order-statistic validation sample; zero disables it",
     )
     parser.add_argument(
+        "--temperature-bin-min-c",
+        type=float,
+        default=DEFAULT_WBGT_HISTOGRAM.minimum_c,
+    )
+    parser.add_argument(
+        "--temperature-bin-max-c",
+        type=float,
+        default=DEFAULT_WBGT_HISTOGRAM.maximum_c,
+    )
+    parser.add_argument(
+        "--temperature-bin-width-c",
+        type=float,
+        default=DEFAULT_WBGT_HISTOGRAM.width_c,
+    )
+    parser.add_argument(
         "--implementation",
         action="append",
         help=(
@@ -66,12 +85,21 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.country_cache is not None and arguments.output_root is None:
         parser.error("--country-cache requires --output-root")
+    try:
+        histogram_spec = WBGTHistogramSpec(
+            minimum_c=arguments.temperature_bin_min_c,
+            maximum_c=arguments.temperature_bin_max_c,
+            width_c=arguments.temperature_bin_width_c,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     output = compute_joint_cellwise_temperature_quantiles(
         arguments.hsb_run,
         country_cache=arguments.country_cache,
         start_date=arguments.start_date,
         end_date=arguments.end_date,
         output_root=arguments.output_root,
+        histogram_spec=histogram_spec,
         exact_validation_cells=arguments.exact_validation_cells,
         implementations=(
             arguments.implementation

@@ -223,6 +223,7 @@ uv run python scripts/analyze_cellwise_iso7243_classification.py \
 uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --country-cache data/country/usa/observations.parquet \
   --start-date 2025-01-01 --end-date 2025-12-31 \
+  --temperature-bin-max-c 100 \
   --output-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025
 uv run python scripts/analyze_cellwise_quantile_spread.py \
   --input-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025 \
@@ -233,6 +234,9 @@ The non-consensus and plotting scripts accept these country cellwise roots
 without a separate country implementation. Country population percentages use
 the population within the cache grid; global products retain the global
 population denominator. Country maps are fitted to the cache extent.
+The USA upper-bin override retains the shared 0.02 C bin width while covering
+the observed `thermofeel` globe-temperature tail; open histogram-edge quantiles
+are rejected rather than clipped.
 
 ERA5-country and NASA POWER classification default to the same six targets as
 the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.

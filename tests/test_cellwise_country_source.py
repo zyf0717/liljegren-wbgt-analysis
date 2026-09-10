@@ -346,6 +346,10 @@ def test_country_cache_cli_inputs(tmp_path: Path) -> None:
             str(tmp_path / "quantiles"),
             "--exact-validation-cells",
             "0",
+            "--temperature-bin-max-c",
+            "100",
+            "--temperature-bin-width-c",
+            "1",
             "--date-workers",
             "1",
             "--replay-workers",
@@ -374,3 +378,5 @@ def test_country_cache_cli_inputs(tmp_path: Path) -> None:
     )
     assert (tmp_path / "quantiles/metadata.json").is_file()
     assert (tmp_path / "iso7243/metadata.json").is_file()
+    quantile_metadata = json.loads((tmp_path / "quantiles/metadata.json").read_text())
+    assert quantile_metadata["temperature_bin_max_c"] == 100.0
