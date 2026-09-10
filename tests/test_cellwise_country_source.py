@@ -130,7 +130,7 @@ def test_country_cache_matches_hsb_hourly_classification(tmp_path: Path) -> None
     common = dict(
         start_date="2025-01-01",
         end_date="2025-01-01",
-        thresholds_c=(21, 25),
+        thresholds_c=(25, 26, 28, 30),
         date_workers=1,
         batch_size=11,
     )
@@ -159,13 +159,15 @@ def test_country_cache_matches_hsb_hourly_classification(tmp_path: Path) -> None
     assert raw.classes.read_text() == country.classes.read_text()
     assert country.classes.read_text().splitlines() == [
         "class_id,class_label,threshold_definition",
-        '0,"< 21 C","wbgt_c < 21"',
-        '1,"[21, 25) C","21 <= wbgt_c < 25"',
-        '2,">= 25 C","wbgt_c >= 25"',
+        '0,"< 25 C","wbgt_c < 25"',
+        '1,"[25, 26) C","25 <= wbgt_c < 26"',
+        '2,"[26, 28) C","26 <= wbgt_c < 28"',
+        '3,"[28, 30) C","28 <= wbgt_c < 30"',
+        '4,">= 30 C","wbgt_c >= 30"',
     ]
     metadata = json.loads(country.metadata.read_text())
     assert metadata["country_selection"]["country_iso_a3"] == "XXX"
-    assert metadata["thresholds_c"] == [21.0, 25.0]
+    assert metadata["thresholds_c"] == [25.0, 26.0, 28.0, 30.0]
     assert (country.metadata.parent / ".source-index.json").is_file()
     weights = tmp_path / "population.parquet"
     pq.write_table(
@@ -237,7 +239,7 @@ def test_country_cache_requires_exclusive_input_and_output_root(tmp_path: Path) 
     common = dict(
         start_date="2025-01-01",
         end_date="2025-01-01",
-        thresholds_c=(21, 25),
+        thresholds_c=(25, 26, 28, 30),
     )
 
     with pytest.raises(ValueError, match="exactly one"):
@@ -293,7 +295,7 @@ def test_country_cache_rejects_mismatched_cell_id(tmp_path: Path) -> None:
             output_root=tmp_path / "out",
             start_date="2025-01-01",
             end_date="2025-01-01",
-            thresholds_c=(21, 25),
+            thresholds_c=(25, 26, 28, 30),
         )
 
 
@@ -306,7 +308,7 @@ def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
         output_root=tmp_path / "out",
         start_date="2025-01-01",
         end_date="2025-01-01",
-        thresholds_c=(21, 25),
+        thresholds_c=(25, 26, 28, 30),
     )
     analyze_cellwise_iso7243_classification(**common)
     table = pq.read_table(cache)
@@ -346,10 +348,6 @@ def test_country_cache_cli_inputs(tmp_path: Path) -> None:
             str(tmp_path / "quantiles"),
             "--exact-validation-cells",
             "0",
-            "--temperature-bin-max-c",
-            "100",
-            "--temperature-bin-width-c",
-            "1",
             "--date-workers",
             "1",
             "--replay-workers",
@@ -365,8 +363,10 @@ def test_country_cache_cli_inputs(tmp_path: Path) -> None:
             str(repository / "scripts/analyze_cellwise_iso7243_classification.py"),
             *common,
             "--thresholds-c",
-            "21",
             "25",
+            "26",
+            "28",
+            "30",
             "--output-root",
             str(tmp_path / "iso7243"),
             "--date-workers",
@@ -378,5 +378,3 @@ def test_country_cache_cli_inputs(tmp_path: Path) -> None:
     )
     assert (tmp_path / "quantiles/metadata.json").is_file()
     assert (tmp_path / "iso7243/metadata.json").is_file()
-    quantile_metadata = json.loads((tmp_path / "quantiles/metadata.json").read_text())
-    assert quantile_metadata["temperature_bin_max_c"] == 100.0
