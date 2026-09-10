@@ -123,7 +123,9 @@ def _write_valid_day(run: Path) -> None:
         pq.write_table(table, path)
 
 
-def test_country_cache_matches_hsb_hourly_classification(tmp_path: Path) -> None:
+def test_country_cache_matches_hsb_hourly_classification(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     run = tmp_path / "run"
     write_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
@@ -141,6 +143,9 @@ def test_country_cache_matches_hsb_hourly_classification(tmp_path: Path) -> None
     country = analyze_cellwise_iso7243_classification(
         country_cache=cache, output_root=tmp_path / "country-output", **common
     )
+    progress = capsys.readouterr().out
+    assert "Example WBGT classification: 1 dates, 0 cached, 1 to scan" in progress
+    assert "Example WBGT classification 2025-01-01:" in progress
 
     for name in (
         "cell_pair_differences",

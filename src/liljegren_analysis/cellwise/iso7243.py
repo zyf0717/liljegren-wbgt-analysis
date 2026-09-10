@@ -167,6 +167,7 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
     pair_count = len(names) * (len(names) - 1) // 2
     stride = 3 if sample_scope == "pairwise" else 2
     total = np.zeros((2 + stride * pair_count, grid.cell_count), dtype=np.uint64)
+    progress_label = _progress_label(source)
     pending, provenance = [], {}
     reused = 0
     for day in dates:
@@ -180,14 +181,20 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
             total += counts
             provenance[day.isoformat()] = info
             reused += 1
-    print(f"ISO 7243: {len(dates)} dates, {reused} cached, {len(pending)} to scan", flush=True)
+    print(
+        f"{progress_label}: {len(dates)} dates, {reused} cached, "
+        f"{len(pending)} to scan",
+        flush=True,
+    )
     state = (source, names, thresholds, str(grid_path), batch_size, signature,
              str(work), sample_scope)
     if date_workers == 1:
         _initialize_worker(*state)
         for day in pending:
             _run_day(day)
-            _reduce_day(work, day, signature, total, provenance, sample_scope)
+            _reduce_day(
+                work, day, signature, total, provenance, sample_scope, progress_label
+            )
     elif pending:
         with ProcessPoolExecutor(
             max_workers=min(date_workers, len(pending)), mp_context=get_context("spawn"),
@@ -198,7 +205,15 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
                 for future in as_completed(futures):
                     day = futures[future]
                     future.result()
-                    _reduce_day(work, day, signature, total, provenance, sample_scope)
+                    _reduce_day(
+                        work,
+                        day,
+                        signature,
+                        total,
+                        provenance,
+                        sample_scope,
+                        progress_label,
+                    )
             except BaseException:
                 for future in futures:
                     future.cancel()
@@ -234,6 +249,16 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
         "daily_provenance": provenance,
     }, outputs.metadata)
     return outputs
+
+
+def _progress_label(source: CellwiseSource) -> str:
+    metadata = source_metadata(source)
+    selection = metadata.get("country_selection")
+    if isinstance(selection, dict):
+        country_name = selection.get("country_name")
+        if isinstance(country_name, str) and country_name:
+            return f"{country_name} WBGT classification"
+    return "ISO 7243"
 
 
 def _initialize_worker(source, names, thresholds, grid_path, batch_size, signature,
@@ -381,7 +406,9 @@ def _read_checkpoint(path, signature, day, shape, sample_scope="all-implementati
         return None
 
 
-def _reduce_day(work, day, signature, total, provenance, sample_scope):
+def _reduce_day(
+    work, day, signature, total, provenance, sample_scope, progress_label
+):
     checkpoint = _read_checkpoint(
         work / f"{day.isoformat()}.npz", signature, day, total.shape, sample_scope,
     )
@@ -390,7 +417,7 @@ def _reduce_day(work, day, signature, total, provenance, sample_scope):
     counts, info = checkpoint
     total += counts
     provenance[day.isoformat()] = info
-    print(f"ISO 7243 {day}: joint={int(counts[0].sum()):,}, "
+    print(f"{progress_label} {day}: joint={int(counts[0].sum()):,}, "
           f"non-consensus={int(counts[1].sum()):,}, "
           f"scan={info['elapsed_seconds']:.1f}s, RSS={info['peak_rss_mib']:.0f} MiB", flush=True)
 
