@@ -310,10 +310,13 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
         for threshold, population in zip(
             POPULATION_AFFECTED_THRESHOLDS_PERCENT, populations, strict=True
         ):
+            if population == 0:
+                values[f"{threshold}%"] = "-"
+                continue
             population_percent = 100.0 * int(population) / summary.total_population
             values[f"{threshold}%"] = (
                 f"{_format_population(int(population))} "
-                f"({_format_three_significant_figures(population_percent)}%)"
+                f"({_format_percentage(population_percent)})"
             )
         return values
 
@@ -344,18 +347,20 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
 
 
 def _format_population(population: int) -> str:
-    if population >= 1_000_000_000:
-        return f"{_format_three_significant_figures(population / 1e9)}B"
-    if population >= 100_000:
-        return f"{_format_three_significant_figures(population / 1e6)}M"
-    return f"{population:,}"
+    return _format_two_significant_figures(population / 1e9)
 
 
-def _format_three_significant_figures(value: float) -> str:
+def _format_percentage(value: float) -> str:
+    return f"{_format_two_significant_figures(value)}%"
+
+
+def _format_two_significant_figures(value: float) -> str:
     if value == 0.0:
         return "0"
-    decimals = min(2, max(0, 2 - int(np.floor(np.log10(abs(value))))))
-    return f"{value:.{decimals}f}"
+    decimals = max(0, 1 - int(np.floor(np.log10(abs(value)))))
+    rounded = round(value, decimals)
+    decimals = max(0, 1 - int(np.floor(np.log10(abs(rounded)))))
+    return f"{rounded:.{decimals}f}"
 
 
 def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:

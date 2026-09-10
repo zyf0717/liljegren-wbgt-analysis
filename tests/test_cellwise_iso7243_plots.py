@@ -14,7 +14,8 @@ from liljegren_analysis.cellwise.iso7243 import analyze_cellwise_iso7243_classif
 from liljegren_analysis.cellwise.iso7243_plots import (
     _accumulate_population_affected,
     _format_population,
-    _format_three_significant_figures,
+    _format_percentage,
+    _format_two_significant_figures,
     configure_percent_colorbar,
     plot_cellwise_iso7243_classification,
     summarize_cellwise_iso7243_classification,
@@ -60,29 +61,45 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     ]
     assert population_csv.num_rows == PAIR_COUNT + 1
     for threshold in (5, 10, 20, 30):
-        assert population_csv[f"{threshold}%"][0].as_py() == "10 (0.99%)"
+        assert population_csv[f"{threshold}%"][0].as_py() == "0.000000010 (0.99%)"
+        assert population_csv[f"{threshold}%"][len(NAMES) - 1].as_py() == "-"
 
 
 @pytest.mark.parametrize(
     ("population", "expected"),
     [
-        (6_459_547_367, "6.46B"),
-        (96_742_045, "96.7M"),
-        (442_136, "0.44M"),
-        (10, "10"),
+        (6_459_547_367, "6.5"),
+        (96_742_045, "0.097"),
+        (10_000_000, "0.010"),
+        (9_999_999, "0.010"),
+        (442_136, "0.00044"),
+        (10, "0.000000010"),
         (0, "0"),
     ],
 )
-def test_population_display_uses_compact_three_significant_figures(population, expected):
+def test_population_display_uses_billions_without_suffix_and_exactly_two_sf(
+    population, expected
+):
     assert _format_population(population) == expected
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(83.051, "83.1"), (1.20065, "1.20"), (0.0855, "0.09"), (0.0, "0")],
+    [
+        (83.051, "83%"),
+        (1.20065, "1.2%"),
+        (0.0855, "0.086%"),
+        (0.01, "0.010%"),
+        (0.009, "0.0090%"),
+        (0.0, "0%"),
+    ],
 )
-def test_percentage_display_caps_precision_at_two_decimal_places(value, expected):
-    assert _format_three_significant_figures(value) == expected
+def test_percentage_display_uses_exactly_two_significant_figures(value, expected):
+    assert _format_percentage(value) == expected
+
+
+def test_two_significant_figure_formatter_preserves_trailing_zeroes():
+    assert _format_two_significant_figures(6.0) == "6.0"
 
 
 def test_incompatible_product_rejected(tmp_path):
