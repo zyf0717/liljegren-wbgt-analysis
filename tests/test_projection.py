@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import unittest
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from liljegren_analysis.cellwise.projection import (
     EQUAL_EARTH_X_LIMIT,
     EQUAL_EARTH_Y_LIMIT,
+    configure_equal_earth_axis,
     equal_earth_coordinates,
 )
 
@@ -50,6 +52,19 @@ class EqualEarthProjectionTests(unittest.TestCase):
             equal_earth_coordinates(np.array([181.0]), np.array([0.0]))
         with self.assertRaisesRegex(ValueError, "longitude/latitude bounds"):
             equal_earth_coordinates(np.array([0.0]), np.array([np.inf]))
+
+    def test_country_extent_is_fitted_to_input_grid(self) -> None:
+        figure, axis = plt.subplots()
+        configure_equal_earth_axis(
+            axis,
+            longitude=np.array([-125.0, -66.5]),
+            latitude=np.array([24.0, 49.5]),
+        )
+        try:
+            self.assertLess(np.ptp(axis.get_xlim()), 0.5 * 2 * EQUAL_EARTH_X_LIMIT)
+            self.assertLess(np.ptp(axis.get_ylim()), 0.5 * 2 * EQUAL_EARTH_Y_LIMIT)
+        finally:
+            plt.close(figure)
 
 
 if __name__ == "__main__":

@@ -5,15 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from ..io.results import iter_result_batches
-from ..results import RESULT_QUANTITIES, HSBRunResults, ResultQuantity
+from ..results import RESULT_QUANTITIES, ResultQuantity
 from .grid import CellGrid
+from ._source import CellwiseSource, iter_source_batches
 
 HOURS_PER_DAY = 24
 
@@ -30,21 +29,6 @@ class JointMaskCache:
         byte_ids = flat_ids >> 3
         bit_ids = flat_ids & 7
         return ((packed[byte_ids] >> bit_ids) & 1).astype(bool, copy=False)
-
-
-def day_files(hsb_runs: tuple[Path, ...], current_date: date, implementation: str):
-    files = tuple(
-        item
-        for hsb_run in hsb_runs
-        for item in HSBRunResults.from_hsb_run(hsb_run).files(
-            result_date=current_date, implementation=implementation
-        )
-    )
-    if not files:
-        raise FileNotFoundError(
-            f"No {implementation} result shards found for {current_date.isoformat()}"
-        )
-    return files
 
 
 def identity_batch(
@@ -117,7 +101,7 @@ def quantity_values_and_validity(
 
 
 def scan_native_valid_day(
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     current_date: date,
     implementation: str,
     grid: CellGrid,
@@ -143,25 +127,27 @@ def scan_native_valid_day(
         "tnwb_status",
         "tnwb_c",
     )
-    for item in day_files(hsb_runs, current_date, implementation):
-        for batch in iter_result_batches((item,), columns):
-            cells, hours, _, _ = identity_batch(
-                batch,
-                source_cell_ids=source_cell_ids,
-                current_date=current_date,
+    for item in iter_source_batches(
+        source, current_date, implementation, columns
+    ):
+        batch = item.batch
+        cells, hours, _, _ = identity_batch(
+            batch,
+            source_cell_ids=source_cell_ids,
+            current_date=current_date,
+        )
+        values, valid = quantity_values_and_validity(batch)
+        any_valid = np.logical_or.reduce(tuple(valid.values()))
+        if any_valid.any():
+            yield (
+                cells[any_valid],
+                hours[any_valid],
+                {
+                    quantity: values[quantity][any_valid]
+                    for quantity in RESULT_QUANTITIES
+                },
+                {
+                    quantity: valid[quantity][any_valid]
+                    for quantity in RESULT_QUANTITIES
+                },
             )
-            values, valid = quantity_values_and_validity(batch)
-            any_valid = np.logical_or.reduce(tuple(valid.values()))
-            if any_valid.any():
-                yield (
-                    cells[any_valid],
-                    hours[any_valid],
-                    {
-                        quantity: values[quantity][any_valid]
-                        for quantity in RESULT_QUANTITIES
-                    },
-                    {
-                        quantity: valid[quantity][any_valid]
-                        for quantity in RESULT_QUANTITIES
-                    },
-                )

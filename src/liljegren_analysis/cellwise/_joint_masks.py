@@ -14,20 +14,19 @@ from pathlib import Path
 import numpy as np
 
 from ..io.artifacts import atomic_json as _atomic_json
-from ..io.results import iter_result_batches
 from ._joint_io import (
     HOURS_PER_DAY,
     JointMaskCache,
-    day_files,
     identity_batch,
     quantity_values_and_validity,
 )
 from .grid import CellGrid, load_grid
+from ._source import CellwiseSource, iter_source_batches
 
 
 @dataclass(frozen=True)
 class _MaskWorkerState:
-    hsb_runs: tuple[Path, ...]
+    source: CellwiseSource
     implementations: tuple[str, ...]
     grid: CellGrid
     mask_directory: Path
@@ -38,7 +37,7 @@ _MASK_WORKER_STATE: _MaskWorkerState | None = None
 
 def generate_joint_masks(
     *,
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     implementations: tuple[str, ...],
     dates: tuple[date, ...],
     grid: CellGrid,
@@ -70,7 +69,7 @@ def generate_joint_masks(
         for current_date in pending:
             checkpoint(
                 _scan_and_persist_joint_day_mask(
-                    hsb_runs, implementations, current_date, grid, mask_directory
+                    source, implementations, current_date, grid, mask_directory
                 )
             )
     elif pending:
@@ -78,7 +77,7 @@ def generate_joint_masks(
             max_workers=min(workers, len(pending)),
             mp_context=get_context("spawn"),
             initializer=_initialize_mask_worker,
-            initargs=(hsb_runs, implementations, grid_path, mask_directory),
+            initargs=(source, implementations, grid_path, mask_directory),
         ) as executor:
             futures = [
                 executor.submit(_mask_worker, current_date) for current_date in pending
@@ -89,14 +88,14 @@ def generate_joint_masks(
 
 
 def _initialize_mask_worker(
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     implementations: tuple[str, ...],
     grid_path: Path,
     mask_directory: Path,
 ) -> None:
     global _MASK_WORKER_STATE
     _MASK_WORKER_STATE = _MaskWorkerState(
-        hsb_runs=hsb_runs,
+        source=source,
         implementations=implementations,
         grid=load_grid(grid_path),
         mask_directory=mask_directory,
@@ -107,7 +106,7 @@ def _mask_worker(current_date: date) -> tuple[date, str]:
     if _MASK_WORKER_STATE is None:
         raise RuntimeError("Mask worker is not initialized")
     return _scan_and_persist_joint_day_mask(
-        _MASK_WORKER_STATE.hsb_runs,
+        _MASK_WORKER_STATE.source,
         _MASK_WORKER_STATE.implementations,
         current_date,
         _MASK_WORKER_STATE.grid,
@@ -116,7 +115,7 @@ def _mask_worker(current_date: date) -> tuple[date, str]:
 
 
 def _scan_and_persist_joint_day_mask(
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     implementations: tuple[str, ...],
     current_date: date,
     grid: CellGrid,
@@ -124,13 +123,13 @@ def _scan_and_persist_joint_day_mask(
 ) -> tuple[date, str]:
     path = joint_mask_path(mask_directory, current_date)
     atomic_mask(
-        scan_joint_day_mask(hsb_runs, implementations, current_date, grid), path
+        scan_joint_day_mask(source, implementations, current_date, grid), path
     )
     return current_date, file_sha256(path)
 
 
 def scan_joint_day_mask(
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     implementations: tuple[str, ...],
     current_date: date,
     grid: CellGrid,
@@ -175,39 +174,41 @@ def scan_joint_day_mask(
                 "tnwb_status",
                 "tnwb_c",
             )
-            for item in day_files(hsb_runs, current_date, implementation):
-                for batch in iter_result_batches((item,), columns):
-                    cells, hours, cycles, ordinals = identity_batch(
-                        batch,
-                        source_cell_ids=source_cell_ids,
-                        current_date=current_date,
+            for item in iter_source_batches(
+                source, current_date, implementation, columns
+            ):
+                batch = item.batch
+                cells, hours, cycles, ordinals = identity_batch(
+                    batch,
+                    source_cell_ids=source_cell_ids,
+                    current_date=current_date,
+                )
+                flat = cells * HOURS_PER_DAY + hours
+                if (
+                    len(np.unique(flat)) != len(flat)
+                    or implementation_seen[flat].any()
+                ):
+                    raise ValueError(
+                        f"Duplicate or inconsistent result identity on {current_date}"
                     )
-                    flat = cells * HOURS_PER_DAY + hours
-                    if (
-                        len(np.unique(flat)) != len(flat)
-                        or implementation_seen[flat].any()
-                    ):
-                        raise ValueError(
-                            f"Duplicate or inconsistent result identity on {current_date}"
-                        )
-                    implementation_seen[flat] = 1
-                    encoded_run = run_codes.setdefault(item.run_id, len(run_codes) + 1)
-                    first = seen_count[flat] == 0
-                    if np.any(~first) and (
-                        np.any(ref_run[flat[~first]] != encoded_run)
-                        or np.any(ref_cycle[flat[~first]] != cycles[~first])
-                        or np.any(ref_ordinal[flat[~first]] != ordinals[~first])
-                    ):
-                        raise ValueError(
-                            f"Duplicate or inconsistent result identity on {current_date}"
-                        )
-                    ref_run[flat[first]] = encoded_run
-                    ref_cycle[flat[first]] = cycles[first]
-                    ref_ordinal[flat[first]] = ordinals[first]
-                    _, quantity_valid = quantity_values_and_validity(batch)
-                    valid = np.logical_and.reduce(tuple(quantity_valid.values()))
-                    all_valid[flat] &= valid
-                    seen_count[flat] += 1
+                implementation_seen[flat] = 1
+                encoded_run = run_codes.setdefault(item.run_id, len(run_codes) + 1)
+                first = seen_count[flat] == 0
+                if np.any(~first) and (
+                    np.any(ref_run[flat[~first]] != encoded_run)
+                    or np.any(ref_cycle[flat[~first]] != cycles[~first])
+                    or np.any(ref_ordinal[flat[~first]] != ordinals[~first])
+                ):
+                    raise ValueError(
+                        f"Duplicate or inconsistent result identity on {current_date}"
+                    )
+                ref_run[flat[first]] = encoded_run
+                ref_cycle[flat[first]] = cycles[first]
+                ref_ordinal[flat[first]] = ordinals[first]
+                _, quantity_valid = quantity_values_and_validity(batch)
+                valid = np.logical_and.reduce(tuple(quantity_valid.values()))
+                all_valid[flat] &= valid
+                seen_count[flat] += 1
             implementation_seen.flush()
             del implementation_seen
         if not np.all(

@@ -60,7 +60,11 @@ EQUAL_EARTH_Y_LIMIT = float(
 )
 
 
-def configure_equal_earth_axis(axis: Any) -> None:
+def configure_equal_earth_axis(
+    axis: Any,
+    longitude: np.ndarray | None = None,
+    latitude: np.ndarray | None = None,
+) -> None:
     """Apply an Equal Earth outline, graticule, limits, and aspect to an axis."""
 
     longitude_line = np.linspace(-180.0, 180.0, 361)
@@ -90,4 +94,18 @@ def configure_equal_earth_axis(axis: Any) -> None:
         ylim=(-1.02 * EQUAL_EARTH_Y_LIMIT, 1.02 * EQUAL_EARTH_Y_LIMIT),
         aspect="equal",
     )
+    if longitude is not None or latitude is not None:
+        if longitude is None or latitude is None:
+            raise ValueError("longitude and latitude must be provided together")
+        x, y = equal_earth_coordinates(longitude, latitude)
+        valid = np.isfinite(x) & np.isfinite(y)
+        if not valid.any():
+            raise ValueError("Map extent contains no finite coordinates")
+        x_span, y_span = np.ptp(x[valid]), np.ptp(y[valid])
+        x_padding = max(0.05 * x_span, 0.01)
+        y_padding = max(0.05 * y_span, 0.01)
+        axis.set(
+            xlim=(float(x[valid].min() - x_padding), float(x[valid].max() + x_padding)),
+            ylim=(float(y[valid].min() - y_padding), float(y[valid].max() + y_padding)),
+        )
     axis.set_axis_off()

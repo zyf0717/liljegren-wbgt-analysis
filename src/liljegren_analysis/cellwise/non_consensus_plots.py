@@ -34,7 +34,7 @@ def plot_cellwise_iso7243_non_consensus(
         if output_directory is not None
         else root / "figures"
     )
-    load_hourly_metadata(root)
+    metadata = load_hourly_metadata(root)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     values = pq.read_table(root / "cellwise_non_consensus.parquet")
     cell_ids = _integers(lookup, "cell_id")
@@ -56,11 +56,18 @@ def plot_cellwise_iso7243_non_consensus(
         _floats(lookup, "longitude"),
         percent,
         png,
+        region_label=(
+            str(metadata["country_selection"].get("country_name"))
+            if metadata.get("input_source") == "country-parquet"
+            and isinstance(metadata.get("country_selection"), dict)
+            else None
+        ),
     )
     return NonConsensusFigureOutputs(png)
 
 
-def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray, png: Path) -> None:
+def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
+               png: Path, *, region_label: str | None = None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -82,7 +89,11 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
         vmax=upper,
         rasterized=True,
     )
-    configure_equal_earth_axis(axis)
+    configure_equal_earth_axis(
+        axis, longitude if region_label else None, latitude if region_label else None
+    )
+    if region_label:
+        axis.set_title(region_label)
     colorbar = figure.colorbar(
         image,
         ax=axis,

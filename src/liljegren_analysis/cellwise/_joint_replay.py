@@ -21,13 +21,14 @@ from ._joint_masks import load_joint_masks
 from .accumulator import CellwiseHistogramAccumulator
 from .grid import CellGrid, load_grid
 from .quantiles import quantile_table
+from ._source import CellwiseSource
 
 REPLAY_STRATEGY = "implementation-all-quantities-in-memory-v3"
 
 
 @dataclass(frozen=True)
 class _ReplayWorkerState:
-    hsb_runs: tuple[Path, ...]
+    source: CellwiseSource
     dates: tuple[date, ...]
     grid: CellGrid
     joint_masks: JointMaskCache
@@ -46,7 +47,7 @@ _REPLAY_WORKER_STATE: _ReplayWorkerState | None = None
 
 def replay_implementations(
     *,
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     dates: tuple[date, ...],
     implementations: tuple[str, ...],
     grid: CellGrid,
@@ -83,7 +84,7 @@ def replay_implementations(
         for implementation in pending:
             checkpoint(
                 _replay_and_persist_implementation(
-                    hsb_runs=hsb_runs,
+                    source=source,
                     dates=dates,
                     implementation=implementation,
                     grid=grid,
@@ -104,7 +105,7 @@ def replay_implementations(
             mp_context=get_context("spawn"),
             initializer=_initialize_replay_worker,
             initargs=(
-                hsb_runs,
+                source,
                 dates,
                 grid_path,
                 mask_directory,
@@ -129,7 +130,7 @@ def replay_implementations(
 
 
 def _initialize_replay_worker(
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     dates: tuple[date, ...],
     grid_path: Path,
     mask_directory: Path,
@@ -145,7 +146,7 @@ def _initialize_replay_worker(
     grid = load_grid(grid_path)
     joint_masks, joint_counts = load_joint_masks(mask_directory, dates, grid.cell_count)
     _REPLAY_WORKER_STATE = _ReplayWorkerState(
-        hsb_runs=hsb_runs,
+        source=source,
         dates=dates,
         grid=grid,
         joint_masks=joint_masks,
@@ -165,7 +166,7 @@ def _replay_worker(implementation: str) -> tuple[str, dict[str, object]]:
         raise RuntimeError("Replay worker is not initialized")
     state = _REPLAY_WORKER_STATE
     return _replay_and_persist_implementation(
-        hsb_runs=state.hsb_runs,
+        source=state.source,
         dates=state.dates,
         implementation=implementation,
         grid=state.grid,
@@ -183,7 +184,7 @@ def _replay_worker(implementation: str) -> tuple[str, dict[str, object]]:
 
 def _replay_and_persist_implementation(
     *,
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     dates: tuple[date, ...],
     implementation: str,
     grid: CellGrid,
@@ -198,7 +199,7 @@ def _replay_and_persist_implementation(
     output_root: Path,
 ) -> tuple[str, dict[str, object]]:
     partials, provenance = _replay_implementation(
-        hsb_runs=hsb_runs,
+        source=source,
         dates=dates,
         implementation=implementation,
         grid=grid,
@@ -223,7 +224,7 @@ def _replay_and_persist_implementation(
 
 def _replay_implementation(
     *,
-    hsb_runs: tuple[Path, ...],
+    source: CellwiseSource,
     dates: tuple[date, ...],
     implementation: str,
     grid: CellGrid,
@@ -262,7 +263,7 @@ def _replay_implementation(
             seen = np.zeros(grid.cell_count * HOURS_PER_DAY, dtype=bool)
             selected_count = 0
             for cells, hours, values, native_valid in scan_native_valid_day(
-                hsb_runs, current_date, implementation, grid
+                source, current_date, implementation, grid
             ):
                 flat = cells * HOURS_PER_DAY + hours
                 if len(np.unique(flat)) != len(flat) or seen[flat].any():

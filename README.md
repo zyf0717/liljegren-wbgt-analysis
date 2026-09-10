@@ -201,6 +201,39 @@ This writes `data/country/usa/observations.parquet`. Explicit bounds replace the
 country polygon, so the cache includes every ERA5 cell overlapping the rectangle.
 The selected bounds are persisted in `manifest.json`.
 
+Country caches can feed the same cellwise pipelines as raw HSB results. Use the
+same six default implementations and keep each country in a separate output
+tree:
+
+```bash
+# USA: <21 C, [21, 25) C, >=25 C
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/usa/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 21 25 \
+  --output-root data/country/usa/cellwise/6-targets/iso7243/2025
+
+# Japan: <21 C, [21, 25) C, [25, 28) C, [28, 31) C, >=31 C
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/jpn/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 21 25 28 31 \
+  --output-root data/country/jpn/cellwise/6-targets/iso7243/2025
+
+uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
+  --country-cache data/country/usa/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --output-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025
+uv run python scripts/analyze_cellwise_quantile_spread.py \
+  --input-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025 \
+  --output-root data/country/usa/cellwise/6-targets/quantile-spread/2025
+```
+
+The non-consensus and plotting scripts accept these country cellwise roots
+without a separate country implementation. Country population percentages use
+the population within the cache grid; global products retain the global
+population denominator. Country maps are fitted to the cache extent.
+
 ERA5-country and NASA POWER classification default to the same six targets as
 the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.
 Alongside pairwise change and transition CSVs, both workflows write

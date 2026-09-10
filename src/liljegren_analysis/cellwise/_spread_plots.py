@@ -21,6 +21,7 @@ def write_figures(
     cellwise: pa.Table,
     directory: Path,
     weighting: Weighting,
+    region_label: str | None = None,
 ) -> None:
     import matplotlib
 
@@ -53,10 +54,12 @@ def write_figures(
     for suffix in ("png", "pdf"):
         figure.savefig(directory / f"spread_by_percentile.{suffix}", dpi=200)
     plt.close(figure)
-    _write_spread_maps(cellwise, directory)
+    _write_spread_maps(cellwise, directory, region_label=region_label)
 
 
-def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
+def _write_spread_maps(
+    cellwise: pa.Table, directory: Path, *, region_label: str | None = None
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -81,7 +84,13 @@ def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
             vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
             rasterized=True,
         )
-        configure_equal_earth_axis(axis)
+        configure_equal_earth_axis(
+            axis,
+            _float_column(cellwise, "longitude") if region_label else None,
+            _float_column(cellwise, "latitude") if region_label else None,
+        )
+        if region_label:
+            axis.set_title(f"{region_label}: {metric.replace('_c', '')}")
         colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
         ticks = colorbar.get_ticks()
         colorbar.set_ticks(

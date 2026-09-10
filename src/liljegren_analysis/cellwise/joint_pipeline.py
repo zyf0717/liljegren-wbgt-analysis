@@ -27,17 +27,19 @@ from ._joint_replay import (
 )
 from ._pipeline import (
     DEFAULT_PROBABILITIES,
-    build_grid as _build_grid,
     date_range as _date_range,
     histogram_metadata as _histogram_metadata,
-    hsb_run_paths as _hsb_run_paths,
-    input_files as _input_files,
-    input_fingerprint as _input_fingerprint,
-    validate_run_inventory as _validate_canonical_run_inventory,
 )
 from .accumulator import counter_dtype
 from .grid import CellGrid, load_grid
 from .paths import DEFAULT_JOINT_OUTPUT_ROOT
+from ._source import (
+    CountryParquetSource,
+    build_source_grid,
+    current_source_fingerprint,
+    resolve_source,
+    source_metadata,
+)
 
 JOINT_CELLWISE_SCHEMA_VERSION = 2
 JOINT_SUPPORT_SCOPE = "all-implementations-all-quantities"
@@ -47,11 +49,12 @@ DEFAULT_JOINT_IMPLEMENTATIONS = DEFAULT_ISO7243_IMPLEMENTATIONS
 
 
 def compute_joint_cellwise_temperature_quantiles(
-    hsb_run_paths: str | Path | Sequence[str | Path],
+    hsb_run_paths: str | Path | Sequence[str | Path] | None = None,
     *,
+    country_cache: str | Path | None = None,
     start_date: str | date,
     end_date: str | date,
-    output_root: str | Path = DEFAULT_JOINT_OUTPUT_ROOT,
+    output_root: str | Path | None = None,
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
@@ -69,16 +72,14 @@ def compute_joint_cellwise_temperature_quantiles(
     sparse disk-backed histograms.
     """
 
-    hsb_runs = _hsb_run_paths(hsb_run_paths)
     dates = _date_range(start_date, end_date)
     implementations = _implementation_names(implementations)
-    _validate_canonical_run_inventory(
-        hsb_runs, dates, implementations, allow_unexpected=True
-    )
     _validate_options(
         probabilities, exact_validation_cells, date_workers, replay_workers
     )
-    root = Path(output_root).expanduser().resolve()
+    if country_cache is not None and output_root is None:
+        raise ValueError("country_cache requires an explicit output_root")
+    root = Path(output_root or DEFAULT_JOINT_OUTPUT_ROOT).expanduser().resolve()
     if overwrite and root.exists():
         _validate_reset_target(root)
         shutil.rmtree(root)
@@ -86,25 +87,30 @@ def compute_joint_cellwise_temperature_quantiles(
     mask_directory = work / "joint_mask"
     for directory in (root, work, mask_directory):
         directory.mkdir(parents=True, exist_ok=True)
-
-    input_files = tuple(
-        path
-        for implementation in implementations
-        for path in _input_files(hsb_runs, dates, implementation)
+    source = resolve_source(
+        hsb_run_paths,
+        country_cache,
+        dates,
+        implementations,
+        index_path=root / ".source-index.json",
     )
-    input_fingerprint = _input_fingerprint(tuple(sorted(input_files)))
+    input_fingerprint = source.fingerprint
+    country_metadata = (
+        source_metadata(source) if isinstance(source, CountryParquetSource) else {}
+    )
     grid_path = root / "grid.parquet"
     grid = (
         load_grid(grid_path)
         if grid_path.exists()
-        else _build_grid(hsb_runs, dates[0], implementations[0])
+        else build_source_grid(source, dates[0], implementations[:1])
     )
     if not grid_path.exists():
         _atomic_parquet(grid.table, grid_path)
 
     manifest_path = work / "manifest.json"
     expected_manifest = _expected_manifest(
-        dates, implementations, grid, histogram_spec, probabilities, input_fingerprint
+        dates, implementations, grid, histogram_spec, probabilities,
+        input_fingerprint, country_metadata,
     )
     manifest = _open_manifest(manifest_path, expected_manifest, root / "metadata.json")
     if (root / "metadata.json").exists() and all(
@@ -117,7 +123,7 @@ def compute_joint_cellwise_temperature_quantiles(
 
     mask_started = monotonic()
     mask_fingerprints, masks_generated, masks_reused = generate_joint_masks(
-        hsb_runs=hsb_runs,
+        source=source,
         implementations=implementations,
         dates=dates,
         grid=grid,
@@ -137,7 +143,7 @@ def compute_joint_cellwise_temperature_quantiles(
     provenance = dict(manifest.get("unit_provenance", {}))
     replay_started = monotonic()
     provenance = replay_implementations(
-        hsb_runs=hsb_runs,
+        source=source,
         dates=dates,
         implementations=implementations,
         grid=grid,
@@ -158,6 +164,10 @@ def compute_joint_cellwise_temperature_quantiles(
         workers=replay_workers,
     )
     replay_elapsed = monotonic() - replay_started
+    if current_source_fingerprint(source) != input_fingerprint:
+        raise ValueError(
+            "Inputs changed during quantile analysis; outputs not published"
+        )
 
     metadata = _final_metadata(
         dates=dates,
@@ -177,6 +187,7 @@ def compute_joint_cellwise_temperature_quantiles(
         mask_elapsed_seconds=mask_elapsed,
         replay_elapsed_seconds=replay_elapsed,
         elapsed_seconds=monotonic() - started,
+        country_metadata=country_metadata,
     )
     _atomic_json(metadata, root / "metadata.json")
     shutil.rmtree(work)
@@ -227,6 +238,7 @@ def _expected_manifest(
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
     input_fingerprint: str,
+    country_metadata: dict[str, object],
 ) -> dict[str, object]:
     return {
         "schema_version": JOINT_CELLWISE_SCHEMA_VERSION,
@@ -243,6 +255,7 @@ def _expected_manifest(
         "mask_encoding": "numpy-packbits-little-v1",
         "hours_per_day": HOURS_PER_DAY,
         "replay_strategy": REPLAY_STRATEGY,
+        **country_metadata,
     }
 
 
@@ -284,6 +297,7 @@ def _final_metadata(
     mask_elapsed_seconds: float,
     replay_elapsed_seconds: float,
     elapsed_seconds: float,
+    country_metadata: dict[str, object],
 ) -> dict[str, object]:
     return {
         "schema_version": JOINT_CELLWISE_SCHEMA_VERSION,
@@ -325,6 +339,7 @@ def _final_metadata(
         "unit_provenance": provenance,
         "elapsed_seconds_this_invocation": elapsed_seconds,
         "git_commit": _git_commit(),
+        **country_metadata,
     }
 
 

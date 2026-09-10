@@ -119,7 +119,26 @@ def analyze_cellwise_quantile_spread(
     target_root.mkdir(parents=True, exist_ok=True)
     figure_directory = target_root / "figures"
     figure_directory.mkdir(exist_ok=True)
-    write_figures(summary, cellwise, figure_directory, weighting)
+    country_selection = source_metadata.get("country_selection")
+    region_label = (
+        str(country_selection.get("country_name"))
+        if source_metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+        else None
+    )
+    country_metadata = {
+        key: source_metadata[key]
+        for key in (
+            "input_source",
+            "country_cache",
+            "country_manifest_fingerprint",
+            "country_selection",
+        )
+        if key in source_metadata
+    }
+    write_figures(
+        summary, cellwise, figure_directory, weighting, region_label=region_label
+    )
     cellwise_path = target_root / "cellwise_quantile_spread.parquet"
     summary_path = target_root / "global_quantile_spread_summary.parquet"
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
@@ -171,6 +190,7 @@ def analyze_cellwise_quantile_spread(
             "primary_map_metric": _primary_map_metric(summary),
             "spread_map_color_limits_c": list(SPREAD_MAP_COLOR_LIMITS_C),
             "git_commit": _git_commit(),
+            **(country_metadata if region_label is not None else {}),
         },
         metadata_path,
     )

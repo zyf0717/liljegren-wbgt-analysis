@@ -46,6 +46,7 @@ class ISO7243PlotSummary:
     pair_changed_fraction: np.ndarray
     population_affected: np.ndarray
     total_population: int
+    region_label: str | None
 
 
 def plot_cellwise_iso7243_classification(
@@ -111,8 +112,15 @@ def summarize_cellwise_iso7243_classification(
     if int(joint.sum()) != metadata["joint_observation_count"]:
         raise ValueError("Joint observation count differs from metadata")
     source_ids = lookup["source_cell_id"].combine_chunks().to_pylist()
+    country_selection = metadata.get("country_selection")
+    region_label = (
+        str(country_selection.get("country_name"))
+        if metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+        else None
+    )
     population, total_population = _population_weights(
-        source_ids, population_weights_path
+        source_ids, population_weights_path, regional=region_label is not None
     )
     weights = np.vstack((np.ones(len(cell_ids)), _geometry_weights(source_ids),
                          population.astype(np.float64)))
@@ -204,6 +212,7 @@ def summarize_cellwise_iso7243_classification(
         pair_changed_fraction=pair_changed_fraction,
         population_affected=population_affected,
         total_population=total_population,
+        region_label=region_label,
     )
 
 
@@ -253,7 +262,7 @@ def _geometry_weights(source_ids: list[str]) -> np.ndarray:
 
 
 def _population_weights(
-    source_ids: list[str], path: str | Path
+    source_ids: list[str], path: str | Path, *, regional: bool = False
 ) -> tuple[np.ndarray, int]:
     population_path = Path(path).expanduser().resolve()
     if not population_path.is_file():
@@ -266,13 +275,18 @@ def _population_weights(
     population = _integer_column(table, "population")
     if len(population_ids) != len(set(population_ids)) or (population < 0).any():
         raise ValueError("Population weights contain invalid source_cell_id or population values")
-    total_population = int(population.sum(dtype=np.int64))
-    if total_population <= 0:
+    global_population = int(population.sum(dtype=np.int64))
+    if global_population <= 0:
         raise ValueError("Population weights have no positive total population")
     lookup = dict(zip(population_ids, population, strict=True))
     weights = np.asarray([lookup.get(source_id, -1) for source_id in source_ids], dtype=np.int64)
     if (weights < 0).any():
         raise ValueError("Population weights are missing a cell from the ISO 7243 lookup")
+    total_population = (
+        int(weights.sum(dtype=np.int64)) if regional else global_population
+    )
+    if total_population <= 0:
+        raise ValueError("Analysis grid has no positive population")
     return weights, total_population
 
 
@@ -385,7 +399,13 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         vmax=50.0,
         rasterized=True,
     )
-    configure_equal_earth_axis(map_axis)
+    configure_equal_earth_axis(
+        map_axis,
+        summary.longitude if summary.region_label else None,
+        summary.latitude if summary.region_label else None,
+    )
+    if summary.region_label:
+        map_axis.set_title(summary.region_label)
     colorbar = figure.colorbar(
         image,
         ax=map_axis,
@@ -448,7 +468,11 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             vmax=color_upper_percent,
             rasterized=True,
         )
-        configure_equal_earth_axis(axis)
+        configure_equal_earth_axis(
+            axis,
+            summary.longitude if summary.region_label else None,
+            summary.latitude if summary.region_label else None,
+        )
         axis.set_title(f"{implementation_a} vs {implementation_b}")
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)
@@ -502,7 +526,11 @@ def _write_population_affected_figure(
     axis.set(
         yticks=positions,
         yticklabels=labels,
-        xlabel="Affected population (% of total population)",
+        xlabel=(
+            f"Affected population (% of {summary.region_label} input-region population)"
+            if summary.region_label
+            else "Affected population (% of total population)"
+        ),
         ylabel="Comparison",
     )
     axis.invert_yaxis()
@@ -535,7 +563,11 @@ def _write_non_consensus_population_figure(
     axis.plot(thresholds, population_percent, color="#4c78a8", marker="o", linewidth=2)
     axis.set(
         xlabel="Non-consensus rate (% valid hours)",
-        ylabel="Population affected (% of total population)",
+        ylabel=(
+            f"Population affected (% of {summary.region_label} input-region population)"
+            if summary.region_label
+            else "Population affected (% of total population)"
+        ),
         xticks=thresholds,
         xlim=(thresholds[0] - 1, thresholds[-1] + 1),
         ylim=(0.0, 100.0),
