@@ -1,4 +1,4 @@
-"""Dependency-free Equal Earth projection helpers for global map figures."""
+"""Dependency-free projections for global and regional map figures."""
 
 from __future__ import annotations
 
@@ -52,6 +52,30 @@ def equal_earth_coordinates(
     return x, y
 
 
+def mercator_coordinates(
+    longitude: np.ndarray, latitude: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project longitude/latitude degrees to unit-sphere Mercator coordinates."""
+
+    longitude_array, latitude_array = np.broadcast_arrays(
+        np.asarray(longitude, dtype=np.float64),
+        np.asarray(latitude, dtype=np.float64),
+    )
+    if np.isinf(longitude_array).any() or np.isinf(latitude_array).any() or (
+        np.isfinite(longitude_array).any()
+        and np.nanmax(np.abs(longitude_array)) > 180.0
+    ) or (
+        np.isfinite(latitude_array).any()
+        and np.nanmax(np.abs(latitude_array)) > 90.0
+    ):
+        raise ValueError("Mercator coordinates exceed longitude/latitude bounds")
+    longitude_radians = np.deg2rad(longitude_array)
+    latitude_radians = np.deg2rad(
+        np.clip(latitude_array, -89.999999, 89.999999)
+    )
+    return longitude_radians, np.arcsinh(np.tan(latitude_radians))
+
+
 EQUAL_EARTH_X_LIMIT = float(
     equal_earth_coordinates(np.array([180.0]), np.array([0.0]))[0][0]
 )
@@ -66,7 +90,7 @@ def regional_map_figure_size(
 ) -> tuple[float, float]:
     """Fit a standalone regional map canvas to its projected aspect ratio."""
 
-    x, y = equal_earth_coordinates(longitude, latitude)
+    x, y = mercator_coordinates(longitude, latitude)
     valid = np.isfinite(x) & np.isfinite(y)
     if not valid.any():
         raise ValueError("Map extent contains no finite coordinates")
@@ -90,7 +114,7 @@ def plot_equal_earth_cells(
     vmin: float,
     vmax: float,
 ) -> Any:
-    """Plot global centers or contiguous projected ERA5 cells for a region."""
+    """Plot Equal Earth global centers or contiguous Mercator regional cells."""
 
     longitude_array, latitude_array, value_array = np.broadcast_arrays(
         np.asarray(longitude, dtype=np.float64),
@@ -123,7 +147,7 @@ def plot_equal_earth_cells(
     corner_latitude = latitude_array[:, None] + np.array(
         [-half_cell, -half_cell, half_cell, half_cell]
     )
-    x, y = equal_earth_coordinates(corner_longitude, corner_latitude)
+    x, y = mercator_coordinates(corner_longitude, corner_latitude)
     polygons = np.stack((x, y), axis=-1)
     collection = PolyCollection(
         polygons,
@@ -144,7 +168,13 @@ def configure_equal_earth_axis(
     longitude: np.ndarray | None = None,
     latitude: np.ndarray | None = None,
 ) -> None:
-    """Apply an Equal Earth outline, graticule, limits, and aspect to an axis."""
+    """Apply a global Equal Earth or regional Mercator map configuration."""
+
+    if longitude is not None or latitude is not None:
+        if longitude is None or latitude is None:
+            raise ValueError("longitude and latitude must be provided together")
+        _configure_mercator_axis(axis, longitude, latitude)
+        return
 
     longitude_line = np.linspace(-180.0, 180.0, 361)
     latitude_line = np.linspace(-90.0, 90.0, 181)
@@ -173,18 +203,22 @@ def configure_equal_earth_axis(
         ylim=(-1.02 * EQUAL_EARTH_Y_LIMIT, 1.02 * EQUAL_EARTH_Y_LIMIT),
         aspect="equal",
     )
-    if longitude is not None or latitude is not None:
-        if longitude is None or latitude is None:
-            raise ValueError("longitude and latitude must be provided together")
-        x, y = equal_earth_coordinates(longitude, latitude)
-        valid = np.isfinite(x) & np.isfinite(y)
-        if not valid.any():
-            raise ValueError("Map extent contains no finite coordinates")
-        x_span, y_span = np.ptp(x[valid]), np.ptp(y[valid])
-        x_padding = max(0.05 * x_span, 0.01)
-        y_padding = max(0.05 * y_span, 0.01)
-        axis.set(
-            xlim=(float(x[valid].min() - x_padding), float(x[valid].max() + x_padding)),
-            ylim=(float(y[valid].min() - y_padding), float(y[valid].max() + y_padding)),
-        )
+    axis.set_axis_off()
+
+
+def _configure_mercator_axis(
+    axis: Any, longitude: np.ndarray, latitude: np.ndarray
+) -> None:
+    x, y = mercator_coordinates(longitude, latitude)
+    valid = np.isfinite(x) & np.isfinite(y)
+    if not valid.any():
+        raise ValueError("Map extent contains no finite coordinates")
+    x_span, y_span = np.ptp(x[valid]), np.ptp(y[valid])
+    x_padding = max(0.05 * x_span, np.deg2rad(0.25))
+    y_padding = max(0.05 * y_span, np.deg2rad(0.25))
+    axis.set(
+        xlim=(float(x[valid].min() - x_padding), float(x[valid].max() + x_padding)),
+        ylim=(float(y[valid].min() - y_padding), float(y[valid].max() + y_padding)),
+        aspect="equal",
+    )
     axis.set_axis_off()

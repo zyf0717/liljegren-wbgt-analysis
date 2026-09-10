@@ -329,7 +329,7 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
                 continue
             population_percent = 100.0 * int(population) / summary.total_population
             values[f"{threshold}%"] = (
-                f"{_format_population(int(population))} "
+                f"{_format_population(int(population), regional=summary.region_label is not None)} "
                 f"({_format_percentage(population_percent)})"
             )
         return values
@@ -360,8 +360,9 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
     )
 
 
-def _format_population(population: int) -> str:
-    return _format_two_significant_figures(population / 1e9)
+def _format_population(population: int, *, regional: bool = False) -> str:
+    divisor = 1e6 if regional else 1e9
+    return _format_two_significant_figures(population / divisor)
 
 
 def _format_percentage(value: float) -> str:

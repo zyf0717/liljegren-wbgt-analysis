@@ -125,11 +125,11 @@ for all-target non-consensus, these report the LandScan population residing in
 cells where the annual rate is at least 5%, 10%, 20%, or 30% of valid hours.
 Each qualifying cell's population is counted once per comparison and threshold;
 the statistic is not a population-hour total. The CSV has one row per comparison
-and `5%`, `10%`, `20%`, and `30%` columns. Each value combines a compact affected
-population estimate in billions or millions with the percentage of the complete
-configured population dataset in parentheses. Values use up to three significant
-figures and no more than two decimal places. The grouped-bar figure displays that
-percentage of total population.
+and `5%`, `10%`, `20%`, and `30%` columns. Each value combines an affected
+population estimate with the percentage of the complete configured population
+dataset in parentheses. The unitless estimate is in billions for global products
+and millions for country products. Values use two significant figures. The
+grouped-bar figure displays that percentage of total population.
 The workflow additionally writes
 `figures/iso7243_non_consensus_population_affected.png`, a line chart of total
 population percentage against the four annual non-consensus rate thresholds.

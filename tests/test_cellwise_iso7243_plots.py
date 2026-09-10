@@ -84,6 +84,16 @@ def test_population_display_uses_billions_without_suffix_and_exactly_two_sf(
 
 
 @pytest.mark.parametrize(
+    ("population", "expected"),
+    [(96_742_045, "97"), (10_000_000, "10"), (442_136, "0.44"), (10, "0.000010")],
+)
+def test_country_population_display_uses_millions_without_suffix(
+    population, expected
+):
+    assert _format_population(population, regional=True) == expected
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [
         (83.051, "83%"),

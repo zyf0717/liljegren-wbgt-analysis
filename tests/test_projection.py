@@ -14,6 +14,7 @@ from liljegren_analysis.cellwise.projection import (
     EQUAL_EARTH_Y_LIMIT,
     configure_equal_earth_axis,
     equal_earth_coordinates,
+    mercator_coordinates,
     plot_equal_earth_cells,
     regional_map_figure_size,
 )
@@ -67,7 +68,7 @@ class EqualEarthProjectionTests(unittest.TestCase):
             latitude=np.array([24.0, 49.5]),
         )
         try:
-            x, y = equal_earth_coordinates(
+            x, y = mercator_coordinates(
                 np.array([-125.0, -66.5]), np.array([24.0, 49.5])
             )
             self.assertLess(axis.get_xlim()[0], x.min())
@@ -111,6 +112,13 @@ class EqualEarthProjectionTests(unittest.TestCase):
             self.assertEqual(len(paths), 2)
             np.testing.assert_allclose(
                 paths[0].vertices[1:3], paths[1].vertices[[0, 3]]
+            )
+            expected_x, expected_y = mercator_coordinates(
+                np.array([-0.125, 0.125]), np.array([29.875, 30.125])
+            )
+            np.testing.assert_allclose(
+                paths[0].vertices[[0, 2]],
+                np.column_stack((expected_x, expected_y)),
             )
         finally:
             plt.close(figure)
