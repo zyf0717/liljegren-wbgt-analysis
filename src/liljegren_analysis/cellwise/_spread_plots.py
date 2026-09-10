@@ -8,7 +8,7 @@ from typing import Literal
 import numpy as np
 import pyarrow as pa
 
-from .projection import configure_equal_earth_axis, equal_earth_coordinates
+from .projection import configure_equal_earth_axis, plot_equal_earth_cells
 
 PERCENTILES = ("p50", "p90", "p95", "p99")
 SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
@@ -65,32 +65,27 @@ def _write_spread_maps(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    map_x, map_y = equal_earth_coordinates(
-        _float_column(cellwise, "longitude"),
-        _float_column(cellwise, "latitude"),
-    )
+    longitude = _float_column(cellwise, "longitude")
+    latitude = _float_column(cellwise, "latitude")
     for metric in SPREAD_METRICS:
         figure, axis = plt.subplots(figsize=(10, 4.8), layout="constrained")
         values = _float_column(cellwise, metric)
-        image = axis.scatter(
-            map_x,
-            map_y,
-            c=values,
-            s=0.35,
-            marker="s",
-            linewidths=0,
+        image = plot_equal_earth_cells(
+            axis,
+            longitude,
+            latitude,
+            values,
+            regional=region_label is not None,
+            point_size=0.35,
             cmap="magma",
             vmin=SPREAD_MAP_COLOR_LIMITS_C[0],
             vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
-            rasterized=True,
         )
         configure_equal_earth_axis(
             axis,
-            _float_column(cellwise, "longitude") if region_label else None,
-            _float_column(cellwise, "latitude") if region_label else None,
+            longitude if region_label else None,
+            latitude if region_label else None,
         )
-        if region_label:
-            axis.set_title(f"{region_label}: {metric.replace('_c', '')}")
         colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
         ticks = colorbar.get_ticks()
         colorbar.set_ticks(

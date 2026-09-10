@@ -12,9 +12,9 @@ import pyarrow.parquet as pq
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..io.artifacts import atomic_csv
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
-from .iso7243 import country_classification_label, load_hourly_metadata
+from .iso7243 import load_hourly_metadata
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
-from .projection import configure_equal_earth_axis, equal_earth_coordinates
+from .projection import configure_equal_earth_axis, plot_equal_earth_cells
 
 
 DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
@@ -47,7 +47,6 @@ class ISO7243PlotSummary:
     population_affected: np.ndarray
     total_population: int
     region_label: str | None
-    classification_label: str | None
 
 
 def plot_cellwise_iso7243_classification(
@@ -214,7 +213,6 @@ def summarize_cellwise_iso7243_classification(
         population_affected=population_affected,
         total_population=total_population,
         region_label=region_label,
-        classification_label=country_classification_label(metadata),
     )
 
 
@@ -388,26 +386,22 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
     figure, axes = plt.subplots(2, 2, figsize=(12.0, 8.0), layout="constrained")
     map_axis = axes[0, 0]
     changed_percent = 100.0 * summary.changed_fraction
-    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
-    image = map_axis.scatter(
-        map_x,
-        map_y,
-        c=changed_percent,
-        s=0.35,
-        marker="s",
-        linewidths=0,
+    image = plot_equal_earth_cells(
+        map_axis,
+        summary.longitude,
+        summary.latitude,
+        changed_percent,
+        regional=summary.region_label is not None,
+        point_size=0.35,
         cmap="magma",
         vmin=0.0,
         vmax=50.0,
-        rasterized=True,
     )
     configure_equal_earth_axis(
         map_axis,
         summary.longitude if summary.region_label else None,
         summary.latitude if summary.region_label else None,
     )
-    if summary.classification_label:
-        map_axis.set_title(summary.classification_label)
     colorbar = figure.colorbar(
         image,
         ax=map_axis,
@@ -452,23 +446,21 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
         squeeze=False,
     )
     image = None
-    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
     for axis, (implementation_a, implementation_b), values in zip(
         axes.flat,
         summary.implementation_pairs,
         summary.pair_changed_fraction,
     ):
-        image = axis.scatter(
-            map_x,
-            map_y,
-            c=100.0 * values,
-            s=0.25,
-            marker="s",
-            linewidths=0,
+        image = plot_equal_earth_cells(
+            axis,
+            summary.longitude,
+            summary.latitude,
+            100.0 * values,
+            regional=summary.region_label is not None,
+            point_size=0.25,
             cmap="magma",
             vmin=0.0,
             vmax=color_upper_percent,
-            rasterized=True,
         )
         configure_equal_earth_axis(
             axis,

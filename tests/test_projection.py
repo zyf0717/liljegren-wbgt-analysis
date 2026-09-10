@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 import numpy as np
 
 from liljegren_analysis.cellwise.projection import (
@@ -10,6 +11,7 @@ from liljegren_analysis.cellwise.projection import (
     EQUAL_EARTH_Y_LIMIT,
     configure_equal_earth_axis,
     equal_earth_coordinates,
+    plot_equal_earth_cells,
 )
 
 
@@ -70,6 +72,29 @@ class EqualEarthProjectionTests(unittest.TestCase):
             self.assertGreater(axis.get_ylim()[1], y.max())
             self.assertLess(np.ptp(axis.get_xlim()), 0.5 * 2 * EQUAL_EARTH_X_LIMIT)
             self.assertLess(np.ptp(axis.get_ylim()), 0.5 * 2 * EQUAL_EARTH_Y_LIMIT)
+        finally:
+            plt.close(figure)
+
+    def test_regional_cells_are_contiguous_projected_polygons(self) -> None:
+        figure, axis = plt.subplots()
+        collection = plot_equal_earth_cells(
+            axis,
+            longitude=np.array([0.0, 0.25]),
+            latitude=np.array([30.0, 30.0]),
+            values=np.array([1.0, 2.0]),
+            regional=True,
+            point_size=0.35,
+            cmap="magma",
+            vmin=0.0,
+            vmax=2.0,
+        )
+        try:
+            self.assertIsInstance(collection, PolyCollection)
+            paths = collection.get_paths()
+            self.assertEqual(len(paths), 2)
+            np.testing.assert_allclose(
+                paths[0].vertices[1:3], paths[1].vertices[[0, 3]]
+            )
         finally:
             plt.close(figure)
 

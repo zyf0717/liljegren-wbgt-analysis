@@ -58,6 +58,68 @@ EQUAL_EARTH_X_LIMIT = float(
 EQUAL_EARTH_Y_LIMIT = float(
     equal_earth_coordinates(np.array([0.0]), np.array([90.0]))[1][0]
 )
+ERA5_CELL_SIZE_DEGREES = 0.25
+
+
+def plot_equal_earth_cells(
+    axis: Any,
+    longitude: np.ndarray,
+    latitude: np.ndarray,
+    values: np.ndarray,
+    *,
+    regional: bool,
+    point_size: float,
+    cmap: str,
+    vmin: float,
+    vmax: float,
+) -> Any:
+    """Plot global centers or contiguous projected ERA5 cells for a region."""
+
+    longitude_array, latitude_array, value_array = np.broadcast_arrays(
+        np.asarray(longitude, dtype=np.float64),
+        np.asarray(latitude, dtype=np.float64),
+        np.asarray(values, dtype=np.float64),
+    )
+    if longitude_array.ndim != 1:
+        raise ValueError("Map cell arrays must be one-dimensional")
+    if not regional:
+        x, y = equal_earth_coordinates(longitude_array, latitude_array)
+        return axis.scatter(
+            x,
+            y,
+            c=value_array,
+            s=point_size,
+            marker="s",
+            linewidths=0,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            rasterized=True,
+        )
+
+    from matplotlib.collections import PolyCollection
+
+    half_cell = ERA5_CELL_SIZE_DEGREES / 2.0
+    corner_longitude = longitude_array[:, None] + np.array(
+        [-half_cell, half_cell, half_cell, -half_cell]
+    )
+    corner_latitude = latitude_array[:, None] + np.array(
+        [-half_cell, -half_cell, half_cell, half_cell]
+    )
+    x, y = equal_earth_coordinates(corner_longitude, corner_latitude)
+    polygons = np.stack((x, y), axis=-1)
+    collection = PolyCollection(
+        polygons,
+        array=np.ma.masked_invalid(value_array),
+        cmap=cmap,
+        edgecolors="none",
+        linewidths=0,
+        antialiaseds=False,
+        rasterized=True,
+    )
+    collection.set_clim(vmin, vmax)
+    axis.add_collection(collection)
+    return collection
 
 
 def configure_equal_earth_axis(
