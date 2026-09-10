@@ -9,7 +9,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from .non_consensus import DEFAULT_OUTPUT_ROOT
-from .iso7243 import load_hourly_metadata
+from .iso7243 import country_classification_label, load_hourly_metadata
 from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
@@ -51,23 +51,27 @@ def plot_cellwise_iso7243_non_consensus(
         raise ValueError("Non-consensus percentages are invalid")
     target.mkdir(parents=True, exist_ok=True)
     png = target / "iso7243_non_consensus_percent.png"
+    country_selection = metadata.get("country_selection")
+    region_label = (
+        str(country_selection.get("country_name"))
+        if metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+        else None
+    )
     _write_map(
         _floats(lookup, "latitude"),
         _floats(lookup, "longitude"),
         percent,
         png,
-        region_label=(
-            str(metadata["country_selection"].get("country_name"))
-            if metadata.get("input_source") == "country-parquet"
-            and isinstance(metadata.get("country_selection"), dict)
-            else None
-        ),
+        region_label=region_label,
+        classification_label=country_classification_label(metadata),
     )
     return NonConsensusFigureOutputs(png)
 
 
 def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
-               png: Path, *, region_label: str | None = None) -> None:
+               png: Path, *, region_label: str | None = None,
+               classification_label: str | None = None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -92,8 +96,8 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     configure_equal_earth_axis(
         axis, longitude if region_label else None, latitude if region_label else None
     )
-    if region_label:
-        axis.set_title(region_label)
+    if classification_label:
+        axis.set_title(classification_label)
     colorbar = figure.colorbar(
         image,
         ax=axis,

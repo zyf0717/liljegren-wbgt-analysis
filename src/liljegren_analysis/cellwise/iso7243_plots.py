@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..io.artifacts import atomic_csv
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
-from .iso7243 import load_hourly_metadata
+from .iso7243 import country_classification_label, load_hourly_metadata
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
 from .projection import configure_equal_earth_axis, equal_earth_coordinates
 
@@ -47,6 +47,7 @@ class ISO7243PlotSummary:
     population_affected: np.ndarray
     total_population: int
     region_label: str | None
+    classification_label: str | None
 
 
 def plot_cellwise_iso7243_classification(
@@ -213,6 +214,7 @@ def summarize_cellwise_iso7243_classification(
         population_affected=population_affected,
         total_population=total_population,
         region_label=region_label,
+        classification_label=country_classification_label(metadata),
     )
 
 
@@ -404,8 +406,8 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         summary.longitude if summary.region_label else None,
         summary.latitude if summary.region_label else None,
     )
-    if summary.region_label:
-        map_axis.set_title(summary.region_label)
+    if summary.classification_label:
+        map_axis.set_title(summary.classification_label)
     colorbar = figure.colorbar(
         image,
         ax=map_axis,

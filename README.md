@@ -206,14 +206,14 @@ same six default implementations and keep each country in a separate output
 tree:
 
 ```bash
-# CONUS workload limits: very heavy 25 C, heavy 26 C, moderate 28 C, light 30 C
+# CONUS OSHA workload limits: very heavy 25 C, heavy 26 C, moderate 28 C, light 30 C
 uv run python scripts/analyze_cellwise_iso7243_classification.py \
   --country-cache data/country/usa/observations.parquet \
   --start-date 2025-01-01 --end-date 2025-12-31 \
   --thresholds-c 25 26 28 30 \
   --output-root data/country/usa/cellwise/6-targets/iso7243/2025
 
-# Japan: <21 C, [21, 25) C, [25, 28) C, [28, 31) C, >=31 C
+# JPN MoE: <21 C, [21, 25) C, [25, 28) C, [28, 31) C, >=31 C
 uv run python scripts/analyze_cellwise_iso7243_classification.py \
   --country-cache data/country/jpn/observations.parquet \
   --start-date 2025-01-01 --end-date 2025-12-31 \

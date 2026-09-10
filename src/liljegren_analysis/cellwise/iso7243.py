@@ -167,7 +167,7 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
     pair_count = len(names) * (len(names) - 1) // 2
     stride = 3 if sample_scope == "pairwise" else 2
     total = np.zeros((2 + stride * pair_count, grid.cell_count), dtype=np.uint64)
-    progress_label = _progress_label(source)
+    progress_label = _progress_label(source, thresholds)
     pending, provenance = [], {}
     reused = 0
     for day in dates:
@@ -251,13 +251,32 @@ def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
     return outputs
 
 
-def _progress_label(source: CellwiseSource) -> str:
-    metadata = source_metadata(source)
+def country_classification_label(metadata: dict[str, object]) -> str | None:
+    """Return the named country workload regime for a completed request."""
+
     selection = metadata.get("country_selection")
-    if isinstance(selection, dict):
-        country_name = selection.get("country_name")
-        if isinstance(country_name, str) and country_name:
-            return f"{country_name} WBGT classification"
+    if not isinstance(selection, dict):
+        return None
+    thresholds = tuple(float(value) for value in metadata.get("thresholds_c", ()))
+    country_iso_a3 = selection.get("country_iso_a3")
+    if country_iso_a3 == "JPN" and thresholds == (21.0, 25.0, 28.0, 31.0):
+        return "JPN MoE"
+    if (
+        country_iso_a3 == "USA"
+        and "selection_bounds" in selection
+        and thresholds == (25.0, 26.0, 28.0, 30.0)
+    ):
+        return "CONUS OSHA"
+    country_name = selection.get("country_name")
+    return country_name if isinstance(country_name, str) and country_name else None
+
+
+def _progress_label(source: CellwiseSource, thresholds: tuple[float, ...]) -> str:
+    label = country_classification_label(
+        {**source_metadata(source), "thresholds_c": list(thresholds)}
+    )
+    if label is not None:
+        return f"{label} WBGT classification"
     return "ISO 7243"
 
 

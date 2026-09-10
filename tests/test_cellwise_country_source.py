@@ -18,6 +18,7 @@ from liljegren_analysis.cellwise import (
     compute_joint_cellwise_temperature_quantiles,
     summarize_cellwise_iso7243_classification,
 )
+from liljegren_analysis.cellwise.iso7243 import country_classification_label
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 
@@ -78,6 +79,24 @@ def pc_slice(values: pa.ChunkedArray, stop: int) -> pa.ChunkedArray:
     import pyarrow.compute as pc
 
     return pc.utf8_slice_codeunits(values, 0, stop)
+
+
+@pytest.mark.parametrize(
+    ("selection", "thresholds", "expected"),
+    [
+        ({"country_iso_a3": "JPN"}, [21, 25, 28, 31], "JPN MoE"),
+        (
+            {"country_iso_a3": "USA", "selection_bounds": [-125, 24, -67, 50]},
+            [25, 26, 28, 30],
+            "CONUS OSHA",
+        ),
+        ({"country_iso_a3": "XXX", "country_name": "Example"}, [25], "Example"),
+    ],
+)
+def test_country_classification_regime_label(selection, thresholds, expected):
+    assert country_classification_label(
+        {"country_selection": selection, "thresholds_c": thresholds}
+    ) == expected
 
 
 def _rewrite_cache(cache: Path, table: pa.Table) -> None:
