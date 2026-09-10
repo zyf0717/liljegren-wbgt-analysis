@@ -139,11 +139,7 @@ def country_cells(
 ) -> list[CountryCell]:
     """Return grid cells overlapping the country, optionally clipped to bounds."""
 
-    geometry = (
-        country.geometry
-        if bounds is None
-        else country.geometry.intersection(_bounds_geometry(bounds))
-    )
+    geometry = country_geometry(country, bounds=bounds)
     if geometry.is_empty:
         return []
     prepared = prep(geometry)
@@ -185,6 +181,18 @@ def country_cells(
                 )
             )
     return selected
+
+
+def country_geometry(
+    country: Country, *, bounds: GeographicBounds | None = None
+) -> BaseGeometry:
+    """Return a country geometry, optionally clipped to validated bounds."""
+
+    return (
+        country.geometry
+        if bounds is None
+        else country.geometry.intersection(_bounds_geometry(bounds))
+    )
 
 
 def _bounds_geometry(bounds: GeographicBounds) -> BaseGeometry:

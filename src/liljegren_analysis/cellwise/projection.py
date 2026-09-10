@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+from shapely.geometry.base import BaseGeometry
+
+from ..country.cells import (
+    NATURAL_EARTH_VERSION,
+    GeographicBounds,
+    country_geometry,
+    load_countries,
+)
 
 
 _A1 = 1.340264
@@ -85,6 +95,36 @@ EQUAL_EARTH_Y_LIMIT = float(
 ERA5_CELL_SIZE_DEGREES = 0.25
 
 
+def country_boundary_from_metadata(
+    metadata: Mapping[str, object],
+) -> BaseGeometry | None:
+    """Load the pinned country boundary colocated with a country cache."""
+
+    selection = metadata.get("country_selection")
+    cache = metadata.get("country_cache")
+    if not isinstance(selection, Mapping) or not isinstance(cache, str):
+        return None
+    iso_a3 = selection.get("country_iso_a3")
+    if not isinstance(iso_a3, str):
+        return None
+    cache_path = Path(cache).expanduser().resolve()
+    if len(cache_path.parents) < 3:
+        return None
+    boundaries = cache_path.parents[2] / "boundaries" / (
+        f"natural-earth-{NATURAL_EARTH_VERSION}-admin-0-countries-10m.geojson"
+    )
+    if not boundaries.is_file():
+        return None
+    country = load_countries(boundaries, (iso_a3,))[0]
+    raw_bounds = selection.get("selection_bounds")
+    bounds: GeographicBounds | None = None
+    if raw_bounds is not None:
+        if not isinstance(raw_bounds, (list, tuple)) or len(raw_bounds) != 4:
+            raise ValueError("Country selection_bounds must contain four values")
+        bounds = tuple(float(value) for value in raw_bounds)  # type: ignore[assignment]
+    return country_geometry(country, bounds=bounds)
+
+
 def regional_map_figure_size(
     longitude: np.ndarray, latitude: np.ndarray
 ) -> tuple[float, float]:
@@ -161,6 +201,46 @@ def plot_equal_earth_cells(
     collection.set_clim(vmin, vmax)
     axis.add_collection(collection)
     return collection
+
+
+def plot_country_boundary(axis: Any, geometry: BaseGeometry | None) -> None:
+    """Overlay a legible Mercator country boundary without changing map limits."""
+
+    if geometry is None or geometry.is_empty:
+        return
+    for longitude, latitude in _boundary_rings(geometry):
+        x, y = mercator_coordinates(longitude, latitude)
+        axis.plot(
+            x,
+            y,
+            color="white",
+            linewidth=1.5,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+            zorder=3,
+        )
+        axis.plot(
+            x,
+            y,
+            color="0.1",
+            linewidth=0.65,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+            zorder=4,
+        )
+
+
+def _boundary_rings(
+    geometry: BaseGeometry,
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    if geometry.geom_type == "Polygon":
+        rings = (geometry.exterior, *geometry.interiors)  # type: ignore[attr-defined]
+        for ring in rings:
+            coordinates = np.asarray(ring.coords, dtype=np.float64)
+            yield coordinates[:, 0], coordinates[:, 1]
+        return
+    for part in getattr(geometry, "geoms", ()):
+        yield from _boundary_rings(part)
 
 
 def configure_equal_earth_axis(

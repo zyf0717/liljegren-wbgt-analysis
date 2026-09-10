@@ -7,9 +7,11 @@ from typing import Literal
 
 import numpy as np
 import pyarrow as pa
+from shapely.geometry.base import BaseGeometry
 
 from .projection import (
     configure_equal_earth_axis,
+    plot_country_boundary,
     plot_equal_earth_cells,
     regional_map_figure_size,
 )
@@ -26,6 +28,7 @@ def write_figures(
     directory: Path,
     weighting: Weighting,
     region_label: str | None = None,
+    country_boundary: BaseGeometry | None = None,
 ) -> None:
     import matplotlib
 
@@ -58,11 +61,20 @@ def write_figures(
     for suffix in ("png", "pdf"):
         figure.savefig(directory / f"spread_by_percentile.{suffix}", dpi=200)
     plt.close(figure)
-    _write_spread_maps(cellwise, directory, region_label=region_label)
+    _write_spread_maps(
+        cellwise,
+        directory,
+        region_label=region_label,
+        country_boundary=country_boundary,
+    )
 
 
 def _write_spread_maps(
-    cellwise: pa.Table, directory: Path, *, region_label: str | None = None
+    cellwise: pa.Table,
+    directory: Path,
+    *,
+    region_label: str | None = None,
+    country_boundary: BaseGeometry | None = None,
 ) -> None:
     import matplotlib
 
@@ -95,6 +107,7 @@ def _write_spread_maps(
             longitude if region_label else None,
             latitude if region_label else None,
         )
+        plot_country_boundary(axis, country_boundary)
         colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
         ticks = colorbar.get_ticks()
         colorbar.set_ticks(

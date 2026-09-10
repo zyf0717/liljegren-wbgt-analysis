@@ -29,6 +29,7 @@ from .paths import (
     DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
 )
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
+from .projection import country_boundary_from_metadata
 
 ANALYSIS_SCHEMA_VERSION = 4
 Weighting = Literal["none", "geometry", "population"]
@@ -137,7 +138,12 @@ def analyze_cellwise_quantile_spread(
         if key in source_metadata
     }
     write_figures(
-        summary, cellwise, figure_directory, weighting, region_label=region_label
+        summary,
+        cellwise,
+        figure_directory,
+        weighting,
+        region_label=region_label,
+        country_boundary=country_boundary_from_metadata(source_metadata),
     )
     cellwise_path = target_root / "cellwise_quantile_spread.parquet"
     summary_path = target_root / "global_quantile_spread_summary.parquet"

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import matplotlib
 
@@ -13,11 +16,15 @@ from liljegren_analysis.cellwise.projection import (
     EQUAL_EARTH_X_LIMIT,
     EQUAL_EARTH_Y_LIMIT,
     configure_equal_earth_axis,
+    country_boundary_from_metadata,
     equal_earth_coordinates,
     mercator_coordinates,
+    plot_country_boundary,
     plot_equal_earth_cells,
     regional_map_figure_size,
 )
+from liljegren_analysis.country.cells import NATURAL_EARTH_VERSION
+from shapely.geometry import box
 
 
 class EqualEarthProjectionTests(unittest.TestCase):
@@ -122,6 +129,63 @@ class EqualEarthProjectionTests(unittest.TestCase):
             )
         finally:
             plt.close(figure)
+
+    def test_country_boundary_is_overlaid_without_changing_extent(self) -> None:
+        figure, axis = plt.subplots()
+        configure_equal_earth_axis(
+            axis,
+            longitude=np.array([100.0, 101.0]),
+            latitude=np.array([10.0, 11.0]),
+        )
+        limits = axis.get_xlim(), axis.get_ylim()
+
+        plot_country_boundary(axis, box(100.0, 10.0, 101.0, 11.0))
+
+        try:
+            self.assertEqual(len(axis.lines), 2)
+            self.assertEqual((axis.get_xlim(), axis.get_ylim()), limits)
+            self.assertEqual(axis.lines[0].get_color(), "white")
+            self.assertEqual(axis.lines[1].get_color(), "0.1")
+        finally:
+            plt.close(figure)
+
+    def test_country_boundary_is_loaded_and_clipped_from_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "data"
+            boundaries = root / "boundaries" / (
+                f"natural-earth-{NATURAL_EARTH_VERSION}-admin-0-countries-10m.geojson"
+            )
+            boundaries.parent.mkdir(parents=True)
+            boundaries.write_text(json.dumps({
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "properties": {
+                        "ADMIN": "Example",
+                        "ISO_A2": "XX",
+                        "ISO_A2_EH": "XX",
+                        "ISO_A3": "XXX",
+                        "ISO_A3_EH": "XXX",
+                        "ADM0_A3": "XXX",
+                    },
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+                    },
+                }],
+            }))
+            metadata = {
+                "country_cache": str(root / "country" / "xxx" / "observations.parquet"),
+                "country_selection": {
+                    "country_iso_a3": "XXX",
+                    "selection_bounds": [1.0, 0.0, 3.0, 2.0],
+                },
+            }
+
+            geometry = country_boundary_from_metadata(metadata)
+
+            assert geometry is not None
+            self.assertEqual(geometry.bounds, (1.0, 0.0, 2.0, 2.0))
 
 
 if __name__ == "__main__":

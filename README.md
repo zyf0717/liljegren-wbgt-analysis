@@ -246,7 +246,9 @@ uv run python scripts/analyze_cellwise_quantile_spread.py \
 The non-consensus and plotting scripts accept these country cellwise roots
 without a separate country implementation. Country population percentages use
 the population within the cache grid; global products retain the global
-population denominator. Country maps are fitted to the cache extent.
+population denominator. Country maps use Mercator, are fitted to the cache
+extent, and overlay the pinned Natural Earth country boundary. Global maps
+retain Equal Earth.
 
 ERA5-country and NASA POWER classification default to the same six targets as
 the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.

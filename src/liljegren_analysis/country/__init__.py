@@ -6,6 +6,7 @@ from .cells import (
     GeographicBounds,
     cached_natural_earth_boundaries,
     country_cells,
+    country_geometry,
     load_countries,
 )
 from .extraction import (
@@ -23,6 +24,7 @@ __all__ = [
     "GeographicBounds",
     "cached_natural_earth_boundaries",
     "country_cells",
+    "country_geometry",
     "extract_countries_observations",
     "extract_country_observations",
     "load_countries",

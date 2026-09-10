@@ -8,13 +8,19 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from shapely.geometry.base import BaseGeometry
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..io.artifacts import atomic_csv
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
-from .projection import configure_equal_earth_axis, plot_equal_earth_cells
+from .projection import (
+    configure_equal_earth_axis,
+    country_boundary_from_metadata,
+    plot_country_boundary,
+    plot_equal_earth_cells,
+)
 
 
 DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
@@ -47,6 +53,7 @@ class ISO7243PlotSummary:
     population_affected: np.ndarray
     total_population: int
     region_label: str | None
+    country_boundary: BaseGeometry | None
 
 
 def plot_cellwise_iso7243_classification(
@@ -213,6 +220,7 @@ def summarize_cellwise_iso7243_classification(
         population_affected=population_affected,
         total_population=total_population,
         region_label=region_label,
+        country_boundary=country_boundary_from_metadata(metadata),
     )
 
 
@@ -403,6 +411,7 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         summary.longitude if summary.region_label else None,
         summary.latitude if summary.region_label else None,
     )
+    plot_country_boundary(map_axis, summary.country_boundary)
     colorbar = figure.colorbar(
         image,
         ax=map_axis,
@@ -468,6 +477,7 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             summary.longitude if summary.region_label else None,
             summary.latitude if summary.region_label else None,
         )
+        plot_country_boundary(axis, summary.country_boundary)
         axis.set_title(f"{implementation_a} vs {implementation_b}")
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)

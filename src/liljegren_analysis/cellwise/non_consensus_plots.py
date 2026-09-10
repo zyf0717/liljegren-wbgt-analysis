@@ -7,12 +7,15 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+from shapely.geometry.base import BaseGeometry
 
 from .non_consensus import DEFAULT_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
 from .projection import (
     configure_equal_earth_axis,
+    country_boundary_from_metadata,
+    plot_country_boundary,
     plot_equal_earth_cells,
     regional_map_figure_size,
 )
@@ -68,12 +71,14 @@ def plot_cellwise_iso7243_non_consensus(
         percent,
         png,
         region_label=region_label,
+        country_boundary=country_boundary_from_metadata(metadata),
     )
     return NonConsensusFigureOutputs(png)
 
 
 def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
-               png: Path, *, region_label: str | None = None) -> None:
+               png: Path, *, region_label: str | None = None,
+               country_boundary: BaseGeometry | None = None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -101,6 +106,7 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     configure_equal_earth_axis(
         axis, longitude if region_label else None, latitude if region_label else None
     )
+    plot_country_boundary(axis, country_boundary)
     colorbar = figure.colorbar(
         image,
         ax=axis,
