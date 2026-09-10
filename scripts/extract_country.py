@@ -63,6 +63,13 @@ def parse_args() -> argparse.Namespace:
         help="Local Natural Earth-compatible GeoJSON boundary file.",
     )
     parser.add_argument(
+        "--bounds",
+        nargs=4,
+        type=float,
+        metavar=("WEST", "SOUTH", "EAST", "NORTH"),
+        help="Select a rectangle instead of the country polygon (single country only).",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Atomically replace an existing country cache.",
@@ -72,6 +79,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--start-date must not be after --end-date")
     if args.output is not None and len(args.countries) != 1:
         parser.error("--output can only be used with one country")
+    if args.bounds is not None and len(args.countries) != 1:
+        parser.error("--bounds can only be used with one country")
     return args
 
 
@@ -92,6 +101,7 @@ def run() -> int:
                 args.start_date,
                 args.end_date,
                 args.output,
+                bounds=tuple(args.bounds) if args.bounds is not None else None,
                 **common,
             ),
         )
@@ -104,6 +114,7 @@ def run() -> int:
             args.start_date,
             args.end_date,
             output_directory,
+            bounds=tuple(args.bounds) if args.bounds is not None else None,
             **common,
         )
         outputs = tuple(

@@ -188,6 +188,19 @@ uv run python scripts/analyze_era5_country_classification.py \
   --thresholds-c 21 25 28 31
 ```
 
+Country extraction also accepts an explicit `WEST SOUTH EAST NORTH` rectangle.
+For the contiguous United States, excluding Alaska, Hawaii, and other
+territories, build only the observation cache with:
+
+```bash
+uv run python scripts/extract_country.py USA \
+  --bounds -124.848974 24.396308 -66.885444 49.384358
+```
+
+This writes `data/country/usa/observations.parquet`. Explicit bounds replace the
+country polygon, so the cache includes every ERA5 cell overlapping the rectangle.
+The selected bounds are persisted in `manifest.json`.
+
 ERA5-country and NASA POWER classification default to the same six targets as
 the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.
 Alongside pairwise change and transition CSVs, both workflows write

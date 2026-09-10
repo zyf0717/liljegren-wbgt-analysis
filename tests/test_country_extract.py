@@ -13,7 +13,11 @@ from liljegren_analysis.country import (
     extract_countries_observations,
     extract_country_observations,
 )
-from liljegren_analysis.country.extraction import _parquet_may_overlap
+from liljegren_analysis.country.extraction import (
+    _BufferedParquetWriter,
+    _overlapping_row_groups,
+    _parquet_may_overlap,
+)
 
 
 def _boundaries(path: Path) -> None:
@@ -52,6 +56,33 @@ class CountryExtractionTests(unittest.TestCase):
             self.assertEqual(extraction.valid_observation_counts, {"wbgt": 1, "tg": 2, "tnwb": 1})
             self.assertEqual(json.loads(output.with_name("extraction-status.json").read_text())["state"], "complete")
 
+    def test_extracts_an_explicit_bounding_box_and_records_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            boundaries = root / "boundaries.geojson"
+            _boundaries(boundaries)
+            _results(root / "hsb")
+            output = root / "out" / "observations.parquet"
+
+            extraction = extract_country_observations(
+                "XX",
+                (root / "hsb",),
+                date(2025, 1, 1),
+                date(2025, 1, 1),
+                output,
+                bounds=(0.38, 0.13, 0.39, 0.14),
+                boundaries=boundaries,
+            )
+
+            table = pq.read_table(output)
+            self.assertEqual(table.num_rows, 1)
+            self.assertEqual(
+                table["cell_id"].to_pylist(),
+                ["era5-global-n002500-e0005000"],
+            )
+            self.assertEqual(extraction.selection_bounds, (0.38, 0.13, 0.39, 0.14))
+            self.assertEqual(extraction.schema_version, 3)
+
     def test_routes_one_scan_to_multiple_countries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -80,6 +111,34 @@ class CountryExtractionTests(unittest.TestCase):
             ranges = (("era5-global-n002500-e0002500-", "era5-global-n002500-e0002500."),)
             self.assertTrue(_parquet_may_overlap(with_stats, ranges))
             self.assertTrue(_parquet_may_overlap(without_stats, ranges))
+
+    def test_footer_pruning_selects_only_overlapping_row_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "rows.parquet"
+            pq.write_table(
+                pa.table({"row_id": ["a", "b", "c"]}),
+                path,
+                row_group_size=1,
+            )
+
+            self.assertEqual(_overlapping_row_groups(path, (("b", "c"),)), (1,))
+
+    def test_buffered_writer_emits_bounded_row_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "rows.parquet"
+            table = pa.table({"value": range(600_000)})
+            writer = _BufferedParquetWriter(path, table.schema)
+
+            writer.write(table.slice(0, 200_000))
+            writer.write(table.slice(200_000))
+            writer.finish()
+
+            metadata = pq.read_metadata(path)
+            self.assertEqual(metadata.num_row_groups, 3)
+            self.assertEqual(
+                [metadata.row_group(index).num_rows for index in range(3)],
+                [250_000, 250_000, 100_000],
+            )
 
 
 if __name__ == "__main__":

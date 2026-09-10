@@ -21,6 +21,7 @@ from shapely.prepared import prep
 ERA5_SPACING_UNITS = 2_500
 _COORDINATE_SCALE = 10_000
 _HALF_SPACING_DEGREES = ERA5_SPACING_UNITS / _COORDINATE_SCALE / 2
+GeographicBounds = tuple[float, float, float, float]
 NATURAL_EARTH_VERSION = "5.1.2"
 NATURAL_EARTH_URL = (
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
@@ -133,10 +134,12 @@ def load_countries(boundaries: Path, country_codes: Iterable[str]) -> list[Count
     return countries
 
 
-def country_cells(country: Country) -> list[CountryCell]:
-    """Return grid cells whose footprints overlap the country by positive area."""
+def country_cells(
+    country: Country, *, bounds: GeographicBounds | None = None
+) -> list[CountryCell]:
+    """Return grid cells overlapping the country or an explicit bounding box."""
 
-    geometry = country.geometry
+    geometry = country.geometry if bounds is None else _bounds_geometry(bounds)
     if geometry.is_empty:
         return []
     prepared = prep(geometry)
@@ -178,6 +181,17 @@ def country_cells(country: Country) -> list[CountryCell]:
                 )
             )
     return selected
+
+
+def _bounds_geometry(bounds: GeographicBounds) -> BaseGeometry:
+    west, south, east, north = bounds
+    if not all(math.isfinite(value) for value in bounds):
+        raise ValueError("bounds must be finite")
+    if not (-180.0 <= west < east <= 180.0):
+        raise ValueError("bounds longitudes must satisfy -180 <= west < east <= 180")
+    if not (-90.0 <= south < north <= 90.0):
+        raise ValueError("bounds latitudes must satisfy -90 <= south < north <= 90")
+    return box(west, south, east, north)
 
 
 def _candidate_units(

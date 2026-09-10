@@ -3,6 +3,7 @@
 from .cells import (
     Country,
     CountryCell,
+    GeographicBounds,
     cached_natural_earth_boundaries,
     country_cells,
     load_countries,
@@ -19,6 +20,7 @@ __all__ = [
     "CountryCell",
     "CountryExtraction",
     "CountryExtractionProgress",
+    "GeographicBounds",
     "cached_natural_earth_boundaries",
     "country_cells",
     "extract_countries_observations",
