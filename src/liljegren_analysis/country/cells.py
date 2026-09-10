@@ -137,9 +137,13 @@ def load_countries(boundaries: Path, country_codes: Iterable[str]) -> list[Count
 def country_cells(
     country: Country, *, bounds: GeographicBounds | None = None
 ) -> list[CountryCell]:
-    """Return grid cells overlapping the country or an explicit bounding box."""
+    """Return grid cells overlapping the country, optionally clipped to bounds."""
 
-    geometry = country.geometry if bounds is None else _bounds_geometry(bounds)
+    geometry = (
+        country.geometry
+        if bounds is None
+        else country.geometry.intersection(_bounds_geometry(bounds))
+    )
     if geometry.is_empty:
         return []
     prepared = prep(geometry)

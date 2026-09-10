@@ -56,7 +56,7 @@ class CountryExtractionTests(unittest.TestCase):
             self.assertEqual(extraction.valid_observation_counts, {"wbgt": 1, "tg": 2, "tnwb": 1})
             self.assertEqual(json.loads(output.with_name("extraction-status.json").read_text())["state"], "complete")
 
-    def test_extracts_an_explicit_bounding_box_and_records_it(self) -> None:
+    def test_clips_country_polygon_to_explicit_bounds_and_records_them(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             boundaries = root / "boundaries.geojson"
@@ -70,17 +70,17 @@ class CountryExtractionTests(unittest.TestCase):
                 date(2025, 1, 1),
                 date(2025, 1, 1),
                 output,
-                bounds=(0.38, 0.13, 0.39, 0.14),
+                bounds=(0.12, 0.12, 0.37, 0.15),
                 boundaries=boundaries,
             )
 
             table = pq.read_table(output)
-            self.assertEqual(table.num_rows, 1)
+            self.assertEqual(table.num_rows, 2)
             self.assertEqual(
                 table["cell_id"].to_pylist(),
-                ["era5-global-n002500-e0005000"],
+                ["era5-global-n002500-e0002500"] * 2,
             )
-            self.assertEqual(extraction.selection_bounds, (0.38, 0.13, 0.39, 0.14))
+            self.assertEqual(extraction.selection_bounds, (0.12, 0.12, 0.37, 0.15))
             self.assertEqual(extraction.schema_version, 3)
 
     def test_routes_one_scan_to_multiple_countries(self) -> None:

@@ -188,7 +188,8 @@ uv run python scripts/analyze_era5_country_classification.py \
   --thresholds-c 21 25 28 31
 ```
 
-Country extraction also accepts an explicit `WEST SOUTH EAST NORTH` rectangle.
+Country extraction also accepts an explicit `WEST SOUTH EAST NORTH` rectangle
+that clips the selected country polygon.
 For the contiguous United States, excluding Alaska, Hawaii, and other
 territories, build only the observation cache with:
 
@@ -197,9 +198,10 @@ uv run python scripts/extract_country.py USA \
   --bounds -124.848974 24.396308 -66.885444 49.384358
 ```
 
-This writes `data/country/usa/observations.parquet`. Explicit bounds replace the
-country polygon, so the cache includes every ERA5 cell overlapping the rectangle.
-The selected bounds are persisted in `manifest.json`.
+This writes `data/country/usa/observations.parquet`. The USA Natural Earth
+polygon is intersected with the bounds, removing Alaska, Hawaii, territories,
+and neighbouring Canadian or Mexican cells. The selected bounds are persisted
+in `manifest.json`.
 
 Country caches can feed the same cellwise pipelines as raw HSB results. Use the
 same six default implementations and keep each country in a separate output

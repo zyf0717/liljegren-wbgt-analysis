@@ -41,15 +41,15 @@ class CountryCellTests(unittest.TestCase):
         self.assertEqual([cell.cell_id for cell in cells], ["era5-global-n000000-e0000000"])
         self.assertTrue(cells[0].center_in_country)
 
-    def test_explicit_bounds_replace_country_geometry(self) -> None:
+    def test_explicit_bounds_clip_country_geometry(self) -> None:
         country = Country(
             iso_a2="XX",
             iso_a3="XXX",
             name="Example",
-            geometry=box(10.0, 10.0, 10.1, 10.1),
+            geometry=box(0.13, 0.13, 0.64, 0.14),
         )
 
-        cells = country_cells(country, bounds=(0.13, 0.13, 0.14, 0.14))
+        cells = country_cells(country, bounds=(0.13, 0.13, 0.37, 0.14))
 
         self.assertEqual(
             [cell.cell_id for cell in cells],

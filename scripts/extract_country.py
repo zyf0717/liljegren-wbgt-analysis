@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         nargs=4,
         type=float,
         metavar=("WEST", "SOUTH", "EAST", "NORTH"),
-        help="Select a rectangle instead of the country polygon (single country only).",
+        help="Clip the country polygon to a rectangle (single country only).",
     )
     parser.add_argument(
         "--force",
