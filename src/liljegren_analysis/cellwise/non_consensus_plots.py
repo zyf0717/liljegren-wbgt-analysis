@@ -57,7 +57,7 @@ def plot_cellwise_iso7243_non_consensus(
         or (percent[valid] < 0.0).any() or (percent[valid] > 100.0).any()):
         raise ValueError("Non-consensus percentages are invalid")
     target.mkdir(parents=True, exist_ok=True)
-    png = target / "iso7243_non_consensus_percent.png"
+    png = target / "non_consensus_percent.png"
     country_selection = metadata.get("country_selection")
     region_label = (
         str(country_selection.get("country_name"))

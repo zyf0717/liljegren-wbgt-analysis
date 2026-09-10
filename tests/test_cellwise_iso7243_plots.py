@@ -50,6 +50,11 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     np.testing.assert_array_equal(summary.population_affected[-1], 10)
     assert summary.total_population == 1010
     figures = plot_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    assert figures.png.name == "classification_changes.png"
+    assert figures.pairwise_png.name == "pairwise_classification_changes.png"
+    assert figures.population_affected_png.name == "population_affected.png"
+    assert figures.non_consensus_population_png.name == "non_consensus_population_affected.png"
+    assert figures.population_affected_csv.name == "population_affected.csv"
     assert figures.png.stat().st_size > 0
     assert figures.pairwise_png.stat().st_size > 0
     assert figures.population_affected_png.stat().st_size > 0
@@ -186,7 +191,9 @@ def test_no_supported_cells_remain_undefined(tmp_path):
     assert np.isnan(summary.changed_fraction).all()
     assert np.isnan(summary.pair_changed_fraction).all()
     assert np.equal(summary.histogram_shares, 0).all()
-    assert plot_cellwise_iso7243_non_consensus(out.metadata.parent).png.stat().st_size > 0
+    non_consensus_figure = plot_cellwise_iso7243_non_consensus(out.metadata.parent).png
+    assert non_consensus_figure.name == "non_consensus_percent.png"
+    assert non_consensus_figure.stat().st_size > 0
     assert plot_cellwise_iso7243_classification(
         out.metadata.parent, population_weights_path=weights).png.stat().st_size > 0
 

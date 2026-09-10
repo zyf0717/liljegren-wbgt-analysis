@@ -119,8 +119,8 @@ rates. Weighted histograms describe cell-pair rates, in five-percentage-point
 bins, rather than weighting individual hours.
 
 The classification plotting workflow also writes
-`figures/iso7243_population_affected.csv` and
-`figures/iso7243_population_affected.png`. For every implementation pair and
+`figures/population_affected.csv` and
+`figures/population_affected.png`. For every implementation pair and
 for all-target non-consensus, these report the LandScan population residing in
 cells where the annual rate is at least 5%, 10%, 20%, or 30% of valid hours.
 Each qualifying cell's population is counted once per comparison and threshold;
@@ -131,7 +131,7 @@ dataset in parentheses. The unitless estimate is in billions for global products
 and millions for country products. Values use two significant figures. The
 grouped-bar figure displays that percentage of total population.
 The workflow additionally writes
-`figures/iso7243_non_consensus_population_affected.png`, a line chart of total
+`figures/non_consensus_population_affected.png`, a line chart of total
 population percentage against the four annual non-consensus rate thresholds.
 
 Use `--sample-scope pairwise` (Python: `sample_scope="pairwise"`) to require valid

@@ -74,13 +74,13 @@ def plot_cellwise_iso7243_classification(
         root, population_weights_path=population_weights_path
     )
     target.mkdir(parents=True, exist_ok=True)
-    png = target / "iso7243_classification_changes.png"
-    pairwise_png = target / "iso7243_pairwise_classification_changes.png"
-    population_affected_png = target / "iso7243_population_affected.png"
+    png = target / "classification_changes.png"
+    pairwise_png = target / "pairwise_classification_changes.png"
+    population_affected_png = target / "population_affected.png"
     non_consensus_population_png = (
-        target / "iso7243_non_consensus_population_affected.png"
+        target / "non_consensus_population_affected.png"
     )
-    population_affected_csv = target / "iso7243_population_affected.csv"
+    population_affected_csv = target / "population_affected.csv"
     _write_figure(summary, png)
     _write_pairwise_maps(summary, pairwise_png)
     _write_population_affected_figure(summary, population_affected_png)
