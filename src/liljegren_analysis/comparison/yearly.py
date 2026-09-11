@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from itertools import combinations
@@ -73,6 +74,7 @@ def analyze_yearly_pairwise(
     end_date: date,
     output_root: str | Path = Path("data/pairwise/yearly"),
     sample_scope: SampleScope = "all-implementations",
+    implementations: Sequence[str] | None = None,
     reference_implementation: str = REFERENCE_IMPLEMENTATION,
     export_implementations: tuple[str, ...] | None = None,
 ) -> YearlyPairwiseOutputs:
@@ -82,7 +84,7 @@ def analyze_yearly_pairwise(
         raise ValueError("start_date must not be after end_date")
     product = pairwise_product_root(input_root, sample_scope)
     metadata = json.loads((product / "metadata.json").read_text())
-    if metadata != pairwise_metadata(sample_scope):
+    if metadata != pairwise_metadata(sample_scope, implementations):
         raise ValueError("Unexpected pairwise product metadata")
     dates = tuple(
         start_date + timedelta(days=offset)

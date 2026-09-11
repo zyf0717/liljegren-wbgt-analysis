@@ -8,25 +8,36 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from shapely.geometry.base import BaseGeometry
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
+from ..io.artifacts import atomic_csv
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
-from .projection import configure_equal_earth_axis, equal_earth_coordinates
+from .projection import (
+    configure_equal_earth_axis,
+    country_boundary_from_metadata,
+    plot_country_boundary,
+    plot_equal_earth_cells,
+)
 
 
 DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
 DEFAULT_POPULATION_WEIGHTS_PATH = DEFAULT_POPULATION_OUTPUT_ROOT / "population.parquet"
+POPULATION_AFFECTED_THRESHOLDS_PERCENT = (5, 10, 20, 30)
 _WEIGHTINGS = ("Unweighted", "Geometric-weighted", "Population-weighted")
 
 
 @dataclass(frozen=True)
 class ISO7243FigureOutputs:
-    """Rendered overview and pairwise PNG paths."""
+    """Rendered figures and population-affected summary paths."""
 
     png: Path
     pairwise_png: Path
+    population_affected_png: Path
+    non_consensus_population_png: Path
+    population_affected_csv: Path
 
 
 @dataclass(frozen=True)
@@ -39,6 +50,10 @@ class ISO7243PlotSummary:
     histogram_shares: np.ndarray
     implementation_pairs: tuple[tuple[str, str], ...]
     pair_changed_fraction: np.ndarray
+    population_affected: np.ndarray
+    total_population: int
+    region_label: str | None
+    country_boundary: BaseGeometry | None
 
 
 def plot_cellwise_iso7243_classification(
@@ -59,11 +74,25 @@ def plot_cellwise_iso7243_classification(
         root, population_weights_path=population_weights_path
     )
     target.mkdir(parents=True, exist_ok=True)
-    png = target / "iso7243_classification_changes.png"
-    pairwise_png = target / "iso7243_pairwise_classification_changes.png"
+    png = target / "classification_changes.png"
+    pairwise_png = target / "pairwise_classification_changes.png"
+    population_affected_png = target / "population_affected.png"
+    non_consensus_population_png = (
+        target / "non_consensus_population_affected.png"
+    )
+    population_affected_csv = target / "population_affected.csv"
     _write_figure(summary, png)
     _write_pairwise_maps(summary, pairwise_png)
-    return ISO7243FigureOutputs(png, pairwise_png)
+    _write_population_affected_figure(summary, population_affected_png)
+    _write_non_consensus_population_figure(summary, non_consensus_population_png)
+    atomic_csv(_population_affected_table(summary), population_affected_csv)
+    return ISO7243FigureOutputs(
+        png,
+        pairwise_png,
+        population_affected_png,
+        non_consensus_population_png,
+        population_affected_csv,
+    )
 
 
 def summarize_cellwise_iso7243_classification(
@@ -74,7 +103,7 @@ def summarize_cellwise_iso7243_classification(
     """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()
     metadata = load_hourly_metadata(root)
-    sample_scope = metadata.get("sample_scope", "all-implementations")
+    sample_scope = metadata["sample_scope"]
     implementation_pairs = _implementation_pairs(metadata)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     cell_ids = _integer_column(lookup, "cell_id")
@@ -90,8 +119,29 @@ def summarize_cellwise_iso7243_classification(
     if int(joint.sum()) != metadata["joint_observation_count"]:
         raise ValueError("Joint observation count differs from metadata")
     source_ids = lookup["source_cell_id"].combine_chunks().to_pylist()
+    country_selection = metadata.get("country_selection")
+    region_label = (
+        str(country_selection.get("country_name"))
+        if metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+        else None
+    )
+    population, total_population = _population_weights(
+        source_ids, population_weights_path, regional=region_label is not None
+    )
     weights = np.vstack((np.ones(len(cell_ids)), _geometry_weights(source_ids),
-                         _population_weights(source_ids, population_weights_path)))
+                         population.astype(np.float64)))
+    population_affected = np.zeros(
+        (len(implementation_pairs) + 1, len(POPULATION_AFFECTED_THRESHOLDS_PERCENT)),
+        dtype=np.int64,
+    )
+    _accumulate_population_affected(
+        population_affected[-1:],
+        np.zeros(len(cell_ids), dtype=np.int64),
+        non_unanimous,
+        joint,
+        population,
+    )
     changed_sum = np.zeros(len(cell_ids), dtype=np.uint64)
     compared_sum = np.zeros(len(cell_ids), dtype=np.uint64)
     pair_changed_fraction = np.full(
@@ -134,6 +184,13 @@ def summarize_cellwise_iso7243_classification(
         fractions = np.divide(changed, compared, out=np.full(len(ids), np.nan),
                               where=supported)
         pair_changed_fraction[pair_indices, ids] = fractions
+        _accumulate_population_affected(
+            population_affected[:-1],
+            pair_indices,
+            changed,
+            compared,
+            population[ids],
+        )
         for index in range(3):
             mass = weights[index, ids[supported]]
             histogram[index] += np.histogram(
@@ -160,6 +217,10 @@ def summarize_cellwise_iso7243_classification(
                                   out=np.zeros_like(histogram), where=totals[:, None] > 0),
         implementation_pairs=implementation_pairs,
         pair_changed_fraction=pair_changed_fraction,
+        population_affected=population_affected,
+        total_population=total_population,
+        region_label=region_label,
+        country_boundary=country_boundary_from_metadata(metadata),
     )
 
 
@@ -208,7 +269,9 @@ def _geometry_weights(source_ids: list[str]) -> np.ndarray:
     return weights
 
 
-def _population_weights(source_ids: list[str], path: str | Path) -> np.ndarray:
+def _population_weights(
+    source_ids: list[str], path: str | Path, *, regional: bool = False
+) -> tuple[np.ndarray, int]:
     population_path = Path(path).expanduser().resolve()
     if not population_path.is_file():
         raise FileNotFoundError(
@@ -217,14 +280,110 @@ def _population_weights(source_ids: list[str], path: str | Path) -> np.ndarray:
         )
     table = pq.read_table(population_path, columns=["source_cell_id", "population"])
     population_ids = table["source_cell_id"].combine_chunks().to_pylist()
-    population = _integer_column(table, "population").astype(np.float64)
-    if len(population_ids) != len(set(population_ids)) or (population < 0.0).any():
+    population = _integer_column(table, "population")
+    if len(population_ids) != len(set(population_ids)) or (population < 0).any():
         raise ValueError("Population weights contain invalid source_cell_id or population values")
+    global_population = int(population.sum(dtype=np.int64))
+    if global_population <= 0:
+        raise ValueError("Population weights have no positive total population")
     lookup = dict(zip(population_ids, population, strict=True))
-    weights = np.asarray([lookup.get(source_id, np.nan) for source_id in source_ids])
-    if not np.isfinite(weights).all():
+    weights = np.asarray([lookup.get(source_id, -1) for source_id in source_ids], dtype=np.int64)
+    if (weights < 0).any():
         raise ValueError("Population weights are missing a cell from the ISO 7243 lookup")
-    return weights
+    total_population = (
+        int(weights.sum(dtype=np.int64)) if regional else global_population
+    )
+    if total_population <= 0:
+        raise ValueError("Analysis grid has no positive population")
+    return weights, total_population
+
+
+def _accumulate_population_affected(
+    totals: np.ndarray,
+    group_indices: np.ndarray,
+    changed: np.ndarray,
+    compared: np.ndarray,
+    population: np.ndarray,
+) -> None:
+    """Add each qualifying cell population once per group and threshold."""
+    if not (
+        len(group_indices) == len(changed) == len(compared) == len(population)
+        and totals.shape[1] == len(POPULATION_AFFECTED_THRESHOLDS_PERCENT)
+    ):
+        raise ValueError("Population-affected inputs have incompatible shapes")
+    supported = compared > 0
+    for column, threshold in enumerate(POPULATION_AFFECTED_THRESHOLDS_PERCENT):
+        affected = supported & (100 * changed >= threshold * compared)
+        np.add.at(totals[:, column], group_indices[affected], population[affected])
+
+
+def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
+    def row(
+        comparison_type: str,
+        implementation_a: str | None,
+        implementation_b: str | None,
+        populations: np.ndarray,
+    ) -> dict[str, object]:
+        values: dict[str, object] = {
+            "comparison_type": comparison_type,
+            "implementation_a": implementation_a,
+            "implementation_b": implementation_b,
+        }
+        for threshold, population in zip(
+            POPULATION_AFFECTED_THRESHOLDS_PERCENT, populations, strict=True
+        ):
+            if population == 0:
+                values[f"{threshold}%"] = "-"
+                continue
+            population_percent = 100.0 * int(population) / summary.total_population
+            values[f"{threshold}%"] = (
+                f"{_format_population(int(population), regional=summary.region_label is not None)} "
+                f"({_format_percentage(population_percent)})"
+            )
+        return values
+
+    rows: list[dict[str, object]] = []
+    for pair_index, (implementation_a, implementation_b) in enumerate(
+        summary.implementation_pairs
+    ):
+        rows.append(
+            row(
+                "pairwise_disagreement",
+                implementation_a,
+                implementation_b,
+                summary.population_affected[pair_index],
+            )
+        )
+    rows.append(row("non_consensus", None, None, summary.population_affected[-1]))
+    fields = [
+        ("comparison_type", pa.string()),
+        ("implementation_a", pa.string()),
+        ("implementation_b", pa.string()),
+    ]
+    for threshold in POPULATION_AFFECTED_THRESHOLDS_PERCENT:
+        fields.append((f"{threshold}%", pa.string()))
+    return pa.Table.from_pylist(
+        rows,
+        schema=pa.schema(fields),
+    )
+
+
+def _format_population(population: int, *, regional: bool = False) -> str:
+    divisor = 1e6 if regional else 1e9
+    return _format_two_significant_figures(population / divisor)
+
+
+def _format_percentage(value: float) -> str:
+    return f"{_format_two_significant_figures(value)}%"
+
+
+def _format_two_significant_figures(value: float) -> str:
+    if value == 0.0:
+        return "0"
+    decimals = max(0, 1 - int(np.floor(np.log10(abs(value)))))
+    rounded = round(value, decimals)
+    decimals = max(0, 1 - int(np.floor(np.log10(abs(rounded)))))
+    return f"{rounded:.{decimals}f}"
 
 
 def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
@@ -236,21 +395,23 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
     figure, axes = plt.subplots(2, 2, figsize=(12.0, 8.0), layout="constrained")
     map_axis = axes[0, 0]
     changed_percent = 100.0 * summary.changed_fraction
-    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
-    image = map_axis.scatter(
-        map_x,
-        map_y,
-        c=changed_percent,
-        s=0.35,
-        marker="s",
-        linewidths=0,
+    image = plot_equal_earth_cells(
+        map_axis,
+        summary.longitude,
+        summary.latitude,
+        changed_percent,
+        regional=summary.region_label is not None,
+        point_size=0.35,
         cmap="magma",
         vmin=0.0,
         vmax=50.0,
-        rasterized=True,
     )
-    configure_equal_earth_axis(map_axis)
-    # map_axis.set_title("Mean classification disagreement across implementation pairs")
+    configure_equal_earth_axis(
+        map_axis,
+        summary.longitude if summary.region_label else None,
+        summary.latitude if summary.region_label else None,
+    )
+    plot_country_boundary(map_axis, summary.country_boundary)
     colorbar = figure.colorbar(
         image,
         ax=map_axis,
@@ -295,25 +456,28 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
         squeeze=False,
     )
     image = None
-    map_x, map_y = equal_earth_coordinates(summary.longitude, summary.latitude)
     for axis, (implementation_a, implementation_b), values in zip(
         axes.flat,
         summary.implementation_pairs,
         summary.pair_changed_fraction,
     ):
-        image = axis.scatter(
-            map_x,
-            map_y,
-            c=100.0 * values,
-            s=0.25,
-            marker="s",
-            linewidths=0,
+        image = plot_equal_earth_cells(
+            axis,
+            summary.longitude,
+            summary.latitude,
+            100.0 * values,
+            regional=summary.region_label is not None,
+            point_size=0.25,
             cmap="magma",
             vmin=0.0,
             vmax=color_upper_percent,
-            rasterized=True,
         )
-        configure_equal_earth_axis(axis)
+        configure_equal_earth_axis(
+            axis,
+            summary.longitude if summary.region_label else None,
+            summary.latitude if summary.region_label else None,
+        )
+        plot_country_boundary(axis, summary.country_boundary)
         axis.set_title(f"{implementation_a} vs {implementation_b}")
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)
@@ -321,10 +485,100 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
     colorbar = figure.colorbar(
         image,
         ax=axes.ravel().tolist(),
-        label="WBGT class disagreement (% valid hours) — shared P99 cutoff",
+        label="WBGT class disagreement (% valid hours)",
         shrink=0.86,
     )
     configure_percent_colorbar(colorbar, color_upper_percent)
+    figure.savefig(png, dpi=220)
+    plt.close(figure)
+
+
+def _write_population_affected_figure(
+    summary: ISO7243PlotSummary, png: Path
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    labels = [
+        f"{implementation_a} vs {implementation_b}"
+        for implementation_a, implementation_b in summary.implementation_pairs
+    ] + ["All-target non-consensus"]
+    positions = np.arange(len(labels), dtype=np.float64)
+    height = 0.18
+    offsets = height * (
+        np.arange(len(POPULATION_AFFECTED_THRESHOLDS_PERCENT))
+        - (len(POPULATION_AFFECTED_THRESHOLDS_PERCENT) - 1) / 2
+    )
+    colors = ("#4c78a8", "#f58518", "#54a24b", "#e45756")
+    figure, axis = plt.subplots(
+        figsize=(12.0, max(6.0, 0.58 * len(labels))), layout="constrained"
+    )
+    population_percent = (
+        100.0 * summary.population_affected.astype(np.float64) / summary.total_population
+    )
+    for column, (threshold, offset, color) in enumerate(
+        zip(POPULATION_AFFECTED_THRESHOLDS_PERCENT, offsets, colors, strict=True)
+    ):
+        axis.barh(
+            positions + offset,
+            population_percent[:, column],
+            height=height,
+            color=color,
+            label=f"≥ {threshold}%",
+        )
+    axis.set(
+        yticks=positions,
+        yticklabels=labels,
+        xlabel=(
+            f"Affected population (% of {summary.region_label} input-region population)"
+            if summary.region_label
+            else "Affected population (% of total population)"
+        ),
+        ylabel="Comparison",
+    )
+    axis.invert_yaxis()
+    axis.grid(axis="x", color="#d9d9d9", linewidth=0.7)
+    axis.set_axisbelow(True)
+    axis.legend(
+        title="Annual disagreement / non-consensus rate",
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncols=4,
+    )
+    figure.savefig(png, dpi=220)
+    plt.close(figure)
+
+
+def _write_non_consensus_population_figure(
+    summary: ISO7243PlotSummary, png: Path
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    thresholds = np.asarray(POPULATION_AFFECTED_THRESHOLDS_PERCENT)
+    population_percent = (
+        100.0 * summary.population_affected[-1].astype(np.float64)
+        / summary.total_population
+    )
+    figure, axis = plt.subplots(figsize=(7.0, 4.5), layout="constrained")
+    axis.plot(thresholds, population_percent, color="#4c78a8", marker="o", linewidth=2)
+    axis.set(
+        xlabel="Non-consensus rate (% valid hours)",
+        ylabel=(
+            f"Population affected (% of {summary.region_label} input-region population)"
+            if summary.region_label
+            else "Population affected (% of total population)"
+        ),
+        xticks=thresholds,
+        xlim=(thresholds[0] - 1, thresholds[-1] + 1),
+        ylim=(0.0, 100.0),
+    )
+    axis.grid(color="#d9d9d9", linewidth=0.7)
+    axis.set_axisbelow(True)
     figure.savefig(png, dpi=220)
     plt.close(figure)
 

@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from ..results import HSBRunResults
-from .config import SAMPLE_SCOPES, SampleScope
+from .config import SAMPLE_SCOPES, SampleScope, pairwise_implementations
 from .pairwise import compute_daily_pairwise, persist_daily_pairwise
 from .persistence import (
     DEFAULT_PAIRWISE_OUTPUT_ROOT,
@@ -25,6 +25,7 @@ def run_daily_pairwise(
     end_date: date,
     output_root: str | Path = DEFAULT_PAIRWISE_OUTPUT_ROOT,
     sample_scope: SampleScope = "all-implementations",
+    implementations: Sequence[str] | None = None,
     workers: int = 1,
     overwrite: bool = False,
 ) -> Path:
@@ -34,6 +35,11 @@ def run_daily_pairwise(
         raise ValueError("start_date must not be after end_date")
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
+    selected = (
+        pairwise_implementations(implementations)
+        if sample_scope == "all-implementations" or implementations is not None
+        else None
+    )
     if workers < 1:
         raise ValueError("workers must be positive")
     raw_runs = (
@@ -50,7 +56,12 @@ def run_daily_pairwise(
         HSBRunResults.from_hsb_run(run)
 
     output = Path(output_root).expanduser().resolve()
-    product = initialize_pairwise_output(output, sample_scope, overwrite=overwrite)
+    product = initialize_pairwise_output(
+        output,
+        sample_scope,
+        implementations=selected,
+        overwrite=overwrite,
+    )
     days = tuple(
         start_date + timedelta(days=offset)
         for offset in range((end_date - start_date).days + 1)
@@ -71,12 +82,24 @@ def run_daily_pairwise(
     executor = ProcessPoolExecutor(max_workers=workers, max_tasks_per_child=1)
     try:
         futures = [
-            executor.submit(compute_daily_pairwise, day, runs, sample_scope)
+            executor.submit(
+                compute_daily_pairwise,
+                day,
+                runs,
+                sample_scope,
+                implementations=selected,
+            )
             for day in pending
         ]
         for completed, future in enumerate(as_completed(futures), start=1):
             result_date, summaries, worker_pid, elapsed = future.result()
-            persist_daily_pairwise(output, result_date, summaries, sample_scope)
+            persist_daily_pairwise(
+                output,
+                result_date,
+                summaries,
+                sample_scope,
+                implementations=selected,
+            )
             logger.info(
                 "Processed %s worker_pid=%d compute=%.1fs [%d/%d]",
                 result_date,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import combinations
@@ -14,7 +15,7 @@ import pyarrow as pa
 
 from ..results import HSBRunResults, RESULT_QUANTITIES, ResultFile
 from .area_weighted import _ERA5_LATITUDE_WEIGHTS
-from .config import DEFAULT_PAIRWISE_IMPLEMENTATIONS, SAMPLE_SCOPES, SampleScope
+from .config import SAMPLE_SCOPES, SampleScope, pairwise_implementations
 from .persistence import persist_date_partitions
 
 
@@ -52,7 +53,11 @@ class DailyPairwiseSummaries:
 
 
 def compute_daily_pairwise(
-    result_date: date, runs: tuple[Path, ...], sample_scope: SampleScope = "pairwise"
+    result_date: date,
+    runs: tuple[Path, ...],
+    sample_scope: SampleScope = "pairwise",
+    *,
+    implementations: Sequence[str] | None = None,
 ) -> tuple[date, DailyPairwiseSummaries, int, float]:
     """Compute one date's pairwise and status summaries with Polars LazyFrames."""
 
@@ -60,16 +65,17 @@ def compute_daily_pairwise(
         raise ValueError("runs is empty")
     if sample_scope not in SAMPLE_SCOPES:
         raise ValueError(f"Unsupported sample scope: {sample_scope}")
+    selected = (
+        pairwise_implementations(implementations)
+        if sample_scope == "all-implementations" or implementations is not None
+        else None
+    )
     started = monotonic()
     base, implementations = _base_results(
         result_date,
         runs,
         require_common_shards=sample_scope == "all-implementations",
-        required_implementations=(
-            DEFAULT_PAIRWISE_IMPLEMENTATIONS
-            if sample_scope == "all-implementations"
-            else None
-        ),
+        required_implementations=selected,
     )
     invalid = (
         base.filter(pl.col("area_weight").is_null())
@@ -115,6 +121,8 @@ def persist_daily_pairwise(
     result_date: date,
     summaries: DailyPairwiseSummaries,
     sample_scope: SampleScope = "pairwise",
+    *,
+    implementations: Sequence[str] | None = None,
 ) -> Path:
     """Atomically publish one date's three Parquet summary tables."""
 
@@ -124,6 +132,7 @@ def persist_daily_pairwise(
         Path(output_root), result_date,
         {"pairwise": summaries.pairwise, "abs_histogram": summaries.abs_histogram, "quantity_status": summaries.quantity_status},
         sample_scope,
+        implementations,
     )
 
 

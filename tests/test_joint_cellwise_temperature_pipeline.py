@@ -14,7 +14,6 @@ from liljegren_analysis.cellwise import (
     compute_joint_cellwise_temperature_quantiles,
 )
 from liljegren_analysis.cellwise.joint_pipeline import _open_manifest
-from liljegren_analysis.comparison.config import EXPECTED_IMPLEMENTATIONS
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 _CELLS = (
@@ -22,10 +21,16 @@ _CELLS = (
     "era5-global-n002500-e0000000",
     "era5-global-n005000-e0000000",
 )
+_AVAILABLE_IMPLEMENTATIONS = (
+    *DEFAULT_JOINT_IMPLEMENTATIONS,
+    "mdljts-wbgt",
+    "heatstress-jl",
+    "heatstress-r",
+)
 
 
 def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
-    for implementation_index, implementation in enumerate(EXPECTED_IMPLEMENTATIONS):
+    for implementation_index, implementation in enumerate(_AVAILABLE_IMPLEMENTATIONS):
         path = (
             hsb_run
             / "results"

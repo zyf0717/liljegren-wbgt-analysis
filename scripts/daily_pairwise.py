@@ -39,7 +39,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample-scope", choices=SAMPLE_SCOPES, default="all-implementations"
     )
-    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        dest="implementations",
+        help="target implementation; repeat to replace the default set",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="process workers (default: 1); Polars manages threads automatically",
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -54,6 +65,7 @@ def main() -> None:
             end_date=arguments.end_date,
             output_root=arguments.output_root,
             sample_scope=arguments.sample_scope,
+            implementations=arguments.implementations,
             workers=arguments.workers,
             overwrite=arguments.force,
         )

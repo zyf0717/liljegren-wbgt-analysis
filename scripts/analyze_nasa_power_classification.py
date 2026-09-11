@@ -28,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--country", action="append", dest="country_codes")
     parser.add_argument("--location", action="append", dest="location_ids")
     parser.add_argument(
+        "--implementation",
+        action="append",
+        dest="implementations",
+        help="target implementation; repeat to replace the default six-target set",
+    )
+    parser.add_argument(
         "--boundary-cache", type=Path, default=REPOSITORY / "data" / "boundaries"
     )
     arguments = parser.parse_args()
@@ -49,6 +55,7 @@ def main() -> int:
             country_codes=arguments.country_codes,
             location_ids=arguments.location_ids,
             boundary_cache=arguments.boundary_cache,
+            implementations=arguments.implementations,
         )
         write_outputs(analysis.outputs, arguments.output_root)
     except (OSError, ValueError) as error:

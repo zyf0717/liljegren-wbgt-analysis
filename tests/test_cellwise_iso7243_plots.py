@@ -5,12 +5,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow as pa
+import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
 import pytest
 
-from iso7243_fixtures import CELLS, reference_pairwise_counts, write_days
+from iso7243_fixtures import CELLS, NAMES, PAIR_COUNT, reference_pairwise_counts, write_days
 from liljegren_analysis.cellwise.iso7243 import analyze_cellwise_iso7243_classification
 from liljegren_analysis.cellwise.iso7243_plots import (
+    _accumulate_population_affected,
+    _format_population,
+    _format_percentage,
+    _format_two_significant_figures,
     configure_percent_colorbar,
     plot_cellwise_iso7243_classification,
     summarize_cellwise_iso7243_classification,
@@ -27,19 +32,92 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     pq.write_table(pa.table({"source_cell_id": CELLS, "population": [10, 0, 1000]}), weights)
     summary = summarize_cellwise_iso7243_classification(
         out.metadata.parent, population_weights_path=weights)
-    np.testing.assert_allclose(summary.changed_fraction, [1 / 3, 0, np.nan], equal_nan=True)
+    np.testing.assert_allclose(
+        summary.changed_fraction, [2 / len(NAMES), 0, np.nan], equal_nan=True
+    )
     assert summary.histogram_shares.shape == (3, 20)
     np.testing.assert_allclose(summary.histogram_shares.sum(axis=1), 1.)
-    # Five of fifteen pairs disagree for the first cell; unsupported third cell excluded.
-    assert summary.histogram_shares[0, -1] == pytest.approx(5 / 30)
-    assert summary.histogram_shares[2, -1] == pytest.approx(5 / 15)
+    # Pairs containing Argonne disagree for the first cell; third cell is unsupported.
+    assert summary.histogram_shares[0, -1] == pytest.approx(
+        (len(NAMES) - 1) / (2 * PAIR_COUNT)
+    )
+    assert summary.histogram_shares[2, -1] == pytest.approx(
+        (len(NAMES) - 1) / PAIR_COUNT
+    )
     np.testing.assert_allclose(summary.pair_changed_fraction[0], [1, 0, np.nan], equal_nan=True)
+    np.testing.assert_array_equal(summary.population_affected[:len(NAMES) - 1], 10)
+    np.testing.assert_array_equal(summary.population_affected[len(NAMES) - 1:-1], 0)
+    np.testing.assert_array_equal(summary.population_affected[-1], 10)
+    assert summary.total_population == 1010
     figures = plot_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
+    assert figures.png.name == "classification_changes.png"
+    assert figures.pairwise_png.name == "pairwise_classification_changes.png"
+    assert figures.population_affected_png.name == "population_affected.png"
+    assert figures.non_consensus_population_png.name == "non_consensus_population_affected.png"
+    assert figures.population_affected_csv.name == "population_affected.csv"
     assert figures.png.stat().st_size > 0
     assert figures.pairwise_png.stat().st_size > 0
+    assert figures.population_affected_png.stat().st_size > 0
+    assert figures.non_consensus_population_png.stat().st_size > 0
+    population_csv = pcsv.read_csv(figures.population_affected_csv)
+    assert population_csv.column_names == [
+        "comparison_type", "implementation_a", "implementation_b",
+        "5%", "10%", "20%", "30%",
+    ]
+    assert population_csv.num_rows == PAIR_COUNT + 1
+    for threshold in (5, 10, 20, 30):
+        assert population_csv[f"{threshold}%"][0].as_py() == "0.000000010 (0.99%)"
+        assert population_csv[f"{threshold}%"][len(NAMES) - 1].as_py() == "-"
 
 
-def test_legacy_product_rejected(tmp_path):
+@pytest.mark.parametrize(
+    ("population", "expected"),
+    [
+        (6_459_547_367, "6.5"),
+        (96_742_045, "0.097"),
+        (10_000_000, "0.010"),
+        (9_999_999, "0.010"),
+        (442_136, "0.00044"),
+        (10, "0.000000010"),
+        (0, "0"),
+    ],
+)
+def test_population_display_uses_billions_without_suffix_and_exactly_two_sf(
+    population, expected
+):
+    assert _format_population(population) == expected
+
+
+@pytest.mark.parametrize(
+    ("population", "expected"),
+    [(96_742_045, "97"), (10_000_000, "10"), (442_136, "0.44"), (10, "0.000010")],
+)
+def test_country_population_display_uses_millions_without_suffix(
+    population, expected
+):
+    assert _format_population(population, regional=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (83.051, "83%"),
+        (1.20065, "1.2%"),
+        (0.0855, "0.086%"),
+        (0.01, "0.010%"),
+        (0.009, "0.0090%"),
+        (0.0, "0%"),
+    ],
+)
+def test_percentage_display_uses_exactly_two_significant_figures(value, expected):
+    assert _format_percentage(value) == expected
+
+
+def test_two_significant_figure_formatter_preserves_trailing_zeroes():
+    assert _format_two_significant_figures(6.0) == "6.0"
+
+
+def test_incompatible_product_rejected(tmp_path):
     (tmp_path / "metadata.json").write_text(json.dumps({"quantiles": ["p50", "p90", "p95", "p99"]}))
     with pytest.raises(ValueError, match="hourly"):
         summarize_cellwise_iso7243_classification(tmp_path)
@@ -57,16 +135,40 @@ def test_pairwise_plot_uses_each_pairs_support(tmp_path):
     summary = summarize_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
     reference = reference_pairwise_counts(run, ["2025-01-01"])
     expected = np.divide(reference[:, 1] + reference[:, 2], reference[:, 0],
-                         out=np.full((15, 3), np.nan), where=reference[:, 0] > 0)
+                         out=np.full((PAIR_COUNT, 3), np.nan), where=reference[:, 0] > 0)
     np.testing.assert_allclose(summary.pair_changed_fraction, expected, equal_nan=True)
     np.testing.assert_allclose(summary.changed_fraction, np.nanmean(expected, axis=0))
     assert summary.pair_changed_fraction[0, 0] == pytest.approx(3 / 24)
-    # Cell 2 has no all-target support, but ten pairs have valid data there.
-    assert np.isfinite(summary.pair_changed_fraction[:, 2]).sum() == 10
+    # Cell 2 has no all-target support, but pairs excluding Argonne remain valid.
+    assert np.isfinite(summary.pair_changed_fraction[:, 2]).sum() == (
+        (len(NAMES) - 1) * (len(NAMES) - 2) // 2
+    )
     assert summary.changed_fraction[2] == 0
     np.testing.assert_allclose(summary.histogram_shares.sum(axis=1), 1.)
+    population = np.asarray([10, 0, 1000])
+    expected_population = np.asarray([
+        [
+            population[(pair[0] > 0) & (100 * (pair[1] + pair[2]) >= threshold * pair[0])].sum()
+            for threshold in (5, 10, 20, 30)
+        ]
+        for pair in reference
+    ])
+    np.testing.assert_array_equal(summary.population_affected[:-1], expected_population)
     output = plot_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
     assert output.pairwise_png.stat().st_size > 0
+
+
+def test_population_affected_thresholds_are_inclusive_and_exclude_unsupported_cells():
+    totals = np.zeros((2, 4), dtype=np.int64)
+    _accumulate_population_affected(
+        totals,
+        np.asarray([0, 0, 0, 1, 1]),
+        np.asarray([1, 1, 2, 3, 0]),
+        np.asarray([20, 0, 10, 10, 10]),
+        np.asarray([10, 1000, 20, 30, 0]),
+    )
+    np.testing.assert_array_equal(totals, [[30, 20, 20, 0], [30, 30, 30, 30]])
+    assert np.all(np.diff(totals, axis=1) <= 0)
 
 
 def test_no_supported_cells_remain_undefined(tmp_path):
@@ -89,7 +191,9 @@ def test_no_supported_cells_remain_undefined(tmp_path):
     assert np.isnan(summary.changed_fraction).all()
     assert np.isnan(summary.pair_changed_fraction).all()
     assert np.equal(summary.histogram_shares, 0).all()
-    assert plot_cellwise_iso7243_non_consensus(out.metadata.parent).png.stat().st_size > 0
+    non_consensus_figure = plot_cellwise_iso7243_non_consensus(out.metadata.parent).png
+    assert non_consensus_figure.name == "non_consensus_percent.png"
+    assert non_consensus_figure.stat().st_size > 0
     assert plot_cellwise_iso7243_classification(
         out.metadata.parent, population_weights_path=weights).png.stat().st_size > 0
 

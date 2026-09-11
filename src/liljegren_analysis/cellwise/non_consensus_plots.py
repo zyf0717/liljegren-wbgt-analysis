@@ -7,11 +7,19 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
+from shapely.geometry.base import BaseGeometry
 
 from .non_consensus import DEFAULT_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
-from .projection import configure_equal_earth_axis, equal_earth_coordinates
+from .projection import (
+    configure_equal_earth_axis,
+    country_boundary_from_metadata,
+    plot_country_boundary,
+    plot_equal_earth_cells,
+    plot_major_cities,
+    regional_map_figure_size,
+)
 
 
 @dataclass(frozen=True)
@@ -34,7 +42,7 @@ def plot_cellwise_iso7243_non_consensus(
         if output_directory is not None
         else root / "figures"
     )
-    load_hourly_metadata(root)
+    metadata = load_hourly_metadata(root)
     lookup = pq.read_table(root / "cell_lookup.parquet")
     values = pq.read_table(root / "cellwise_non_consensus.parquet")
     cell_ids = _integers(lookup, "cell_id")
@@ -50,17 +58,39 @@ def plot_cellwise_iso7243_non_consensus(
         or (percent[valid] < 0.0).any() or (percent[valid] > 100.0).any()):
         raise ValueError("Non-consensus percentages are invalid")
     target.mkdir(parents=True, exist_ok=True)
-    png = target / "iso7243_non_consensus_percent.png"
+    png = target / "non_consensus_percent.png"
+    country_selection = metadata.get("country_selection")
+    is_country_input = (
+        metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+    )
+    region_label = (
+        str(country_selection.get("country_name"))
+        if is_country_input
+        else None
+    )
+    raw_country_iso_a3 = (
+        country_selection.get("country_iso_a3") if is_country_input else None
+    )
+    country_iso_a3 = (
+        raw_country_iso_a3 if isinstance(raw_country_iso_a3, str) else None
+    )
     _write_map(
         _floats(lookup, "latitude"),
         _floats(lookup, "longitude"),
         percent,
         png,
+        region_label=region_label,
+        country_boundary=country_boundary_from_metadata(metadata),
+        country_iso_a3=country_iso_a3,
     )
     return NonConsensusFigureOutputs(png)
 
 
-def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray, png: Path) -> None:
+def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
+               png: Path, *, region_label: str | None = None,
+               country_boundary: BaseGeometry | None = None,
+               country_iso_a3: str | None = None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -68,26 +98,32 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
 
     valid = np.isfinite(percent)
     upper = _dynamic_color_upper_percent(percent)
-    figure, axis = plt.subplots(figsize=(10.0, 4.8), layout="constrained")
-    map_x, map_y = equal_earth_coordinates(longitude[valid], latitude[valid])
-    image = axis.scatter(
-        map_x,
-        map_y,
-        c=percent[valid],
-        s=0.35,
-        marker="s",
-        linewidths=0,
+    figure_size = (
+        regional_map_figure_size(longitude, latitude)
+        if region_label is not None
+        else (10.0, 4.8)
+    )
+    figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
+    image = plot_equal_earth_cells(
+        axis,
+        longitude[valid],
+        latitude[valid],
+        percent[valid],
+        regional=region_label is not None,
+        point_size=0.35,
         cmap="magma",
         vmin=0.0,
         vmax=upper,
-        rasterized=True,
     )
-    configure_equal_earth_axis(axis)
-    # axis.set_title("Annual ISO 7243 non-consensus rate")
+    configure_equal_earth_axis(
+        axis, longitude if region_label else None, latitude if region_label else None
+    )
+    plot_country_boundary(axis, country_boundary)
+    plot_major_cities(axis, country_iso_a3)
     colorbar = figure.colorbar(
         image,
         ax=axis,
-        label="WBGT class non-consensus (% valid hours) — P99 cutoff",
+        label="WBGT classification non-consensus (% valid hours)",
     )
     configure_percent_colorbar(colorbar, upper)
     figure.savefig(png, dpi=220)

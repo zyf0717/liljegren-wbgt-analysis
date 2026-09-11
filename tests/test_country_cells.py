@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from liljegren_analysis.country.cells import Country, country_cells, load_countries
+from liljegren_analysis.country.cells import (
+    Country,
+    country_cells,
+    load_countries,
+)
 from shapely.geometry import box
 
 
@@ -36,6 +40,27 @@ class CountryCellTests(unittest.TestCase):
 
         self.assertEqual([cell.cell_id for cell in cells], ["era5-global-n000000-e0000000"])
         self.assertTrue(cells[0].center_in_country)
+
+    def test_explicit_bounds_clip_country_geometry(self) -> None:
+        country = Country(
+            iso_a2="XX",
+            iso_a3="XXX",
+            name="Example",
+            geometry=box(0.13, 0.13, 0.64, 0.14),
+        )
+
+        cells = country_cells(country, bounds=(0.13, 0.13, 0.37, 0.14))
+
+        self.assertEqual(
+            [cell.cell_id for cell in cells],
+            ["era5-global-n002500-e0002500"],
+        )
+
+    def test_rejects_invalid_explicit_bounds(self) -> None:
+        country = Country("XX", "XXX", "Example", box(0.0, 0.0, 1.0, 1.0))
+
+        with self.assertRaisesRegex(ValueError, "west < east"):
+            country_cells(country, bounds=(1.0, 0.0, 0.0, 1.0))
 
     def test_loads_alpha_2_and_alpha_3_aliases_without_duplicates(self) -> None:
         document = {

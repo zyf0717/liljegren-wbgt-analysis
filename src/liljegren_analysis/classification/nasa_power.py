@@ -12,7 +12,11 @@ import pandas as pd
 from shapely.geometry import Point
 
 from ..country.cells import cached_natural_earth_boundaries, load_countries
-from .core import ClassificationAnalysis, analyze_wbgt_classification
+from .core import (
+    ClassificationAnalysis,
+    analyze_wbgt_classification,
+    classification_implementations,
+)
 
 
 @dataclass(frozen=True)
@@ -31,8 +35,8 @@ class NasaPowerClassificationAnalysis:
             **self.classification.outputs,
         }
         return {
-            filename.replace("location_id_pair", "location_pair").replace(
-                "country_iso_a3_pair", "country_pair"
+            filename.replace("location_id_", "location_").replace(
+                "country_iso_a3_", "country_"
             ): frame
             for filename, frame in outputs.items()
         }
@@ -49,6 +53,7 @@ def analyze_nasa_power_run(
     country_codes: Sequence[str] | None = None,
     location_ids: Sequence[str] | None = None,
     boundary_cache: str | Path | None = None,
+    implementations: Sequence[str] | None = None,
 ) -> NasaPowerClassificationAnalysis:
     """Analyze selected NASA POWER workload observations from one HSB run."""
 
@@ -70,7 +75,10 @@ def analyze_nasa_power_run(
         location_ids=location_ids,
         boundary_cache=boundary_cache,
     )
-    result_paths = _result_paths(root / "results", shard_ordinal, workload)
+    selected = classification_implementations(implementations)
+    result_paths = _result_paths(
+        root / "results", shard_ordinal, workload, selected
+    )
     results = _load_results(result_paths, workload, cycle_ordinal)
     status_summary = (
         results.groupby(["implementation", "wbgt_status"], as_index=False, sort=True)
@@ -114,6 +122,7 @@ def analyze_nasa_power_run(
         pair_keys=pair_keys,
         month_column="interval_start_utc",
         summary_dimensions=dimensions,
+        implementations=selected,
     )
     workload_summary = pd.DataFrame(
         {
@@ -222,7 +231,10 @@ def _filter_workload(
 
 
 def _result_paths(
-    results_directory: Path, shard_ordinal: int, workload: pd.DataFrame
+    results_directory: Path,
+    shard_ordinal: int,
+    workload: pd.DataFrame,
+    implementations: Sequence[str],
 ) -> dict[tuple[int, str], Path]:
     selected_partitions = set(workload["result_partition"].astype(int))
     paths = {
@@ -230,10 +242,15 @@ def _result_paths(
         for path in results_directory.glob(f"*/{shard_ordinal:04d}/*/results.parquet")
         if path.parents[2].name.isdigit()
         and int(path.parents[2].name) in selected_partitions
+        and path.parent.name in implementations
     }
-    implementations = {implementation for _, implementation in paths}
-    if len(implementations) < 2:
-        raise FileNotFoundError("expected results for at least two implementations")
+    missing_implementations = sorted(set(implementations) - {
+        implementation for _, implementation in paths
+    })
+    if missing_implementations:
+        raise FileNotFoundError(
+            f"classification implementations are missing: {missing_implementations}"
+        )
     missing = {
         (partition, implementation)
         for partition in selected_partitions

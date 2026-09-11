@@ -9,7 +9,6 @@ from pathlib import Path
 from liljegren_analysis.cellwise import (
     DEFAULT_DATE_WORKERS,
     DEFAULT_JOINT_IMPLEMENTATIONS,
-    DEFAULT_JOINT_OUTPUT_ROOT,
     DEFAULT_REPLAY_WORKERS,
     compute_joint_cellwise_temperature_quantiles,
 )
@@ -24,13 +23,14 @@ def _positive_int(value: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hsb-run", action="append", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--hsb-run", action="append", type=Path)
+    source.add_argument("--country-cache", type=Path)
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=DEFAULT_JOINT_OUTPUT_ROOT,
     )
     parser.add_argument(
         "--force",
@@ -64,8 +64,11 @@ def main() -> None:
         help=f"parallel implementation replays (default: {DEFAULT_REPLAY_WORKERS})",
     )
     arguments = parser.parse_args()
+    if arguments.country_cache is not None and arguments.output_root is None:
+        parser.error("--country-cache requires --output-root")
     output = compute_joint_cellwise_temperature_quantiles(
         arguments.hsb_run,
+        country_cache=arguments.country_cache,
         start_date=arguments.start_date,
         end_date=arguments.end_date,
         output_root=arguments.output_root,

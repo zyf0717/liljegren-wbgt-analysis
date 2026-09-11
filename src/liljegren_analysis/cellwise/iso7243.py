@@ -26,12 +26,19 @@ import pyarrow.parquet as pq
 from ..classification import validate_thresholds
 from ..comparison.config import SAMPLE_SCOPES, SampleScope
 from ..io.artifacts import atomic_json, atomic_parquet, git_commit
-from ..results import validate_result_schema
-from ._pipeline import date_range, hsb_run_paths as normalize_runs
-from ._pipeline import input_files, input_fingerprint, validate_run_inventory
-from .grid import CellGrid, grid_from_source_cell_ids, load_grid
-from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS, _identity_batch
+from ._pipeline import date_range
+from .grid import CellGrid, load_grid
+from ._joint_io import identity_batch
+from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
+from ._source import (
+    CellwiseSource,
+    build_source_grid,
+    current_source_fingerprint,
+    iter_source_batches,
+    resolve_source,
+    source_metadata,
+)
 
 ISO7243_SCHEMA_VERSION = 2
 ANALYSIS = "iso7243-hourly-wbgt-classification-v2"
@@ -64,14 +71,15 @@ def _outputs(root: Path) -> ISO7243ClassificationOutputs:
 
 
 def analyze_cellwise_iso7243_classification(
-    hsb_run_paths: str | Path | Sequence[str | Path],
+    hsb_run_paths: str | Path | Sequence[str | Path] | None = None,
     *,
+    country_cache: str | Path | None = None,
     start_date: str | date,
     end_date: str | date,
     thresholds_c: Sequence[float],
     implementations: Sequence[str] = DEFAULT_JOINT_IMPLEMENTATIONS,
     sample_scope: SampleScope = "all-implementations",
-    output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+    output_root: str | Path | None = None,
     date_workers: int = DEFAULT_DATE_WORKERS,
     batch_size: int = DEFAULT_BATCH_SIZE,
     force: bool = False,
@@ -98,12 +106,9 @@ def analyze_cellwise_iso7243_classification(
     dates = date_range(start_date, end_date)
     if len(dates) * 24 > np.iinfo(np.uint32).max:
         raise ValueError("Date range exceeds uint32 per-cell counter capacity")
-    runs = normalize_runs(hsb_run_paths)
-    validate_run_inventory(runs, dates, names, allow_unexpected=True)
-    files = {name: input_files(runs, dates, name) for name in names}
-    all_files = tuple(sorted(path for paths in files.values() for path in paths))
-    fingerprint = input_fingerprint(all_files)
-    root = Path(output_root).expanduser().resolve()
+    if country_cache is not None and output_root is None:
+        raise ValueError("country_cache requires an explicit output_root")
+    root = Path(output_root or DEFAULT_OUTPUT_ROOT).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".writer.lock").open("a+") as lock:
         try:
@@ -111,22 +116,28 @@ def analyze_cellwise_iso7243_classification(
         except BlockingIOError as error:
             raise RuntimeError(f"Another ISO 7243 writer holds {root}") from error
         return _analyze_locked(
-            root, runs, dates, names, files, all_files, fingerprint, thresholds,
+            root, hsb_run_paths, country_cache, dates, names, thresholds,
             date_workers, batch_size, force, sample_scope,
         )
 
 
-def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
+def _analyze_locked(root, hsb_run_paths, country_cache, dates, names,
                     thresholds, date_workers, batch_size, force, sample_scope):
     started = monotonic()
     outputs = _outputs(root)
+    source = resolve_source(
+        hsb_run_paths, country_cache, dates, names,
+        index_path=root / ".source-index.json",
+    )
+    fingerprint = source.fingerprint
     request = {
         "schema_version": ISO7243_SCHEMA_VERSION, "analysis": ANALYSIS,
         "observation_basis": "hourly", "classification_quantity": "wbgt",
         "support_scope": PAIRWISE_SUPPORT_SCOPE if sample_scope == "pairwise" else SUPPORT_SCOPE,
         "start_date": dates[0].isoformat(), "end_date": dates[-1].isoformat(),
         "thresholds_c": list(thresholds), "implementations": list(names),
-        "input_runs": [str(run) for run in runs], "input_fingerprint": fingerprint,
+        "input_fingerprint": fingerprint,
+        **source_metadata(source),
     }
     request_hash = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     manifest_path = root / ".work" / "manifest.json"
@@ -146,14 +157,9 @@ def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
     atomic_json(request, manifest_path)
     work = root / ".work" / request_hash
     work.mkdir(parents=True, exist_ok=True)
-    by_date = {
-        day: {name: tuple(path for path in files[name]
-                          if path.parents[2].name == day.isoformat()) for name in names}
-        for day in dates
-    }
     grid_path = work / "grid.parquet"
     if not grid_path.exists():
-        atomic_parquet(_build_grid(by_date[dates[0]], batch_size).table, grid_path)
+        atomic_parquet(build_source_grid(source, dates[0], names).table, grid_path)
     grid = load_grid(grid_path)
     if grid.cell_count > np.iinfo(np.int32).max:
         raise ValueError("Grid exceeds int32 cell-ID capacity")
@@ -161,6 +167,7 @@ def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
     pair_count = len(names) * (len(names) - 1) // 2
     stride = 3 if sample_scope == "pairwise" else 2
     total = np.zeros((2 + stride * pair_count, grid.cell_count), dtype=np.uint64)
+    progress_label = _progress_label(source, thresholds)
     pending, provenance = [], {}
     reused = 0
     for day in dates:
@@ -174,29 +181,44 @@ def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
             total += counts
             provenance[day.isoformat()] = info
             reused += 1
-    print(f"ISO 7243: {len(dates)} dates, {reused} cached, {len(pending)} to scan", flush=True)
-    state = (names, thresholds, str(grid_path), batch_size, signature, str(work), sample_scope)
+    print(
+        f"{progress_label}: {len(dates)} dates, {reused} cached, "
+        f"{len(pending)} to scan",
+        flush=True,
+    )
+    state = (source, names, thresholds, str(grid_path), batch_size, signature,
+             str(work), sample_scope)
     if date_workers == 1:
         _initialize_worker(*state)
         for day in pending:
-            _run_day(day, by_date[day])
-            _reduce_day(work, day, signature, total, provenance, sample_scope)
+            _run_day(day)
+            _reduce_day(
+                work, day, signature, total, provenance, sample_scope, progress_label
+            )
     elif pending:
         with ProcessPoolExecutor(
             max_workers=min(date_workers, len(pending)), mp_context=get_context("spawn"),
             initializer=_initialize_worker, initargs=state,
         ) as executor:
-            futures = {executor.submit(_run_day, day, by_date[day]): day for day in pending}
+            futures = {executor.submit(_run_day, day): day for day in pending}
             try:
                 for future in as_completed(futures):
                     day = futures[future]
                     future.result()
-                    _reduce_day(work, day, signature, total, provenance, sample_scope)
+                    _reduce_day(
+                        work,
+                        day,
+                        signature,
+                        total,
+                        provenance,
+                        sample_scope,
+                        progress_label,
+                    )
             except BaseException:
                 for future in futures:
                     future.cancel()
                 raise
-    if input_fingerprint(all_files) != fingerprint:
+    if current_source_fingerprint(source) != fingerprint:
         raise ValueError("Raw inputs changed during classification; outputs not published")
     _validate_counts(total, len(dates) * 24, sample_scope)
     _write_outputs(outputs, grid, total, names, thresholds, sample_scope)
@@ -229,34 +251,53 @@ def _analyze_locked(root, runs, dates, names, files, all_files, fingerprint,
     return outputs
 
 
-def _build_grid(files: dict[str, tuple[Path, ...]], batch_size: int) -> CellGrid:
-    source_ids: set[str] = set()
-    for paths in files.values():
-        for path in paths:
-            for batch in pq.ParquetFile(path).iter_batches(
-                columns=["row_id"], batch_size=batch_size, use_threads=False,
-            ):
-                ids = batch.column(0)
-                if ids.null_count:
-                    raise ValueError("Null result identity")
-                source_ids.update(pc.utf8_slice_codeunits(ids, 0, 28).to_pylist())
-    return grid_from_source_cell_ids(sorted(source_ids))
+def country_classification_label(metadata: dict[str, object]) -> str | None:
+    """Return the named country workload regime for a completed request."""
+
+    selection = metadata.get("country_selection")
+    if not isinstance(selection, dict):
+        return None
+    thresholds = tuple(float(value) for value in metadata.get("thresholds_c", ()))
+    country_iso_a3 = selection.get("country_iso_a3")
+    if country_iso_a3 == "JPN" and thresholds == (21.0, 25.0, 28.0, 31.0):
+        return "JPN MoE"
+    if country_iso_a3 == "THA" and thresholds == (30.0, 32.0, 34.0):
+        return "Thailand workload limits"
+    if (
+        country_iso_a3 == "USA"
+        and "selection_bounds" in selection
+        and thresholds == (25.0, 26.0, 28.0, 30.0)
+    ):
+        return "CONUS OSHA"
+    country_name = selection.get("country_name")
+    return country_name if isinstance(country_name, str) and country_name else None
 
 
-def _initialize_worker(names, thresholds, grid_path, batch_size, signature, work, sample_scope):
+def _progress_label(source: CellwiseSource, thresholds: tuple[float, ...]) -> str:
+    label = country_classification_label(
+        {**source_metadata(source), "thresholds_c": list(thresholds)}
+    )
+    if label is not None:
+        return f"{label} WBGT classification"
+    return "ISO 7243"
+
+
+def _initialize_worker(source, names, thresholds, grid_path, batch_size, signature,
+                       work, sample_scope):
     global _WORKER
     grid = load_grid(Path(grid_path))
-    _WORKER = dict(names=names, thresholds=thresholds,
+    _WORKER = dict(source=source, names=names, thresholds=thresholds,
                    source_ids=grid.table["source_cell_id"].combine_chunks(),
                    cell_count=grid.cell_count, batch_size=batch_size,
                    signature=signature, work=Path(work), sample_scope=sample_scope)
 
 
-def _run_day(day: date, files: dict[str, tuple[Path, ...]]) -> None:
+def _run_day(day: date) -> None:
     started = monotonic()
-    counts, rows = _scan_day(day, files, **{
+    counts, rows = _scan_day(day, **{
         key: _WORKER[key] for key in (
-            "names", "thresholds", "source_ids", "cell_count", "batch_size", "sample_scope",
+            "source", "names", "thresholds", "source_ids", "cell_count",
+            "batch_size", "sample_scope",
         )
     })
     info = {"elapsed_seconds": monotonic() - started, "rows_decoded": rows,
@@ -274,7 +315,8 @@ def _run_day(day: date, files: dict[str, tuple[Path, ...]]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_size,
+def _scan_day(day, *, source: CellwiseSource, names, thresholds, source_ids,
+              cell_count, batch_size,
               sample_scope: SampleScope = "all-implementations"):
     size = cell_count * 24
     class_dtype = np.min_scalar_type(len(thresholds))
@@ -283,44 +325,43 @@ def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_si
     joint = np.ones(size, dtype=bool)
     reference_seen = np.zeros(size, dtype=bool)
     reference = np.zeros((3, size), dtype=np.uint32)
-    scopes: dict[tuple[str, str], int] = {}
+    scopes: dict[str, int] = {}
     rows = 0
     for index, name in enumerate(names):
         seen = np.zeros(size, dtype=bool)
-        for path in files[name]:
-            scope_key = (str(path.parents[3]), path.parents[1].name)
-            scope = scopes.setdefault(scope_key, len(scopes) + 1)
-            reader = pq.ParquetFile(path)
-            validate_result_schema(reader.schema_arrow)
-            for batch in reader.iter_batches(columns=_COLUMNS, batch_size=batch_size, use_threads=False):
-                cells, hours, cycles, ordinals = _identity_batch(
-                    batch, source_cell_ids=source_ids, current_date=day,
-                )
-                flat = cells * 24 + hours
-                if len(np.unique(flat)) != len(flat) or seen[flat].any():
-                    raise ValueError(f"Duplicate cell/hour identity for {name} on {day}")
-                seen[flat] = True
-                known = reference_seen[flat]
-                if (np.any(reference[0, flat[known]] != scope)
-                    or np.any(reference[1, flat[known]] != cycles[known])
-                    or np.any(reference[2, flat[known]] != ordinals[known])):
-                    raise ValueError(f"Conflicting result provenance for {name} on {day}")
-                fresh = flat[~known]
-                reference[0, fresh] = scope
-                reference[1, fresh] = cycles[~known]
-                reference[2, fresh] = ordinals[~known]
-                reference_seen[flat] = True
-                values = batch.column("wbgt_c")
-                valid = pc.fill_null(pc.and_(
-                    pc.equal(batch.column("wbgt_status"), "ok"), pc.is_finite(values),
-                ), False).to_numpy(zero_copy_only=False)
-                joint[flat] &= valid
-                if validity is not None:
-                    validity[index, flat] = valid
-                classes[index, flat[valid]] = np.searchsorted(
-                    thresholds, values.to_numpy(zero_copy_only=False)[valid], side="right",
-                ).astype(class_dtype)
-                rows += batch.num_rows
+        for item in iter_source_batches(
+            source, day, name, _COLUMNS, batch_size=batch_size
+        ):
+            batch = item.batch
+            scope = scopes.setdefault(item.run_id, len(scopes) + 1)
+            cells, hours, cycles, ordinals = identity_batch(
+                batch, source_cell_ids=source_ids, current_date=day,
+            )
+            flat = cells * 24 + hours
+            if len(np.unique(flat)) != len(flat) or seen[flat].any():
+                raise ValueError(f"Duplicate cell/hour identity for {name} on {day}")
+            seen[flat] = True
+            known = reference_seen[flat]
+            if (np.any(reference[0, flat[known]] != scope)
+                or np.any(reference[1, flat[known]] != cycles[known])
+                or np.any(reference[2, flat[known]] != ordinals[known])):
+                raise ValueError(f"Conflicting result provenance for {name} on {day}")
+            fresh = flat[~known]
+            reference[0, fresh] = scope
+            reference[1, fresh] = cycles[~known]
+            reference[2, fresh] = ordinals[~known]
+            reference_seen[flat] = True
+            values = batch.column("wbgt_c")
+            valid = pc.fill_null(pc.and_(
+                pc.equal(batch.column("wbgt_status"), "ok"), pc.is_finite(values),
+            ), False).to_numpy(zero_copy_only=False)
+            joint[flat] &= valid
+            if validity is not None:
+                validity[index, flat] = valid
+            classes[index, flat[valid]] = np.searchsorted(
+                thresholds, values.to_numpy(zero_copy_only=False)[valid], side="right",
+            ).astype(class_dtype)
+            rows += batch.num_rows
         joint &= seen
     pairs = tuple(combinations(range(len(names)), 2))
     stride = 3 if sample_scope == "pairwise" else 2
@@ -344,7 +385,7 @@ def _scan_day(day, files, *, names, thresholds, source_ids, cell_count, batch_si
 
 
 def _pair_counts(counts: np.ndarray, sample_scope: SampleScope):
-    """Keep the legacy common-support checkpoint layout; pairwise adds denominators."""
+    """Decode the common prefix and scope-dependent pair-count stride."""
     stride = 3 if sample_scope == "pairwise" else 2
     for index in range(2, len(counts), stride):
         if sample_scope == "pairwise":
@@ -386,7 +427,9 @@ def _read_checkpoint(path, signature, day, shape, sample_scope="all-implementati
         return None
 
 
-def _reduce_day(work, day, signature, total, provenance, sample_scope):
+def _reduce_day(
+    work, day, signature, total, provenance, sample_scope, progress_label
+):
     checkpoint = _read_checkpoint(
         work / f"{day.isoformat()}.npz", signature, day, total.shape, sample_scope,
     )
@@ -395,7 +438,7 @@ def _reduce_day(work, day, signature, total, provenance, sample_scope):
     counts, info = checkpoint
     total += counts
     provenance[day.isoformat()] = info
-    print(f"ISO 7243 {day}: joint={int(counts[0].sum()):,}, "
+    print(f"{progress_label} {day}: joint={int(counts[0].sum()):,}, "
           f"non-consensus={int(counts[1].sum()):,}, "
           f"scan={info['elapsed_seconds']:.1f}s, RSS={info['peak_rss_mib']:.0f} MiB", flush=True)
 
@@ -467,7 +510,7 @@ def _sha256(path: Path) -> str:
 
 
 def load_hourly_metadata(root: Path) -> dict[str, object]:
-    """Reject legacy, incomplete, or modified products before reuse/plotting."""
+    """Reject incomplete, incompatible, or modified products before reuse."""
     path = root / "metadata.json"
     if not path.is_file():
         raise ValueError(f"Missing completion metadata: {path}")
@@ -475,10 +518,10 @@ def load_hourly_metadata(root: Path) -> dict[str, object]:
     expected = dict(schema_version=ISO7243_SCHEMA_VERSION, analysis=ANALYSIS,
                     complete=True, observation_basis="hourly",
                     classification_quantity="wbgt")
-    sample_scope = metadata.get("sample_scope", "all-implementations")
+    sample_scope = metadata.get("sample_scope")
     expected_support = PAIRWISE_SUPPORT_SCOPE if sample_scope == "pairwise" else SUPPORT_SCOPE
     if (sample_scope not in SAMPLE_SCOPES or metadata.get("support_scope") != expected_support
-        or metadata.get("non_consensus_support_scope", SUPPORT_SCOPE) != SUPPORT_SCOPE):
+        or metadata.get("non_consensus_support_scope") != SUPPORT_SCOPE):
         raise ValueError("Invalid hourly WBGT sample scope")
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise ValueError("Input is not a completed hourly WBGT-only ISO 7243 product")

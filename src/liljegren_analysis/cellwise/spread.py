@@ -18,23 +18,20 @@ from ..io.artifacts import atomic_csv as _atomic_csv
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 from ..io.artifacts import git_commit as _git_commit
-from ..results import RESULT_QUANTITIES, RESULT_QUANTITY_SPECS, ResultQuantity
+from ..results import RESULT_QUANTITIES, ResultQuantity
+from ._spread_plots import (
+    PERCENTILES,
+    SPREAD_MAP_COLOR_LIMITS_C,
+    write_figures,
+)
 from .paths import (
     DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
     DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
 )
 from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
-from .projection import configure_equal_earth_axis, equal_earth_coordinates
+from .projection import country_boundary_from_metadata
 
-PERCENTILES = ("p50", "p90", "p95", "p99")
-SPREAD_METRICS = (
-    "spread_p50_c",
-    "spread_p90_c",
-    "spread_p95_c",
-    "spread_p99_c",
-)
 ANALYSIS_SCHEMA_VERSION = 4
-SPREAD_MAP_COLOR_LIMITS_C = (0.0, 8.0)
 Weighting = Literal["none", "geometry", "population"]
 
 
@@ -123,7 +120,31 @@ def analyze_cellwise_quantile_spread(
     target_root.mkdir(parents=True, exist_ok=True)
     figure_directory = target_root / "figures"
     figure_directory.mkdir(exist_ok=True)
-    _write_figures(summary, cellwise, figure_directory, quantity, weighting)
+    country_selection = source_metadata.get("country_selection")
+    region_label = (
+        str(country_selection.get("country_name"))
+        if source_metadata.get("input_source") == "country-parquet"
+        and isinstance(country_selection, dict)
+        else None
+    )
+    country_metadata = {
+        key: source_metadata[key]
+        for key in (
+            "input_source",
+            "country_cache",
+            "country_manifest_fingerprint",
+            "country_selection",
+        )
+        if key in source_metadata
+    }
+    write_figures(
+        summary,
+        cellwise,
+        figure_directory,
+        weighting,
+        region_label=region_label,
+        country_boundary=country_boundary_from_metadata(source_metadata),
+    )
     cellwise_path = target_root / "cellwise_quantile_spread.parquet"
     summary_path = target_root / "global_quantile_spread_summary.parquet"
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
@@ -175,6 +196,7 @@ def analyze_cellwise_quantile_spread(
             "primary_map_metric": _primary_map_metric(summary),
             "spread_map_color_limits_c": list(SPREAD_MAP_COLOR_LIMITS_C),
             "git_commit": _git_commit(),
+            **(country_metadata if region_label is not None else {}),
         },
         metadata_path,
     )
@@ -482,13 +504,10 @@ def _extrema_frequency(
     return pa.Table.from_pylist(rows)
 
 
-def _extrema_fractions(
-    extrema: pa.Table, implementations: tuple[str, ...]
-) -> pa.Table:
+def _extrema_fractions(extrema: pa.Table, implementations: tuple[str, ...]) -> pa.Table:
     """Pivot the existing extrema shares into fraction-valued percentile columns."""
     lookup = {
-        (row["implementation"], row["percentile"]): row
-        for row in extrema.to_pylist()
+        (row["implementation"], row["percentile"]): row for row in extrema.to_pylist()
     }
     return pa.Table.from_pylist(
         [
@@ -513,94 +532,6 @@ def _primary_map_metric(summary: pa.Table) -> str:
     p95 = summary["weighted_p95_c"][metrics.index("spread_p95_c")].as_py()
     p99 = summary["weighted_p95_c"][metrics.index("spread_p99_c")].as_py()
     return "spread_p99_c" if p99 >= p95 else "spread_p95_c"
-
-
-def _write_figures(
-    summary: pa.Table,
-    cellwise: pa.Table,
-    directory: Path,
-    quantity: ResultQuantity,
-    weighting: Weighting,
-) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    metric_names = summary["metric"].to_pylist()
-    percentiles = list(PERCENTILES)
-    rows = [metric_names.index(f"spread_{p}_c") for p in percentiles]
-    x = np.asarray([50, 90, 95, 99])
-    figure, axis = plt.subplots(figsize=(6.4, 4.0), layout="constrained")
-    weight_label = {
-        "none": "Unweighted",
-        "geometry": "Geometric-weighted",
-        "population": "Population-weighted",
-    }[weighting]
-    for column, label in (
-        ("weighted_median_c", f"{weight_label} median"),
-        ("weighted_mean_c", f"{weight_label} mean"),
-        ("weighted_p95_c", f"{weight_label} P95"),
-    ):
-        axis.plot(
-            x, [summary[column][row].as_py() for row in rows], marker="o", label=label
-        )
-    label = RESULT_QUANTITY_SPECS[quantity].label
-    axis.set(
-        xlabel="Percentile",
-        ylabel="Range of WBGT (°C) estimates",
-        xticks=x,
-    )
-    axis.legend()
-    for suffix in ("png", "pdf"):
-        figure.savefig(directory / f"spread_by_percentile.{suffix}", dpi=200)
-    plt.close(figure)
-    _write_spread_maps(cellwise, directory)
-
-
-def _write_spread_maps(cellwise: pa.Table, directory: Path) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    map_x, map_y = equal_earth_coordinates(
-        _float_column(cellwise, "longitude"),
-        _float_column(cellwise, "latitude"),
-    )
-    for metric in SPREAD_METRICS:
-        figure, axis = plt.subplots(figsize=(10, 4.8), layout="constrained")
-        values = _float_column(cellwise, metric)
-        image = axis.scatter(
-            map_x,
-            map_y,
-            c=values,
-            s=0.35,
-            marker="s",
-            linewidths=0,
-            cmap="magma",
-            vmin=SPREAD_MAP_COLOR_LIMITS_C[0],
-            vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
-            rasterized=True,
-        )
-        configure_equal_earth_axis(axis)
-        # axis.set_title(f"{metric.replace('_c', '').replace('_', ' ').upper()} (°C)")
-        colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
-        ticks = colorbar.get_ticks()
-        colorbar.set_ticks(
-            ticks,
-            labels=[
-                f"≥ {tick:g}"
-                if np.isclose(tick, SPREAD_MAP_COLOR_LIMITS_C[1])
-                else f"{tick:g}"
-                for tick in ticks
-            ],
-        )
-        for suffix in ("png", "pdf"):
-            figure.savefig(
-                directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220
-            )
-        plt.close(figure)
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:

@@ -107,7 +107,10 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 csv.column_names, ["implementation", "extremum", *PERCENTILES]
             )
             self.assertEqual(csv.num_rows, 2 * len(IMPLEMENTATIONS))
-            self.assertEqual(csv["p50"].to_pylist(), [1.0] + [0.0] * 10 + [1.0])
+            self.assertEqual(
+                csv["p50"].to_pylist(),
+                [1.0] + [0.0] * (2 * len(IMPLEMENTATIONS) - 2) + [1.0],
+            )
             self.assertEqual(
                 csv.to_pylist(),
                 _extrema_fractions(

@@ -14,7 +14,9 @@ dependencies = [
     "polars>=1.44.1",
     "pyarrow",
     "rasterio",
+    "rioxarray",
     "shapely>=2.1,<3",
+    "xarray",
 ]
 
 [dependency-groups]

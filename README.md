@@ -31,13 +31,13 @@ statistics are written atomically as resumable date partitions.
 ```bash
 uv run python scripts/daily_pairwise.py \
   --start-date 2025-01-01 \
-  --end-date 2025-12-31 \
-  --workers 4
+  --end-date 2025-12-31
 ```
 
 The default `all-implementations` scope uses common validity across the six
 configured implementations and all three quantities. Use `--sample-scope
-pairwise` for pair-specific support.
+pairwise` for pair-specific support. The default uses one process worker;
+Polars selects its thread-pool size automatically.
 
 Pool daily partitions into annual Parquet tables and the reference-comparison
 workbook:
@@ -66,7 +66,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
 ```
 
 It stores a canonical grid, one wide Parquet table per implementation, and
-metadata under `data/cellwise/temperature-quantiles/`. Work masks and histogram
+metadata under `data/cellwise/6-targets/temperature-quantiles/`. Work masks and histogram
 checkpoints remain resumable until all artifacts have been atomically
 published.
 
@@ -91,6 +91,15 @@ needed:
 uv run python scripts/compute_era5_population_weights.py
 ```
 
+The population pipeline reads LandScan Global 2024 through `rioxarray`, using
+Rasterio windows to stream one ERA5 latitude band at a time. Integer counts
+are summed into cells centered on ERA5 grid points, extending 0.125° in each
+direction, wrapping longitude at the dateline and clipping latitude at the
+poles. Outputs under `data/cellwise_population_weight/` contain raw population
+counts keyed by `source_cell_id` and source provenance in `metadata.json`
+(schema 3). Consumers calculate normalized weights for their analysis grid.
+Use `--force` to replace existing outputs.
+
 Generate hourly WBGT ISO 7243 classification artifacts and figures:
 
 ```bash
@@ -112,6 +121,22 @@ as a percentage of valid hours. Unsupported cells have zero counts and NaN
 rates. Weighted histograms describe cell-pair rates, in five-percentage-point
 bins, rather than weighting individual hours.
 
+The classification plotting workflow also writes
+`figures/population_affected.csv` and
+`figures/population_affected.png`. For every implementation pair and
+for all-target non-consensus, these report the LandScan population residing in
+cells where the annual rate is at least 5%, 10%, 20%, or 30% of valid hours.
+Each qualifying cell's population is counted once per comparison and threshold;
+the statistic is not a population-hour total. The CSV has one row per comparison
+and `5%`, `10%`, `20%`, and `30%` columns. Each value combines an affected
+population estimate with the percentage of the complete configured population
+dataset in parentheses. The unitless estimate is in billions for global products
+and millions for country products. Values use two significant figures. The
+grouped-bar figure displays that percentage of total population.
+The workflow additionally writes
+`figures/non_consensus_population_affected.png`, a line chart of total
+population percentage against the four annual non-consensus rate thresholds.
+
 Use `--sample-scope pairwise` (Python: `sample_scope="pairwise"`) to require valid
 WBGT only in A and B for each pair. Each pair then has its own `n_compared`;
 missing or invalid WBGT in another target does not exclude that comparison.
@@ -121,14 +146,14 @@ it does not pool counts from different pair denominators. Plot readers detect
 the scope from metadata and support both modes.
 
 Select a separate `--output-root` for pairwise results, for example
-`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2-pairwise/`,
+`data/cellwise/6-targets/iso7243-classification/2025-hourly-wbgt-v2-pairwise/`,
 and pass that directory as `--input-root` to the plotting scripts. Switching
 scope in an existing output root is rejected unless `--force` is used.
-Checkpoints cannot be shared between scopes. Existing all-implementation v2
-products and checkpoints remain reusable with the default setting.
+Checkpoints cannot be shared between scopes. Custom target sets must use
+separate output roots from the default six-target products.
 
 Outputs are under
-`data/cellwise/iso7243-classification/6-targets/2025-hourly-wbgt-v2/`.
+`data/cellwise/6-targets/iso7243-classification/2025-hourly-wbgt-v2/`.
 The previous quantile-based output is preserved and rejected by hourly plot
 readers. `analyze_cellwise_iso7243_non_consensus.py` accepts the same arguments
 and computes/reuses the same shared product; it is unnecessary to scan twice.
@@ -165,6 +190,77 @@ uv run python scripts/analyze_era5_country_classification.py \
   --start-date 2025-01-01 --end-date 2025-12-31 \
   --thresholds-c 21 25 28 31
 ```
+
+Country extraction also accepts an explicit `WEST SOUTH EAST NORTH` rectangle
+that clips the selected country polygon.
+For the contiguous United States, excluding Alaska, Hawaii, and other
+territories, build only the observation cache with:
+
+```bash
+uv run python scripts/extract_country.py USA \
+  --bounds -124.848974 24.396308 -66.885444 49.384358
+```
+
+This writes `data/country/usa/observations.parquet`. The USA Natural Earth
+polygon is intersected with the bounds, removing Alaska, Hawaii, territories,
+and neighbouring Canadian or Mexican cells. The selected bounds are persisted
+in `manifest.json`.
+
+Country caches can feed the same cellwise pipelines as raw HSB results. Use the
+same six default implementations and keep each country in a separate output
+tree:
+
+```bash
+# CONUS OSHA workload limits: very heavy 25 C, heavy 26 C, moderate 28 C, light 30 C
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/usa/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 25 26 28 30 \
+  --output-root data/country/usa/cellwise/6-targets/iso7243/2025
+
+# JPN MoE: <21 C, [21, 25) C, [25, 28) C, [28, 31) C, >=31 C
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/jpn/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 21 25 28 31 \
+  --output-root data/country/jpn/cellwise/6-targets/iso7243/2025
+
+# Thailand workload limits: heavy 30 C, moderate 32 C, light 34 C
+uv run python scripts/extract_country.py THA
+uv run python scripts/analyze_cellwise_iso7243_classification.py \
+  --country-cache data/country/tha/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --thresholds-c 30 32 34 \
+  --output-root data/cellwise/tha
+uv run python scripts/plot_cellwise_iso7243_classification.py \
+  --input-root data/cellwise/tha
+uv run python scripts/plot_cellwise_iso7243_non_consensus.py \
+  --input-root data/cellwise/tha
+
+uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
+  --country-cache data/country/usa/observations.parquet \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --output-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025
+uv run python scripts/analyze_cellwise_quantile_spread.py \
+  --input-root data/country/usa/cellwise/6-targets/temperature-quantiles/2025 \
+  --output-root data/country/usa/cellwise/6-targets/quantile-spread/2025
+```
+
+The non-consensus and plotting scripts accept these country cellwise roots
+without a separate country implementation. Country population percentages use
+the population within the cache grid; global products retain the global
+population denominator. Country maps use Mercator, are fitted to the cache
+extent, and overlay the pinned Natural Earth country boundary. Global maps
+retain Equal Earth.
+
+ERA5-country and NASA POWER classification default to the same six targets as
+the ISO 7243 cellwise analysis. Repeat `--implementation` to replace that set.
+Alongside pairwise change and transition CSVs, both workflows write
+`non_consensus_summary.csv` and `monthly_non_consensus_summary.csv` on complete
+all-target WBGT support. NASA POWER also writes location and, when applicable,
+country non-consensus summaries.
+The ERA5-country classifier streams the cache in bounded-memory daily slices;
+row-level classified and paired DataFrames are therefore not materialized.
 
 NASA POWER classification uses
 `scripts/analyze_nasa_power_classification.py` with an HSB run root and explicit

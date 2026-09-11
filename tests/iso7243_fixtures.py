@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 from liljegren_analysis.cellwise.joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS
 
 NAMES = DEFAULT_JOINT_IMPLEMENTATIONS
+PAIR_COUNT = len(NAMES) * (len(NAMES) - 1) // 2
 CELLS = (
     "era5-global-n000000-e0000000",
     "era5-global-n002500-e0000000",
@@ -69,7 +70,7 @@ def write_days(root, count, **kwargs):
 
 def reference_counts(root, days, thresholds=(25.0, 30.0)):
     """Deliberately simple keyed Python reference, independent of dense arrays."""
-    result = np.zeros((32, len(CELLS)), dtype=np.uint64)
+    result = np.zeros((2 + 2 * PAIR_COUNT, len(CELLS)), dtype=np.uint64)
     for day in days:
         by_name = {}
         for name in NAMES:
@@ -96,7 +97,7 @@ def reference_counts(root, days, thresholds=(25.0, 30.0)):
 
 def reference_pairwise_counts(root, days, thresholds=(25.0, 30.0)):
     """Independent pair intersections; each result contains compared/higher/lower."""
-    result = np.zeros((15, 3, len(CELLS)), dtype=np.uint64)
+    result = np.zeros((PAIR_COUNT, 3, len(CELLS)), dtype=np.uint64)
     for day in days:
         records = []
         for name in NAMES:

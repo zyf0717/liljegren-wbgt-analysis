@@ -22,7 +22,9 @@ def parse_args() -> argparse.Namespace:
         "--input-root", type=Path, default=REPOSITORY / DEFAULT_PAIRWISE_OUTPUT_ROOT
     )
     parser.add_argument(
-        "--output-root", type=Path, default=REPOSITORY / "data/pairwise/yearly/2025"
+        "--output-root",
+        type=Path,
+        default=REPOSITORY / "data/pairwise/yearly/6-targets/2025",
     )
     parser.add_argument(
         "--start-date", type=date.fromisoformat, default=date(2025, 1, 1)
@@ -34,7 +36,18 @@ def parse_args() -> argparse.Namespace:
         "--sample-scope", choices=SAMPLE_SCOPES, default="all-implementations"
     )
     parser.add_argument("--reference", default=REFERENCE_IMPLEMENTATION)
-    parser.add_argument("--implementation", action="append", dest="implementations")
+    parser.add_argument(
+        "--implementation",
+        action="append",
+        dest="implementations",
+        help="target implementation; repeat to replace the default set",
+    )
+    parser.add_argument(
+        "--export-implementation",
+        action="append",
+        dest="export_implementations",
+        help="target to include in the reference workbook; repeat as needed",
+    )
     return parser.parse_args()
 
 
@@ -46,9 +59,12 @@ def main() -> None:
         end_date=arguments.end_date,
         output_root=arguments.output_root,
         sample_scope=arguments.sample_scope,
+        implementations=arguments.implementations,
         reference_implementation=arguments.reference,
         export_implementations=(
-            tuple(arguments.implementations) if arguments.implementations else None
+            tuple(arguments.export_implementations)
+            if arguments.export_implementations
+            else None
         ),
     )
     print(outputs.pairwise)
