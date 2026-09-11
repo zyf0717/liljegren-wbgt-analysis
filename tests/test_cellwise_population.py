@@ -1,17 +1,34 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pyarrow.parquet as pq
 import rasterio
+import xarray as xr
 from affine import Affine
+from rasterio.windows import Window
 
 from liljegren_analysis.cellwise import population
+
+
+def latitude_band(values: np.ndarray) -> xr.DataArray:
+    band = xr.DataArray(
+        values,
+        dims=("y", "x"),
+        coords={
+            "x": -180 + (np.arange(values.shape[1]) + 0.5) / 120,
+            "y": 90 - (np.arange(values.shape[0]) + 0.5) / 120,
+        },
+    )
+    band.rio.write_crs(4326, inplace=True)
+    band.rio.write_transform(Affine(1 / 120, 0, -180, 0, -1 / 120, 90), inplace=True)
+    band.rio.write_nodata(population.LANDSCAN_NODATA, inplace=True)
+    return band
 
 
 class CellwisePopulationTests(unittest.TestCase):
@@ -19,7 +36,7 @@ class CellwisePopulationTests(unittest.TestCase):
         values = np.ones((30, 60), dtype=np.int32)
         values[0, 0] = population.LANDSCAN_NODATA
 
-        totals = population._sum_latitude_band(values)
+        totals = population._sum_latitude_band(latitude_band(values))
 
         self.assertEqual(totals.tolist(), [899, 900])
 
@@ -39,48 +56,56 @@ class CellwisePopulationTests(unittest.TestCase):
         expected[721] = 256
         expected[1439] = 512
 
-        np.testing.assert_array_equal(population._sum_latitude_band(values), expected)
+        np.testing.assert_array_equal(
+            population._sum_latitude_band(latitude_band(values)), expected
+        )
 
     def test_band_matches_geographic_pixel_center_assignment(self) -> None:
         rng = np.random.default_rng(7243)
         values = rng.integers(0, 100_000, size=(30, 43_200), dtype=np.int32)
         values[::3, ::17] = population.LANDSCAN_NODATA
         # Derive the reference from geographic coordinates, independently of
-        # the production shift/reshape implementation.
+        # the production coarsening implementation.
         longitudes = -180.0 + (np.arange(values.shape[1]) + 0.5) / 120.0
         indices = np.floor((longitudes + 180.0 + 0.125) / 0.25).astype(int) % 1440
         valid = np.where(values == population.LANDSCAN_NODATA, 0, values)
         expected = np.zeros(1440, dtype=np.int64)
         np.add.at(expected, indices, valid.sum(axis=0, dtype=np.int64))
 
-        actual = population._sum_latitude_band(values)
+        actual = population._sum_latitude_band(latitude_band(values))
         np.testing.assert_array_equal(actual, expected)
         self.assertEqual(int(actual.sum()), int(valid.sum(dtype=np.int64)))
 
     def test_band_accumulates_in_int64_and_rejects_negative_population(self) -> None:
         values = np.full((30, 60), 10_000_000, dtype=np.int32)
         np.testing.assert_array_equal(
-            population._sum_latitude_band(values), [9_000_000_000, 9_000_000_000]
+            population._sum_latitude_band(latitude_band(values)),
+            [9_000_000_000, 9_000_000_000],
         )
         values[0, -1] = -1
         with self.assertRaisesRegex(ValueError, "negative population"):
-            population._sum_latitude_band(values)
+            population._sum_latitude_band(latitude_band(values))
 
-    def test_polar_and_regular_row_bounds_are_exact(self) -> None:
-        self.assertEqual(population._landscan_row_bounds(900_000), (0, 15))
-        self.assertEqual(population._landscan_row_bounds(897_500), (15, 45))
-        self.assertEqual(population._landscan_row_bounds(0), (10_785, 10_815))
-        self.assertEqual(population._landscan_row_bounds(-900_000), (21_585, 21_600))
-
-    def test_latitude_bands_partition_the_raster(self) -> None:
-        bounds = [population._landscan_row_bounds(lat)
-                  for lat in range(900_000, -900_001, -2500)]
-        self.assertEqual(bounds[0][0], 0)
-        self.assertEqual(bounds[-1][1], 21_600)
-        self.assertTrue(all(left[1] == right[0]
-                            for left, right in zip(bounds, bounds[1:])))
-        self.assertEqual([end - start for start, end in bounds],
-                         [15] + [30] * 719 + [15])
+    def test_raster_validation_rejects_invalid_grids_and_counts(self) -> None:
+        profile = dict(
+            driver="GTiff", width=43_200, height=21_600, count=1, dtype="int32",
+            crs="EPSG:4326", nodata=population.LANDSCAN_NODATA,
+            transform=Affine(1 / 120, 0, -180, 0, -1 / 120, 90), sparse_ok=True,
+        )
+        for changes, message in [
+            ({"count": 2}, "one band"),
+            ({"width": 43_199}, "global grid"),
+            ({"crs": None}, "EPSG:4326"),
+            ({"crs": "EPSG:3857"}, "EPSG:4326"),
+            ({"transform": Affine(1 / 120, 0, -179.875, 0, -1 / 120, 90)}, "transform"),
+            ({"transform": Affine(1 / 120, 1e-8, -180, 0, -1 / 120, 90)}, "transform"),
+            ({"nodata": -9999}, "nodata"),
+            ({"dtype": "float64"}, "int32"),
+        ]:
+            with self.subTest(changes=changes), rasterio.MemoryFile() as memory:
+                with memory.open(**(profile | changes)) as source:
+                    with self.assertRaisesRegex(ValueError, message):
+                        population._validate_landscan_raster(source)
 
     def test_source_cell_ids_follow_era5_convention(self) -> None:
         self.assertEqual(
@@ -99,51 +124,63 @@ class CellwisePopulationTests(unittest.TestCase):
                 raster,
                 "w",
                 driver="GTiff",
-                width=60,
-                height=30,
+                width=43_200,
+                height=21_600,
                 count=1,
                 dtype="int32",
                 nodata=population.LANDSCAN_NODATA,
                 crs="EPSG:4326",
                 transform=Affine(1 / 120, 0.0, -180.0, 0.0, -1 / 120, 90.0),
+                tiled=True,
+                compress="deflate",
+                sparse_ok=True,
             ) as destination:
-                destination.write(np.ones((1, 30, 60), dtype=np.int32))
+                # Every latitude contributes a distinct count. Both dateline
+                # halves and Greenwich exercise ID/coordinate alignment too.
+                counts = np.arange(1, 21_601, dtype=np.int32)
+                for column in (0, 43_199, 21_600):
+                    destination.write(
+                        counts[:, None], 1, window=Window(column, 0, 1, len(counts))
+                    )
 
-            with (
-                patch.object(population, "_validate_landscan_raster"),
-                patch.object(
-                    population,
-                    "_aggregate_population",
-                    return_value=np.asarray([3, 1], dtype=np.int64),
-                ),
-                patch.object(
-                    population,
-                    "_era5_coordinates",
-                    return_value=(
-                        np.asarray([0.0, 0.0]),
-                        np.asarray([0.0, 0.25]),
-                        [
-                            "era5-global-n000000-e0000000",
-                            "era5-global-n000000-e0002500",
-                        ],
-                    ),
-                ),
-            ):
-                outputs = population.compute_era5_population_weights(
-                    raster, output_root=root / "output"
-                )
-
-            table = pq.read_table(outputs.population)
-            self.assertEqual(table["population"].to_pylist(), [3, 1])
-            self.assertEqual(table["population_weight"].to_pylist(), [0.75, 0.25])
-            metadata = json.loads(outputs.metadata.read_text())
-            self.assertEqual(metadata["schema_version"], 2)
-            self.assertEqual(
-                metadata["population_cell_bounds"],
-                "grid-point +/-0.125 degrees; longitude wraps, latitude clips",
+            outputs = population.compute_era5_population_weights(
+                raster, output_root=root / "output"
             )
-            self.assertEqual(metadata["population_total"], 4)
-            self.assertEqual(metadata["era5_cell_count"], 2)
+            table = pq.read_table(outputs.population)
+            self.assertEqual(
+                table.column_names, ["source_cell_id", "latitude", "longitude", "population"]
+            )
+            actual = table["population"].to_numpy().reshape(721, 1440)
+            # Independent geographic assignment covers all row boundaries,
+            # including 15-pixel polar rows and 30-pixel regular rows.
+            pixel_latitudes = 90 - (np.arange(21_600) + 0.5) / 120
+            row_indices = np.floor((90 - pixel_latitudes + 0.125) / 0.25).astype(int)
+            totals = np.zeros(721, dtype=np.int64)
+            np.add.at(totals, row_indices, counts)
+            expected = np.zeros((721, 1440), dtype=np.int64)
+            expected[:, 0] = 2 * totals
+            expected[:, 720] = totals
+            np.testing.assert_array_equal(actual, expected)
+            self.assertEqual(int(actual.sum()), 3 * int(counts.sum(dtype=np.int64)))
+            for index, cell_id, latitude, longitude in [
+                (0, "era5-global-n900000-w1800000", 90.0, -180.0),
+                (360 * 1440 + 720, "era5-global-n000000-e0000000", 0.0, 0.0),
+                (720 * 1440, "era5-global-s900000-w1800000", -90.0, -180.0),
+            ]:
+                self.assertEqual(table["source_cell_id"][index].as_py(), cell_id)
+                self.assertEqual(table["latitude"][index].as_py(), latitude)
+                self.assertEqual(table["longitude"][index].as_py(), longitude)
+            metadata = json.loads(outputs.metadata.read_text())
+            self.assertEqual(metadata["schema_version"], 3)
+            self.assertNotIn("population_weight_definition", metadata)
+            self.assertEqual(metadata["population_total"], int(expected.sum()))
+            self.assertEqual(metadata["era5_cell_count"], 721 * 1440)
+            with raster.open("rb") as stream:
+                self.assertEqual(
+                    metadata["source_sha256"], hashlib.file_digest(stream, "sha256").hexdigest()
+                )
+            with self.assertRaises(FileExistsError):
+                population.compute_era5_population_weights(raster, output_root=root / "output")
 
 
 if __name__ == "__main__":

@@ -91,11 +91,14 @@ needed:
 uv run python scripts/compute_era5_population_weights.py
 ```
 
-Population weights use cells centered on ERA5 grid points, extending 0.125°
-in each direction, wrapping longitude at the dateline and clipping latitude
-at the poles. Population metadata schema v2 corrects a half-cell longitude
-offset in v1. Rebuild v1 weights with `--force`, then rerun classification
-plotting and any spread analyses using `--weighting population`.
+The population pipeline reads LandScan Global 2024 through `rioxarray`, using
+Rasterio windows to stream one ERA5 latitude band at a time. Integer counts
+are summed into cells centered on ERA5 grid points, extending 0.125° in each
+direction, wrapping longitude at the dateline and clipping latitude at the
+poles. Outputs under `data/cellwise_population_weight/` contain raw population
+counts keyed by `source_cell_id` and source provenance in `metadata.json`
+(schema 3). Consumers calculate normalized weights for their analysis grid.
+Use `--force` to replace existing outputs.
 
 Generate hourly WBGT ISO 7243 classification artifacts and figures:
 

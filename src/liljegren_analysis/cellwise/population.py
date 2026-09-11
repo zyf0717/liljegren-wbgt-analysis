@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import rasterio
-from rasterio.windows import Window
+import rioxarray
+import xarray as xr
+from rasterio.transform import from_origin
+from rasterio.windows import from_bounds
 
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 
 ERA5_SPACING_DEGREES = 0.25
 LANDSCAN_RESOLUTION_DEGREES = 1.0 / 120.0
-LANDSCAN_PIXELS_PER_ERA5_CELL = 30
 LANDSCAN_NODATA = -2_147_483_647
-POPULATION_SCHEMA_VERSION = 2
+ERA5_LATITUDES = np.arange(90.0, -90.0 - ERA5_SPACING_DEGREES, -ERA5_SPACING_DEGREES)
+ERA5_LONGITUDES = np.arange(-180.0, 180.0, ERA5_SPACING_DEGREES)
 DEFAULT_LANDSCAN_PATH = Path(
     "data/population/landscan-global-2024/landscan-global-2024.tif"
 )
@@ -40,7 +42,7 @@ def compute_era5_population_weights(
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     force: bool = False,
 ) -> PopulationWeightOutputs:
-    """Write global ERA5 population totals and normalized LandScan weights.
+    """Write global ERA5 population totals from aligned LandScan pixels.
 
     The 30-arc-second LandScan grid aligns exactly with 0.25-degree ERA5 cell
     boundaries at +/-0.125 degrees from each grid point. Longitude wraps at
@@ -59,31 +61,37 @@ def compute_era5_population_weights(
             f"Population output already exists at {root}; pass force=True to replace it"
         )
 
-    with rasterio.open(raster_path) as source:
-        _validate_landscan_raster(source)
-        populations = _aggregate_population(source)
+    with rasterio.open(raster_path) as raster:
+        _validate_landscan_raster(raster)
+        with rioxarray.open_rasterio(raster, cache=False) as source:
+            populations = _aggregate_population(source)
 
     total_population = int(populations.sum(dtype=np.int64))
     if total_population <= 0:
         raise ValueError("LandScan raster has no positive valid population")
-    latitudes, longitudes, source_cell_ids = _era5_coordinates()
-    weights = populations.astype(np.float64) / total_population
+    latitudes = np.repeat(ERA5_LATITUDES, len(ERA5_LONGITUDES))
+    longitudes = np.tile(ERA5_LONGITUDES, len(ERA5_LATITUDES))
+    source_cell_ids = [
+        _source_cell_id(round(latitude * 10_000), round(longitude * 10_000))
+        for latitude, longitude in zip(latitudes, longitudes, strict=True)
+    ]
     table = pa.table(
         {
             "source_cell_id": pa.array(source_cell_ids, type=pa.string()),
             "latitude": pa.array(latitudes, type=pa.float64()),
             "longitude": pa.array(longitudes, type=pa.float64()),
             "population": pa.array(populations, type=pa.int64()),
-            "population_weight": pa.array(weights, type=pa.float64()),
         }
     )
+    with raster_path.open("rb") as stream:
+        source_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
     _atomic_parquet(table, population_path)
     _atomic_json(
         {
-            "schema_version": POPULATION_SCHEMA_VERSION,
+            "schema_version": 3,
             "source": "LandScan Global 2024",
             "source_raster": str(raster_path),
-            "source_sha256": _sha256(raster_path),
+            "source_sha256": source_sha256,
             "source_nodata": LANDSCAN_NODATA,
             "source_resolution_degrees": LANDSCAN_RESOLUTION_DEGREES,
             "era5_spacing_degrees": ERA5_SPACING_DEGREES,
@@ -91,12 +99,6 @@ def compute_era5_population_weights(
             "grid_definition": "global-era5-0.25-degree-v1",
             "population_cell_bounds": "grid-point +/-0.125 degrees; longitude wraps, latitude clips",
             "population_total": total_population,
-            "population_weight_definition": "population / global_population_total",
-            "polar_row_source_pixel_height": LANDSCAN_PIXELS_PER_ERA5_CELL // 2,
-            "regular_cell_source_pixels": [
-                LANDSCAN_PIXELS_PER_ERA5_CELL,
-                LANDSCAN_PIXELS_PER_ERA5_CELL,
-            ],
         },
         metadata_path,
     )
@@ -110,86 +112,53 @@ def _validate_landscan_raster(source: rasterio.io.DatasetReader) -> None:
         raise ValueError("LandScan raster must be a 43200 by 21600 global grid")
     if source.crs is None or source.crs.to_epsg() != 4326:
         raise ValueError("LandScan raster must use EPSG:4326")
-    transform = source.transform
-    expected = (
-        LANDSCAN_RESOLUTION_DEGREES,
-        0.0,
+    expected = from_origin(
         -180.0,
-        0.0,
-        -LANDSCAN_RESOLUTION_DEGREES,
         90.0,
+        LANDSCAN_RESOLUTION_DEGREES,
+        LANDSCAN_RESOLUTION_DEGREES,
     )
-    actual = (
-        transform.a,
-        transform.b,
-        transform.c,
-        transform.d,
-        transform.e,
-        transform.f,
-    )
-    if not all(
-        math.isclose(left, right, abs_tol=1e-10)
-        for left, right in zip(actual, expected)
-    ):
+    if not source.transform.almost_equals(expected, precision=1e-10):
         raise ValueError(
             "LandScan raster transform is not the expected global 30-arc-second grid"
         )
     if source.nodata != LANDSCAN_NODATA:
         raise ValueError(f"LandScan raster nodata must be {LANDSCAN_NODATA}")
+    if source.dtypes[0] != "int32":
+        raise ValueError("LandScan raster must contain int32 population counts")
 
 
-def _aggregate_population(source: rasterio.io.DatasetReader) -> np.ndarray:
-    latitude_units = range(900_000, -900_001, -2_500)
-    longitude_count = 1_440
-    populations = np.empty((len(latitude_units), longitude_count), dtype=np.int64)
-    for row_index, latitude_units_value in enumerate(latitude_units):
-        row_start, row_end = _landscan_row_bounds(latitude_units_value)
-        band = source.read(
-            1,
-            window=Window(0, row_start, source.width, row_end - row_start),
-        )
+def _aggregate_population(source: xr.DataArray) -> np.ndarray:
+    populations = np.empty((len(ERA5_LATITUDES), len(ERA5_LONGITUDES)), dtype=np.int64)
+    half_spacing = ERA5_SPACING_DEGREES / 2
+    transform = source.rio.transform()
+    for row_index, latitude in enumerate(ERA5_LATITUDES):
+        window = from_bounds(
+            -180.0,
+            max(-90.0, latitude - half_spacing),
+            180.0,
+            min(90.0, latitude + half_spacing),
+            transform,
+        ).round_offsets().round_lengths()
+        band = source.rio.isel_window(window).isel(band=0).load()
         populations[row_index] = _sum_latitude_band(band)
-    return populations.reshape(-1)
+    return populations.ravel()
 
 
-def _landscan_row_bounds(latitude_units: int) -> tuple[int, int]:
-    latitude = latitude_units / 10_000.0
-    upper = min(90.0, latitude + ERA5_SPACING_DEGREES / 2.0)
-    lower = max(-90.0, latitude - ERA5_SPACING_DEGREES / 2.0)
-    row_start = round((90.0 - upper) / LANDSCAN_RESOLUTION_DEGREES)
-    row_end = round((90.0 - lower) / LANDSCAN_RESOLUTION_DEGREES)
-    return row_start, row_end
-
-
-def _sum_latitude_band(values: np.ndarray) -> np.ndarray:
-    """Sum pixel counts into longitude cells centered on ERA5 grid points."""
-    if values.ndim != 2 or values.shape[1] % LANDSCAN_PIXELS_PER_ERA5_CELL:
-        raise ValueError("LandScan latitude band has invalid dimensions")
-    valid = values != LANDSCAN_NODATA
-    if np.any(values[valid] < 0):
+def _sum_latitude_band(band: xr.DataArray) -> np.ndarray:
+    """Sum a loaded latitude band into centered, dateline-wrapped ERA5 cells."""
+    population = band.where(band != band.rio.nodata, 0)
+    if bool((population < 0).any()):
         raise ValueError("LandScan raster contains negative population values")
-    population = np.where(valid, values, 0).astype(np.int64, copy=False)
-    # The raster begins at -180 degrees, the center of the first ERA5 cell.
-    # Its western half comes from the raster's final 15 columns. Moving those
-    # columns to the front aligns every 30-pixel block with centered bounds.
-    population = np.roll(population, LANDSCAN_PIXELS_PER_ERA5_CELL // 2, axis=1)
-    return population.reshape(
-        values.shape[0],
-        values.shape[1] // LANDSCAN_PIXELS_PER_ERA5_CELL,
-        LANDSCAN_PIXELS_PER_ERA5_CELL,
-    ).sum(axis=(0, 2), dtype=np.int64)
-
-
-def _era5_coordinates() -> tuple[np.ndarray, np.ndarray, list[str]]:
-    latitude_units = np.repeat(np.arange(900_000, -900_001, -2_500), 1_440)
-    longitude_units = np.tile(np.arange(-1_800_000, 1_800_000, 2_500), 721)
-    latitudes = latitude_units.astype(np.float64) / 10_000.0
-    longitudes = longitude_units.astype(np.float64) / 10_000.0
-    source_cell_ids = [
-        _source_cell_id(latitude, longitude)
-        for latitude, longitude in zip(latitude_units, longitude_units, strict=True)
-    ]
-    return latitudes, longitudes, source_cell_ids
+    pixels_per_cell = round(ERA5_SPACING_DEGREES / band.rio.resolution()[0])
+    # The western half of the -180-degree cell is the raster's final columns.
+    return (
+        population.sum("y", dtype=np.int64)
+        .roll(x=pixels_per_cell // 2, roll_coords=False)
+        .coarsen(x=pixels_per_cell, boundary="exact")
+        .sum()
+        .values
+    )
 
 
 def _source_cell_id(latitude_units: int, longitude_units: int) -> str:
@@ -199,11 +168,3 @@ def _source_cell_id(latitude_units: int, longitude_units: int) -> str:
         f"era5-global-{latitude_hemisphere}{abs(latitude_units):06d}-"
         f"{longitude_hemisphere}{abs(longitude_units):07d}"
     )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
