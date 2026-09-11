@@ -21,6 +21,7 @@ from liljegren_analysis.cellwise.projection import (
     mercator_coordinates,
     plot_country_boundary,
     plot_equal_earth_cells,
+    plot_major_cities,
     regional_map_figure_size,
 )
 from liljegren_analysis.country.cells import NATURAL_EARTH_VERSION
@@ -148,6 +149,62 @@ class EqualEarthProjectionTests(unittest.TestCase):
             self.assertEqual(axis.lines[1].get_color(), "0.1")
         finally:
             plt.close(figure)
+
+    def test_major_cities_are_projected_and_labelled_without_changing_extent(self) -> None:
+        cases = {
+            "JPN": (
+                ("Tokyo", 139.69171, 35.68950),
+                ("Osaka", 135.50107, 34.69379),
+                ("Fukuoka", 130.41667, 33.60000),
+            ),
+            "THA": (("Bangkok", 100.5020, 13.7573),),
+        }
+        for country_iso_a3, cities in cases.items():
+            with self.subTest(country_iso_a3=country_iso_a3):
+                figure, axis = plt.subplots()
+                configure_equal_earth_axis(
+                    axis,
+                    longitude=np.array([95.0, 145.0]),
+                    latitude=np.array([5.0, 45.0]),
+                )
+                limits = axis.get_xlim(), axis.get_ylim()
+
+                plot_major_cities(axis, country_iso_a3)
+
+                try:
+                    self.assertEqual(len(axis.collections), 1)
+                    self.assertEqual([text.get_text() for text in axis.texts], [
+                        city[0] for city in cities
+                    ])
+                    np.testing.assert_allclose(
+                        axis.collections[0].get_facecolors()[0, :3],
+                        [0.1, 0.1, 0.1],
+                    )
+                    self.assertTrue(
+                        all(text.get_fontsize() == 12.0 for text in axis.texts)
+                    )
+                    expected_x, expected_y = mercator_coordinates(
+                        np.array([city[1] for city in cities]),
+                        np.array([city[2] for city in cities]),
+                    )
+                    np.testing.assert_allclose(
+                        axis.collections[0].get_offsets(),
+                        np.column_stack((expected_x, expected_y)),
+                    )
+                    self.assertEqual((axis.get_xlim(), axis.get_ylim()), limits)
+                finally:
+                    plt.close(figure)
+
+    def test_major_cities_ignore_missing_or_unsupported_country(self) -> None:
+        for country_iso_a3 in (None, "USA"):
+            with self.subTest(country_iso_a3=country_iso_a3):
+                figure, axis = plt.subplots()
+                plot_major_cities(axis, country_iso_a3)
+                try:
+                    self.assertEqual(len(axis.collections), 0)
+                    self.assertEqual(len(axis.texts), 0)
+                finally:
+                    plt.close(figure)
 
     def test_country_boundary_is_loaded_and_clipped_from_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

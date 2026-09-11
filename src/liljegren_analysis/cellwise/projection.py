@@ -93,6 +93,16 @@ EQUAL_EARTH_Y_LIMIT = float(
     equal_earth_coordinates(np.array([0.0]), np.array([90.0]))[1][0]
 )
 ERA5_CELL_SIZE_DEGREES = 0.25
+_MAJOR_CITIES = {
+    "JPN": (
+        ("Tokyo", 139.69171, 35.68950, (-4.0, 4.0), "right"),
+        ("Osaka", 135.50107, 34.69379, (4.0, 4.0), "left"),
+        ("Fukuoka", 130.41667, 33.60000, (4.0, 4.0), "left"),
+    ),
+    "THA": (
+        ("Bangkok", 100.5020, 13.7573, (4.0, 4.0), "left"),
+    ),
+}
 
 
 def country_boundary_from_metadata(
@@ -227,6 +237,49 @@ def plot_country_boundary(axis: Any, geometry: BaseGeometry | None) -> None:
             solid_capstyle="round",
             solid_joinstyle="round",
             zorder=4,
+        )
+
+
+def plot_major_cities(axis: Any, country_iso_a3: str | None) -> None:
+    """Overlay selected city centres on a regional Mercator map."""
+
+    cities = _MAJOR_CITIES.get(country_iso_a3 or "")
+    if cities is None:
+        return
+
+    from matplotlib import patheffects
+
+    longitude = np.asarray([city[1] for city in cities], dtype=np.float64)
+    latitude = np.asarray([city[2] for city in cities], dtype=np.float64)
+    x, y = mercator_coordinates(longitude, latitude)
+    axis.scatter(
+        x,
+        y,
+        s=18.0,
+        marker="o",
+        facecolors="0.1",
+        edgecolors="0.1",
+        linewidths=0.8,
+        zorder=5,
+    )
+    for (name, _, _, offset, horizontal_alignment), city_x, city_y in zip(
+        cities, x, y, strict=True
+    ):
+        axis.annotate(
+            name,
+            (city_x, city_y),
+            xytext=offset,
+            textcoords="offset points",
+            color="0.1",
+            fontsize=12.0,
+            horizontalalignment=horizontal_alignment,
+            verticalalignment="bottom",
+            path_effects=[
+                patheffects.Stroke(linewidth=2.0, foreground="white"),
+                patheffects.Normal(),
+            ],
+            annotation_clip=True,
+            zorder=6,
         )
 
 
