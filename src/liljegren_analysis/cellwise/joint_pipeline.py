@@ -26,6 +26,7 @@ from ._joint_replay import (
     sample_cells as _sample_cells,
 )
 from ._pipeline import (
+    DEFAULT_DATE_WORKERS,
     DEFAULT_PROBABILITIES,
     date_range as _date_range,
     histogram_metadata as _histogram_metadata,
@@ -43,7 +44,6 @@ from ._source import (
 
 JOINT_CELLWISE_SCHEMA_VERSION = 2
 JOINT_SUPPORT_SCOPE = "all-implementations-all-quantities"
-DEFAULT_DATE_WORKERS = 4
 DEFAULT_REPLAY_WORKERS = 2
 DEFAULT_JOINT_IMPLEMENTATIONS = DEFAULT_ISO7243_IMPLEMENTATIONS
 

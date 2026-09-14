@@ -9,12 +9,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from liljegren_analysis.cellwise import (
+    DEFAULT_DATE_WORKERS,
     DEFAULT_JOINT_IMPLEMENTATIONS,
     DEFAULT_PROBABILITIES,
     analyze_cellwise_quantile_spread,
     compute_joint_cellwise_temperature_quantiles,
 )
 from liljegren_analysis.cellwise.joint_pipeline import _open_manifest
+from liljegren_analysis.cellwise.iso7243 import (
+    DEFAULT_DATE_WORKERS as DEFAULT_ISO7243_DATE_WORKERS,
+)
 from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 _CELLS = (
@@ -81,6 +85,10 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
 
 
 class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
+    def test_default_date_worker_count_is_shared(self) -> None:
+        self.assertEqual(DEFAULT_DATE_WORKERS, 8)
+        self.assertEqual(DEFAULT_ISO7243_DATE_WORKERS, DEFAULT_DATE_WORKERS)
+
     def test_old_replay_manifest_is_not_migrated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

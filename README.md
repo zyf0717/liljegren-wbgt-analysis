@@ -61,7 +61,7 @@ uv run python scripts/compute_joint_cellwise_temperature_quantiles.py \
   --hsb-run /path/to/hsb-run \
   --start-date 2025-01-01 \
   --end-date 2025-12-31 \
-  --date-workers 4 \
+  --date-workers 8 \
   --replay-workers 2
 ```
 
@@ -160,7 +160,7 @@ readers. `analyze_cellwise_iso7243_non_consensus.py` accepts the same arguments
 and computes/reuses the same shared product; it is unnecessary to scan twice.
 
 Use repeated `--implementation` options to override the six targets, and
-`--date-workers` / `--batch-size` to override defaults of four processes and
+`--date-workers` / `--batch-size` to override defaults of eight processes and
 250,000 rows. Each worker decodes one implementation at a time with Arrow
 threads disabled. Atomic daily checkpoints in `.work/` are retained for resume;
 configuration and input fingerprints must match. Completed compatible products
@@ -172,7 +172,7 @@ from publishing to the same directory.
 
 For the 2025 six-target run, expect approximately 111 GiB of compressed selected
 column reads. Reserve 10 GiB of disk for outputs/checkpoints and approximately
-3–4 GiB of RAM for four workers; actual elapsed time and peak RSS are recorded
+5–6 GiB of RAM for eight workers; actual elapsed time and peak RSS are recorded
 in metadata. Annual per-cell counts are uint32, aggregated using uint64. No
 individual hourly classifications or observation-pair expansion is persisted.
 Pairwise mode additionally holds approximately 48 MiB of validity masks per

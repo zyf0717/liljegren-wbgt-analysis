@@ -26,7 +26,7 @@ import pyarrow.parquet as pq
 from ..classification import validate_thresholds
 from ..comparison.config import SAMPLE_SCOPES, SampleScope
 from ..io.artifacts import atomic_json, atomic_parquet, git_commit
-from ._pipeline import date_range
+from ._pipeline import DEFAULT_DATE_WORKERS, date_range
 from .grid import CellGrid, load_grid
 from ._joint_io import identity_batch
 from .joint_pipeline import DEFAULT_JOINT_IMPLEMENTATIONS
@@ -45,7 +45,6 @@ ANALYSIS = "iso7243-hourly-wbgt-classification-v2"
 SUPPORT_SCOPE = "all-implementations-wbgt-only"
 PAIRWISE_SUPPORT_SCOPE = "pairwise-wbgt-only"
 DEFAULT_OUTPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
-DEFAULT_DATE_WORKERS = 4
 DEFAULT_BATCH_SIZE = 250_000
 _COLUMNS = ("cycle_ordinal", "row_id", "row_ordinal", "wbgt_status", "wbgt_c")
 _WORKER = {}
