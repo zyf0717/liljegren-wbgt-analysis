@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow as pa
 from shapely.geometry.base import BaseGeometry
 
+from ._pipeline import DEFAULT_PROBABILITIES
 from .projection import (
     configure_equal_earth_axis,
     plot_country_boundary,
@@ -16,7 +17,9 @@ from .projection import (
     regional_map_figure_size,
 )
 
-PERCENTILES = ("p50", "p90", "p95", "p99")
+PERCENTILES = tuple(
+    f"p{int(probability * 100):02d}" for probability in DEFAULT_PROBABILITIES
+)
 SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
 SPREAD_MAP_COLOR_LIMITS_C = (0.0, 8.0)
 Weighting = Literal["none", "geometry", "population"]
@@ -37,7 +40,7 @@ def write_figures(
 
     metric_names = summary["metric"].to_pylist()
     rows = [metric_names.index(f"spread_{percentile}_c") for percentile in PERCENTILES]
-    x = np.asarray([50, 90, 95, 99])
+    x = np.asarray(DEFAULT_PROBABILITIES) * 100
     figure, axis = plt.subplots(figsize=(6.4, 4.0), layout="constrained")
     weight_label = {
         "none": "Unweighted",
@@ -58,8 +61,7 @@ def write_figures(
         xticks=x,
     )
     axis.legend()
-    for suffix in ("png", "pdf"):
-        figure.savefig(directory / f"spread_by_percentile.{suffix}", dpi=200)
+    figure.savefig(directory / "spread_by_percentile.png", dpi=200)
     plt.close(figure)
     _write_spread_maps(
         cellwise,
@@ -119,10 +121,9 @@ def _write_spread_maps(
                 for tick in ticks
             ],
         )
-        for suffix in ("png", "pdf"):
-            figure.savefig(
-                directory / f"{metric.replace('_c', '')}_map.{suffix}", dpi=220
-            )
+        figure.savefig(
+            directory / f"{metric.replace('_c', '')}_map.png", dpi=220
+        )
         plt.close(figure)
 
 

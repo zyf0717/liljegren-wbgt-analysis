@@ -4,6 +4,7 @@ import unittest
 
 import numpy as np
 
+from liljegren_analysis.cellwise import DEFAULT_PROBABILITIES
 from liljegren_analysis.cellwise.quantiles import quantile_table
 from liljegren_analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
 from liljegren_analysis.comparison.statistics import histogram_quantile_bin_indices
@@ -24,10 +25,13 @@ class CellwiseQuantileTests(unittest.TestCase):
             underflow=np.asarray([0, 0], dtype=np.uint16),
             overflow=np.asarray([0, 0], dtype=np.uint16),
             histogram_spec=spec,
-            probabilities=(0.50, 0.90, 0.95, 0.99),
+            probabilities=DEFAULT_PROBABILITIES,
             chunk_rows=1,
         )
+        self.assertEqual(result["p01_lower_c"].to_pylist(), [20.0, None])
+        self.assertEqual(result["p25_lower_c"].to_pylist(), [20.0, None])
         self.assertEqual(result["p50_lower_c"].to_pylist(), [21.0, None])
+        self.assertEqual(result["p75_lower_c"].to_pylist(), [22.0, None])
         self.assertEqual(result["p90_lower_c"].to_pylist(), [23.0, None])
         self.assertEqual(result["p95_upper_c"].to_pylist(), [23.02, None])
         np.testing.assert_array_equal(

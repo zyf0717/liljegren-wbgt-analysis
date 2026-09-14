@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 
 from liljegren_analysis.cellwise import (
     DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_PROBABILITIES,
     analyze_cellwise_quantile_spread,
     compute_joint_cellwise_temperature_quantiles,
 )
@@ -138,7 +139,9 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 self.assertEqual(table["n_joint"].to_pylist(), [2, 1, 0])
                 self.assertEqual(table["n_expected"].to_pylist(), [48, 48, 48])
                 for quantity in ("wbgt", "tg", "tnwb"):
+                    self.assertEqual(table[f"{quantity}_p01_c"].null_count, 1)
                     self.assertEqual(table[f"{quantity}_p50_c"].null_count, 1)
+                    self.assertEqual(table[f"{quantity}_p75_c"].null_count, 1)
                     native = table[f"{quantity}_native_valid_n"].to_pylist()
                     self.assertTrue(all(a >= b for a, b in zip(native, [2, 1, 0])))
 
@@ -158,6 +161,7 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
 
             metadata = json.loads((output / "metadata.json").read_text())
             self.assertEqual(metadata["schema_version"], 2)
+            self.assertEqual(metadata["probabilities"], list(DEFAULT_PROBABILITIES))
             self.assertEqual(
                 metadata["support_scope"], "all-implementations-all-quantities"
             )

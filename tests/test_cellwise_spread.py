@@ -10,7 +10,10 @@ import pyarrow as pa
 import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
 
-from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
+from liljegren_analysis.cellwise import (
+    DEFAULT_JOINT_IMPLEMENTATIONS,
+    DEFAULT_PROBABILITIES,
+)
 from liljegren_analysis.cellwise.grid import grid_from_source_cell_ids
 from liljegren_analysis.cellwise.spread import (
     PERCENTILES,
@@ -42,7 +45,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                         "temperature_bin_min_c": -40.0,
                         "temperature_bin_max_c": 60.0,
                         "temperature_bin_width_c": 0.02,
-                        "probabilities": [0.5, 0.9, 0.95, 0.99],
+                        "probabilities": list(DEFAULT_PROBABILITIES),
                         "implementations": list(IMPLEMENTATIONS),
                         "histogram_version": 3,
                     }
@@ -53,12 +56,8 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                     "cell_id": [0, 1],
                     "n_joint": [10, 10],
                 }
-                for percentile, base in (
-                    ("p50", 25.0),
-                    ("p90", 30.0),
-                    ("p95", 32.0),
-                    ("p99", 34.0),
-                ):
+                for position, percentile in enumerate(PERCENTILES):
+                    base = 20.0 + 2 * position
                     values = np.asarray([base + index, base + index + 0.5])
                     rows[f"wbgt_{percentile}_c"] = values
                     rows[f"wbgt_{percentile}_lower_c"] = values - 0.01
@@ -70,6 +69,18 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             output = analyze_cellwise_quantile_spread(
                 root, output_root=Path(temporary) / "analysis"
             )
+
+            self.assertTrue(
+                (output.figure_directory / "spread_by_percentile.png").is_file()
+            )
+            self.assertFalse(
+                (output.figure_directory / "spread_by_percentile.pdf").exists()
+            )
+            for percentile in PERCENTILES:
+                self.assertTrue(
+                    (output.figure_directory / f"spread_{percentile}_map.png").is_file()
+                )
+            self.assertEqual(list(output.figure_directory.glob("*.pdf")), [])
 
             cellwise = pq.read_table(output.cellwise_spread)
             expected_spread = float(len(IMPLEMENTATIONS) - 1)
@@ -90,17 +101,19 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             summary = pq.read_table(output.global_summary)
             self.assertEqual(
                 summary["metric"].to_pylist(),
-                ["spread_p50_c", "spread_p90_c", "spread_p95_c", "spread_p99_c"],
+                [f"spread_{percentile}_c" for percentile in PERCENTILES],
             )
             anchor = pq.read_table(output.c_anchor_differences)
-            self.assertEqual(anchor.num_rows, 4 * (len(IMPLEMENTATIONS) - 1))
+            self.assertEqual(
+                anchor.num_rows, len(PERCENTILES) * (len(IMPLEMENTATIONS) - 1)
+            )
             self.assertEqual(
                 set(anchor["anchor_implementation"].to_pylist()),
                 {REFERENCE_IMPLEMENTATION},
             )
             self.assertEqual(
                 pq.read_table(output.extrema_frequency).num_rows,
-                4 * len(IMPLEMENTATIONS),
+                len(PERCENTILES) * len(IMPLEMENTATIONS),
             )
             csv = pcsv.read_csv(output.extrema_frequency_csv)
             self.assertEqual(
@@ -157,16 +170,19 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
 
     def test_extrema_csv_fractions_preserve_weights_ties_and_percentiles(self) -> None:
         implementations = ("a", "b", "c")
-        matrices = (
-            [[1, 1, 3], [3, 2, 1]],
-            [[3, 1, 2], [1, 3, 2]],
-            [[2, 2, 2], [2, 2, 2]],
-            [[1, 2, 3], [1, 3, 2]],
-        )
+        matrices = {
+            "p50": [[1, 1, 3], [3, 2, 1]],
+            "p90": [[3, 1, 2], [1, 3, 2]],
+            "p95": [[2, 2, 2], [2, 2, 2]],
+            "p99": [[1, 2, 3], [1, 3, 2]],
+        }
+        tied = [[2, 2, 2], [2, 2, 2]]
         values = {
             name: {
-                percentile: np.asarray(matrix, dtype=float)[:, index]
-                for percentile, matrix in zip(PERCENTILES, matrices, strict=True)
+                percentile: np.asarray(matrices.get(percentile, tied), dtype=float)[
+                    :, index
+                ]
+                for percentile in PERCENTILES
             }
             for index, name in enumerate(implementations)
         }

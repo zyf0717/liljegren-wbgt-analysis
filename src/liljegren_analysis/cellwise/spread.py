@@ -19,6 +19,7 @@ from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 from ..io.artifacts import git_commit as _git_commit
 from ..results import RESULT_QUANTITIES, ResultQuantity
+from ._pipeline import DEFAULT_PROBABILITIES
 from ._spread_plots import (
     PERCENTILES,
     SPREAD_MAP_COLOR_LIMITS_C,
@@ -220,7 +221,7 @@ def _load_source_metadata(root: Path) -> dict[str, object]:
         raise ValueError("Unsupported cellwise input schema")
     if metadata.get("support_scope") != "all-implementations-all-quantities":
         raise ValueError("Unsupported cellwise support scope")
-    if metadata.get("probabilities") != [0.5, 0.9, 0.95, 0.99]:
+    if metadata.get("probabilities") != list(DEFAULT_PROBABILITIES):
         raise ValueError("Cellwise input metadata lacks the required quantiles")
     _metadata_implementations(metadata)
     for key in ("histogram_version",):
