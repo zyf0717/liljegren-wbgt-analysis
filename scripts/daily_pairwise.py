@@ -20,7 +20,7 @@ DEFAULT_RUNS = (
     / "HeatStressBench"
     / ".hsb"
     / "runs"
-    / "wbgt-comparison-20260902-150355",
+    / "wbgt-comparison-20260911-175232",
 )
 
 
