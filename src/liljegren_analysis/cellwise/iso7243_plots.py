@@ -468,7 +468,7 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             100.0 * values,
             regional=summary.region_label is not None,
             point_size=0.25,
-            cmap="magma",
+            cmap="RdYlBu",
             vmin=0.0,
             vmax=color_upper_percent,
         )
