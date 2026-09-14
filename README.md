@@ -70,6 +70,15 @@ metadata under `data/cellwise/6-targets/temperature-quantiles/`. Work masks and 
 checkpoints remain resumable until all artifacts have been atomically
 published.
 
+On the 351,848-cell global grid, eight-worker mask construction measured about
+4.6 GiB aggregate RSS. During two-worker replay, RSS rises as random histogram
+updates fault disk-backed pages into each worker: midway through the first
+implementation pair, each worker measured about 14.2 GiB RSS and the coordinator
+plus workers measured about 29 GiB aggregate RSS. Most of that replay RSS is
+file-backed and reclaimable, but reserve 35 GiB of available RAM for replay and
+finalization transients. Increasing `--replay-workers` multiplies both the
+approximately 13.8 GiB of mapped histograms per worker and storage pressure.
+
 Analyze cross-implementation spread:
 
 ```bash
