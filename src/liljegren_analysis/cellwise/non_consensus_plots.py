@@ -111,7 +111,7 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
         percent[valid],
         regional=region_label is not None,
         point_size=0.35,
-        cmap="magma",
+        cmap="cividis",
         vmin=0.0,
         vmax=upper,
     )

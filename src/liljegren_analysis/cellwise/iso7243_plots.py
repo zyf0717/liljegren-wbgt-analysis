@@ -402,7 +402,7 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         changed_percent,
         regional=summary.region_label is not None,
         point_size=0.35,
-        cmap="magma",
+        cmap="cividis",
         vmin=0.0,
         vmax=50.0,
     )
