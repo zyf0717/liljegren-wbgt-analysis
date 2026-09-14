@@ -28,11 +28,7 @@ class CellwiseQuantileTests(unittest.TestCase):
             probabilities=DEFAULT_PROBABILITIES,
             chunk_rows=1,
         )
-        self.assertEqual(result["p01_lower_c"].to_pylist(), [20.0, None])
-        self.assertEqual(result["p25_lower_c"].to_pylist(), [20.0, None])
         self.assertEqual(result["p50_lower_c"].to_pylist(), [21.0, None])
-        self.assertEqual(result["p75_lower_c"].to_pylist(), [22.0, None])
-        self.assertEqual(result["p90_lower_c"].to_pylist(), [23.0, None])
         self.assertEqual(result["p95_upper_c"].to_pylist(), [23.02, None])
         np.testing.assert_array_equal(
             histogram_quantile_bin_indices(np.zeros(3, dtype=np.uint16)),

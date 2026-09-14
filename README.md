@@ -86,9 +86,8 @@ uv run python scripts/analyze_cellwise_quantile_spread.py --quantity wbgt
 ```
 
 Each spread analysis also writes `implementation_extrema_frequency.csv`: one
-row per implementation and extremum (`min`/`max`), with `p01`, `p05`, `p10`,
-`p25`, `p50`, `p75`, `p90`, `p95`, and `p99` columns containing fractions
-(0–1). Shares use the selected
+row per implementation and extremum (`min`/`max`), with `p50` and `p95`
+columns containing fractions (0–1). Shares use the selected
 weighting (`geometry` by default; `--weighting none` counts cells equally)
 over complete-case cells. Exact ties go to the first target in implementation
 order, matching the existing Parquet extrema frequencies; each percentile

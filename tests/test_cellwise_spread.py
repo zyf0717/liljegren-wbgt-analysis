@@ -88,14 +88,14 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 cellwise["spread_p50_c"].to_pylist(), [expected_spread] * 2
             )
             self.assertEqual(
-                cellwise["spread_p90_c"].to_pylist(), [expected_spread] * 2
+                cellwise["spread_p95_c"].to_pylist(), [expected_spread] * 2
             )
             self.assertEqual(
                 cellwise["min_implementation_p95"].to_pylist(),
                 [IMPLEMENTATIONS[0]] * 2,
             )
             self.assertEqual(
-                cellwise["max_implementation_p99"].to_pylist(),
+                cellwise["max_implementation_p95"].to_pylist(),
                 [IMPLEMENTATIONS[-1]] * 2,
             )
             summary = pq.read_table(output.global_summary)
@@ -167,14 +167,13 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(
                 population_metadata["extrema_tie_policy"], "first-in-implementation-order"
             )
+            self.assertEqual(population_metadata["primary_map_metric"], "spread_p95_c")
 
     def test_extrema_csv_fractions_preserve_weights_ties_and_percentiles(self) -> None:
         implementations = ("a", "b", "c")
         matrices = {
             "p50": [[1, 1, 3], [3, 2, 1]],
-            "p90": [[3, 1, 2], [1, 3, 2]],
             "p95": [[2, 2, 2], [2, 2, 2]],
-            "p99": [[1, 2, 3], [1, 3, 2]],
         }
         tied = [[2, 2, 2], [2, 2, 2]]
         values = {
@@ -200,13 +199,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                     result["p50"].to_numpy(), [first, remaining, 0, 0, remaining, first]
                 )
                 np.testing.assert_allclose(
-                    result["p90"].to_numpy(), [remaining, first, first, remaining, 0, 0]
-                )
-                np.testing.assert_allclose(
                     result["p95"].to_numpy(), [1, 1, 0, 0, 0, 0]
-                )
-                np.testing.assert_allclose(
-                    result["p99"].to_numpy(), [1, 0, 0, remaining, 0, first]
                 )
                 for percentile in PERCENTILES:
                     fractions = result[percentile].to_numpy().reshape(3, 2)

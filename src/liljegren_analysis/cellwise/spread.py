@@ -530,9 +530,14 @@ def _extrema_fractions(extrema: pa.Table, implementations: tuple[str, ...]) -> p
 
 def _primary_map_metric(summary: pa.Table) -> str:
     metrics = summary["metric"].to_pylist()
-    p95 = summary["weighted_p95_c"][metrics.index("spread_p95_c")].as_py()
-    p99 = summary["weighted_p95_c"][metrics.index("spread_p99_c")].as_py()
-    return "spread_p99_c" if p99 >= p95 else "spread_p95_c"
+    candidates = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
+    return max(
+        candidates,
+        key=lambda metric: (
+            summary["weighted_p95_c"][metrics.index(metric)].as_py(),
+            int(metric.removeprefix("spread_p").removesuffix("_c")),
+        ),
+    )
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:

@@ -13,7 +13,7 @@ from ..results import HSBRunResults
 from .grid import CellGrid, grid_from_source_cell_ids
 
 DEFAULT_DATE_WORKERS = 8
-DEFAULT_PROBABILITIES = (0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99)
+DEFAULT_PROBABILITIES = (0.50, 0.95)
 
 
 def hsb_run_paths(values: str | Path | Sequence[str | Path]) -> tuple[Path, ...]:
