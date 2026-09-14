@@ -100,7 +100,7 @@ def _write_spread_maps(
             values,
             regional=region_label is not None,
             point_size=0.35,
-            cmap="magma",
+            cmap="cividis",
             vmin=SPREAD_MAP_COLOR_LIMITS_C[0],
             vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
         )
