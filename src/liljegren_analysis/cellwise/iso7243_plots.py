@@ -12,9 +12,11 @@ from shapely.geometry.base import BaseGeometry
 
 from ..comparison.area_weighted import _ERA5_LATITUDE_WEIGHTS
 from ..io.artifacts import atomic_csv
+from ..io.formatting import format_percentage as _format_percentage
+from ..io.formatting import format_two_significant_figures as _format_two_significant_figures
 from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
-from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
+from .population import DEFAULT_POPULATION_WEIGHTS_PATH, load_population_weights
 from .projection import (
     configure_equal_earth_axis,
     country_boundary_from_metadata,
@@ -24,7 +26,6 @@ from .projection import (
 
 
 DEFAULT_INPUT_ROOT = DEFAULT_ISO7243_OUTPUT_ROOT
-DEFAULT_POPULATION_WEIGHTS_PATH = DEFAULT_POPULATION_OUTPUT_ROOT / "population.parquet"
 POPULATION_AFFECTED_THRESHOLDS_PERCENT = (5, 10, 20, 30)
 _WEIGHTINGS = ("Unweighted", "Geometric-weighted", "Population-weighted")
 
@@ -272,24 +273,9 @@ def _geometry_weights(source_ids: list[str]) -> np.ndarray:
 def _population_weights(
     source_ids: list[str], path: str | Path, *, regional: bool = False
 ) -> tuple[np.ndarray, int]:
-    population_path = Path(path).expanduser().resolve()
-    if not population_path.is_file():
-        raise FileNotFoundError(
-            f"Population weights do not exist: {population_path}; run "
-            "scripts/compute_era5_population_weights.py first"
-        )
-    table = pq.read_table(population_path, columns=["source_cell_id", "population"])
-    population_ids = table["source_cell_id"].combine_chunks().to_pylist()
-    population = _integer_column(table, "population")
-    if len(population_ids) != len(set(population_ids)) or (population < 0).any():
-        raise ValueError("Population weights contain invalid source_cell_id or population values")
-    global_population = int(population.sum(dtype=np.int64))
+    weights, global_population = load_population_weights(source_ids, path)
     if global_population <= 0:
         raise ValueError("Population weights have no positive total population")
-    lookup = dict(zip(population_ids, population, strict=True))
-    weights = np.asarray([lookup.get(source_id, -1) for source_id in source_ids], dtype=np.int64)
-    if (weights < 0).any():
-        raise ValueError("Population weights are missing a cell from the ISO 7243 lookup")
     total_population = (
         int(weights.sum(dtype=np.int64)) if regional else global_population
     )
@@ -371,19 +357,6 @@ def _population_affected_table(summary: ISO7243PlotSummary) -> pa.Table:
 def _format_population(population: int, *, regional: bool = False) -> str:
     divisor = 1e6 if regional else 1e9
     return _format_two_significant_figures(population / divisor)
-
-
-def _format_percentage(value: float) -> str:
-    return f"{_format_two_significant_figures(value)}%"
-
-
-def _format_two_significant_figures(value: float) -> str:
-    if value == 0.0:
-        return "0"
-    decimals = max(0, 1 - int(np.floor(np.log10(abs(value)))))
-    rounded = round(value, decimals)
-    decimals = max(0, 1 - int(np.floor(np.log10(abs(rounded)))))
-    return f"{rounded:.{decimals}f}"
 
 
 def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
@@ -468,7 +441,7 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
             100.0 * values,
             regional=summary.region_label is not None,
             point_size=0.25,
-            cmap="RdYlBu",
+            cmap="cividis",
             vmin=0.0,
             vmax=color_upper_percent,
         )

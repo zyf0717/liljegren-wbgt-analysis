@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import rasterio
 import xarray as xr
@@ -32,6 +33,37 @@ def latitude_band(values: np.ndarray) -> xr.DataArray:
 
 
 class CellwisePopulationTests(unittest.TestCase):
+    def test_population_alignment_preserves_order_integer_counts_and_dataset_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "population.parquet"
+            pq.write_table(
+                pa.table({"source_cell_id": ["b", "extra", "a"], "population": [0, 7, 9_000_000_000]}),
+                path,
+            )
+            weights, total = population.load_population_weights(["a", "b"], path)
+            np.testing.assert_array_equal(weights, [9_000_000_000, 0])
+            self.assertEqual(weights.dtype, np.int64)
+            self.assertEqual(total, 9_000_000_007)
+            zero, _ = population.load_population_weights(["b"], path)
+            self.assertEqual(zero.tolist(), [0])
+            with self.assertRaisesRegex(ValueError, "missing a cell"):
+                population.load_population_weights(["missing"], path)
+
+    def test_population_alignment_rejects_invalid_counts_and_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "population.parquet"
+            for ids, counts in (
+                (["a", "a"], [1, 2]),
+                (["a", None], [1, 2]),
+                (["a", "b"], [1, None]),
+                (["a", "b"], [1, -1]),
+                (["a", "b"], [1.0, 1.5]),
+            ):
+                with self.subTest(ids=ids, counts=counts):
+                    pq.write_table(pa.table({"source_cell_id": ids, "population": counts}), path)
+                    with self.assertRaises(ValueError):
+                        population.load_population_weights(["a"], path)
+
     def test_band_sums_aligned_pixels_and_excludes_nodata(self) -> None:
         values = np.ones((30, 60), dtype=np.int32)
         values[0, 0] = population.LANDSCAN_NODATA

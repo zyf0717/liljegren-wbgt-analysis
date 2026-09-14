@@ -20,6 +20,7 @@ from liljegren_analysis.cellwise.spread import (
     _cellwise_table,
     _extrema_frequency,
     _extrema_fractions,
+    _spread_coverage,
     analyze_cellwise_quantile_spread,
 )
 from liljegren_analysis.comparison.config import REFERENCE_IMPLEMENTATION
@@ -37,6 +38,16 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 ["era5-global-n000000-e0000000", "era5-global-s900000-e0000000"]
             ).table
             pq.write_table(grid, root / "grid.parquet")
+            population_path = Path(temporary) / "population.parquet"
+            pq.write_table(
+                pa.table(
+                    {
+                        "source_cell_id": grid["source_cell_id"],
+                        "population": pa.array([1, 3], type=pa.int64()),
+                    }
+                ),
+                population_path,
+            )
             (root / "metadata.json").write_text(
                 json.dumps(
                     {
@@ -67,7 +78,9 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 )
 
             output = analyze_cellwise_quantile_spread(
-                root, output_root=Path(temporary) / "analysis"
+                root,
+                output_root=Path(temporary) / "analysis",
+                population_weights_path=population_path,
             )
 
             self.assertTrue(
@@ -130,27 +143,46 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                     pq.read_table(output.extrema_frequency), IMPLEMENTATIONS
                 ).to_pylist(),
             )
+            coverage = pcsv.read_csv(output.tropical_spread_coverage_csv)
+            regional_coverage = pcsv.read_csv(output.spread_coverage_csv)
+            self.assertEqual(regional_coverage.num_rows, 24 * len(PERCENTILES))
+            self.assertEqual(
+                regional_coverage.filter(
+                    np.asarray(regional_coverage["region"]) == "tropical"
+                ).drop(["region"]).to_pylist(),
+                coverage.to_pylist(),
+            )
+            for row in regional_coverage.to_pylist():
+                population_total = {"tropical": 1, "non_tropical": 3, "global": 4}[
+                    row["region"]
+                ]
+                self.assertEqual(row["total_population"], population_total)
+                self.assertEqual(
+                    row["affected_population"],
+                    population_total * int(row["threshold_c"] <= expected_spread),
+                )
+            self.assertEqual(coverage.num_rows, 8 * len(PERCENTILES))
+            for row in coverage.to_pylist():
+                affected = int(row["threshold_c"] <= expected_spread)
+                self.assertEqual(row["affected_cell_count"], affected)
+                self.assertEqual(row["land_area_percent"], "100%" if affected else "0%")
+                self.assertEqual(row["affected_population"], affected)
+                self.assertEqual(row["population_percent"], "100%" if affected else "0%")
+                self.assertEqual(row["complete_case_land_area_percent"], "100%")
+                self.assertEqual(row["complete_case_population_percent"], "100%")
+                self.assertEqual(row["total_population"], 1)
 
             unweighted = analyze_cellwise_quantile_spread(
                 root,
                 output_root=Path(temporary) / "analysis-unweighted",
                 weighting="none",
+                population_weights_path=population_path,
             )
             self.assertEqual(
                 pq.read_table(unweighted.cellwise_spread)["weight"].to_pylist(),
                 [1.0, 1.0],
             )
 
-            population_path = Path(temporary) / "population.parquet"
-            pq.write_table(
-                pa.table(
-                    {
-                        "source_cell_id": grid["source_cell_id"],
-                        "population": pa.array([1, 3], type=pa.int64()),
-                    }
-                ),
-                population_path,
-            )
             population_weighted = analyze_cellwise_quantile_spread(
                 root,
                 output_root=Path(temporary) / "analysis-population",
@@ -168,6 +200,94 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 population_metadata["extrema_tie_policy"], "first-in-implementation-order"
             )
             self.assertEqual(population_metadata["primary_map_metric"], "spread_p95_c")
+            self.assertEqual(
+                population_metadata["tropical_spread_coverage"]["population_source"],
+                str(population_path),
+            )
+            for other in (unweighted, population_weighted):
+                self.assertTrue(
+                    pcsv.read_csv(other.spread_coverage_csv).equals(regional_coverage)
+                )
+                self.assertTrue(
+                    pcsv.read_csv(other.tropical_spread_coverage_csv).equals(coverage)
+                )
+
+    def test_regional_coverage_boundaries_weights_support_and_inclusive_thresholds(self) -> None:
+        common = np.array([True, True, True, True, False])
+        regional = _spread_coverage(
+            {
+                "spread_p50_c": np.array([1 - 4e-15, 8, 9, 9]),
+                "spread_p95_c": np.array([2, 1 - 1e-8, 9, 9]),
+            },
+            np.array([-23.44, 23.44, -23.45, 23.45, 0]),
+            common,
+            np.array([1, 3, 50, 70, 4], dtype=float),
+            np.array([10, 30, 1000, 2000, 60], dtype=np.int64),
+        )
+        self.assertEqual(regional.num_rows, 48)
+        table = regional.filter(np.asarray(regional["region"]) == "tropical")
+        rows = table.to_pylist()
+        self.assertEqual(len(rows), 16)
+        for row in rows:
+            self.assertEqual(row["total_land_area_weight"], 8)
+            self.assertEqual(row["total_population"], 100)
+            self.assertEqual(row["complete_case_land_area_fraction"], 0.5)
+            self.assertEqual(row["complete_case_population_fraction"], 0.4)
+        np.testing.assert_allclose(
+            table["land_area_fraction"].to_numpy(),
+            [0.5] + [3 / 8] * 7 + [1 / 8] * 2 + [0] * 6,
+        )
+        self.assertEqual(
+            table["affected_population"].to_pylist(),
+            [40] + [30] * 7 + [10] * 2 + [0] * 6,
+        )
+        np.testing.assert_allclose(
+            table["population_fraction"].to_numpy(),
+            [0.4] + [0.3] * 7 + [0.1] * 2 + [0] * 6,
+        )
+        regions = {
+            name: regional.filter(np.asarray(regional["region"]) == name).to_pylist()
+            for name in ("tropical", "non_tropical", "global")
+        }
+        for tropical, non_tropical, global_row in zip(*regions.values(), strict=True):
+            self.assertEqual(non_tropical["total_land_area_weight"], 120)
+            self.assertEqual(non_tropical["total_population"], 3000)
+            self.assertEqual(non_tropical["land_area_fraction"], 1.0)
+            self.assertEqual(non_tropical["population_fraction"], 1.0)
+            for column in ("affected_cell_count", "affected_population", "total_population"):
+                self.assertEqual(global_row[column], tropical[column] + non_tropical[column])
+            for fraction, denominator in (
+                ("land_area_fraction", "total_land_area_weight"),
+                ("population_fraction", "total_population"),
+                ("complete_case_land_area_fraction", "total_land_area_weight"),
+                ("complete_case_population_fraction", "total_population"),
+            ):
+                self.assertAlmostEqual(
+                    global_row[fraction] * global_row[denominator],
+                    tropical[fraction] * tropical[denominator]
+                    + non_tropical[fraction] * non_tropical[denominator],
+                )
+
+    def test_tropical_coverage_empty_region_zero_population_and_missing_support(self) -> None:
+        for latitudes, population, common, area_fraction, population_fraction in (
+            ([24, -24], [10, 20], [True, True], None, None),
+            ([0, 20], [0, 0], [True, True], 1.0, None),
+            ([0, 24], [10, 20], [False, True], 0.0, 0.0),
+        ):
+            with self.subTest(latitudes=latitudes, population=population):
+                table = _spread_coverage(
+                    {f"spread_{p}_c": np.full(sum(common), 8.0) for p in PERCENTILES},
+                    np.array(latitudes),
+                    np.array(common),
+                    np.ones(2),
+                    np.array(population, dtype=np.int64),
+                )
+                for row in table.to_pylist():
+                    if row["region"] != "tropical":
+                        continue
+                    self.assertEqual(row["land_area_fraction"], area_fraction)
+                    self.assertEqual(row["population_fraction"], population_fraction)
+                    self.assertEqual(row["affected_population"], 0)
 
     def test_extrema_csv_fractions_preserve_weights_ties_and_percentiles(self) -> None:
         implementations = ("a", "b", "c")

@@ -79,6 +79,13 @@ file-backed and reclaimable, but reserve 35 GiB of available RAM for replay and
 finalization transients. Increasing `--replay-workers` multiplies both the
 approximately 13.8 GiB of mapped histograms per worker and storage pressure.
 
+Create global population weights for spread coverage and population-weighted
+summaries (once):
+
+```bash
+uv run python scripts/compute_era5_population_weights.py
+```
+
 Analyze cross-implementation spread:
 
 ```bash
@@ -93,12 +100,28 @@ over complete-case cells. Exact ties go to the first target in implementation
 order, matching the existing Parquet extrema frequencies; each percentile
 sums to 1 separately for minima and maxima.
 
-Create global population weights when population-weighted summaries are
-needed:
-
-```bash
-uv run python scripts/compute_era5_population_weights.py
-```
+Each analysis also writes `spread_coverage.csv`, with one row per region
+(`tropical`, `non_tropical`, `global`), percentile (`p50`, `p95`), and inclusive
+spread threshold (≥1°C through ≥8°C): 48 rows. Tropical cells have centers
+between 23.44°S and 23.44°N inclusive; non-tropical cells are outside that band,
+and global includes the entire canonical land grid. The tropical subset is also
+written to `tropical_spread_coverage.csv` without the `region` column.
+`land_area_percent` applies the existing ERA5 geometric weights once;
+`affected_population` sums raw population counts, and `population_percent`
+divides by `total_population` and multiplies by 100. Percentages use **all canonical cells
+in each region** as the denominator, including cells without complete
+quantiles. The two `complete_case_*_percent` columns expose that support;
+empty regions or zero population produce blank percentages. Percentage strings
+use two significant figures and a `%` suffix, matching the population-affected
+CSV (for example, `87%`, `1.2%`, `0.010%`); zeros are `0%` and full coverage is
+`100%`. Counts remain exact integers. Country inputs use
+their own grid for all regions (`global` means the entire country grid).
+`total_land_area_weight` is a normalized weight sum displayed to two significant
+figures, not km². Calculations retain full precision. Threshold equality allows
+1e-12°C of subtraction roundoff.
+Both coverage measures are independent of `--weighting`. Population counts
+are therefore required for every spread run; override the default file with
+`--population-weights-path`.
 
 The population pipeline reads LandScan Global 2024 through `rioxarray`, using
 Rasterio windows to stream one ERA5 latitude band at a time. Integer counts

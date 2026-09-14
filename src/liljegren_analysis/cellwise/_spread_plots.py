@@ -21,7 +21,7 @@ PERCENTILES = tuple(
     f"p{int(probability * 100):02d}" for probability in DEFAULT_PROBABILITIES
 )
 SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
-SPREAD_MAP_COLOR_LIMITS_C = (0.0, 8.0)
+SPREAD_MAP_COLOR_LIMITS_C = (0.0, 10.0)
 Weighting = Literal["none", "geometry", "population"]
 
 
@@ -111,7 +111,7 @@ def _write_spread_maps(
         )
         plot_country_boundary(axis, country_boundary)
         colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
-        ticks = colorbar.get_ticks()
+        ticks = np.arange(SPREAD_MAP_COLOR_LIMITS_C[0], SPREAD_MAP_COLOR_LIMITS_C[1] + 1, 2)
         colorbar.set_ticks(
             ticks,
             labels=[

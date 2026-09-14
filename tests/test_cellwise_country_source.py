@@ -255,8 +255,16 @@ def test_country_cache_matches_hsb_joint_quantiles(
                 country_root / "implementations" / f"{implementation}.parquet"
             )
         )
+    population_path = tmp_path / "population.parquet"
+    pq.write_table(
+        pa.table({"source_cell_id": CELLS, "population": [10, 20, 30]}),
+        population_path,
+    )
     spread = analyze_cellwise_quantile_spread(
-        country_root, output_root=tmp_path / "spread", weighting="none"
+        country_root,
+        output_root=tmp_path / "spread",
+        weighting="none",
+        population_weights_path=population_path,
     )
     assert spread.cellwise_spread.is_file()
 

@@ -191,10 +191,16 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
             )
             self.assertFalse((output / ".work").exists())
 
+            population_path = root / "population.parquet"
+            pq.write_table(
+                pa.table({"source_cell_id": _CELLS, "population": [10, 20, 30]}),
+                population_path,
+            )
             spread = analyze_cellwise_quantile_spread(
                 output,
                 output_root=root / "tg-analysis",
                 quantity="tg",
+                population_weights_path=population_path,
             )
             spread_metadata = json.loads(spread.metadata.read_text())
             self.assertEqual(spread_metadata["quantity"], "tg")

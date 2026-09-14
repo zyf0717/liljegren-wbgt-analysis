@@ -18,6 +18,7 @@ from ..io.artifacts import atomic_csv as _atomic_csv
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 from ..io.artifacts import git_commit as _git_commit
+from ..io.formatting import format_percentage, format_two_significant_figures
 from ..results import RESULT_QUANTITIES, ResultQuantity
 from ._pipeline import DEFAULT_PROBABILITIES
 from ._spread_plots import (
@@ -29,10 +30,13 @@ from .paths import (
     DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
     DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
 )
-from .population import DEFAULT_OUTPUT_ROOT as DEFAULT_POPULATION_OUTPUT_ROOT
+from .population import DEFAULT_POPULATION_WEIGHTS_PATH, load_population_weights
 from .projection import country_boundary_from_metadata
 
-ANALYSIS_SCHEMA_VERSION = 4
+ANALYSIS_SCHEMA_VERSION = 7
+TROPICAL_LATITUDE_LIMIT_DEGREES = 23.44
+SPREAD_COVERAGE_THRESHOLDS_C = tuple(range(1, 9))
+SPREAD_THRESHOLD_ATOL_C = 1e-12
 Weighting = Literal["none", "geometry", "population"]
 
 
@@ -47,6 +51,8 @@ class QuantileSpreadOutputs:
     metadata: Path
     figure_directory: Path
     extrema_frequency_csv: Path
+    tropical_spread_coverage_csv: Path
+    spread_coverage_csv: Path
 
 
 def analyze_cellwise_quantile_spread(
@@ -55,10 +61,9 @@ def analyze_cellwise_quantile_spread(
     output_root: str | Path | None = None,
     quantity: ResultQuantity = "wbgt",
     weighting: Weighting = "geometry",
-    population_weights_path: str | Path = DEFAULT_POPULATION_OUTPUT_ROOT
-    / "population.parquet",
+    population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
 ) -> QuantileSpreadOutputs:
-    """Analyze one temperature's cross-implementation spread from Parquet only."""
+    """Analyze spread and regional area/population coverage from Parquet only."""
 
     source_root = Path(input_root).expanduser().resolve()
     target_root = (
@@ -84,9 +89,20 @@ def analyze_cellwise_quantile_spread(
     if not np.array_equal(cell_ids, np.arange(len(cell_ids), dtype=cell_ids.dtype)):
         raise ValueError("Canonical grid cell_id values are not contiguous")
     source_cell_ids = grid["source_cell_id"].combine_chunks().to_pylist()
-    canonical_weights, weight_source = _weights(
-        weighting, source_cell_ids, population_weights_path
-    )
+    area_weights = _area_weights(source_cell_ids)
+    population_path = Path(population_weights_path).expanduser().resolve()
+    population, _ = load_population_weights(source_cell_ids, population_path)
+    if weighting == "geometry":
+        canonical_weights = area_weights
+    elif weighting == "population":
+        canonical_weights = population.astype(np.float64)
+    else:
+        canonical_weights = np.ones(len(source_cell_ids), dtype=np.float64)
+    weight_source = {
+        "none": None,
+        "geometry": "era5-cell-area-v1",
+        "population": str(population_path),
+    }[weighting]
     source_tables, common = _load_quantile_tables(
         source_root,
         cell_ids,
@@ -117,6 +133,9 @@ def analyze_cellwise_quantile_spread(
     summary = _global_summary(metric_values, weights)
     c_anchor = _c_anchor_summary(values, weights, implementations)
     extrema = _extrema_frequency(cellwise, weights, implementations)
+    coverage = _spread_coverage(
+        metric_values, latitude, common, area_weights, population
+    )
 
     target_root.mkdir(parents=True, exist_ok=True)
     figure_directory = target_root / "figures"
@@ -151,12 +170,22 @@ def analyze_cellwise_quantile_spread(
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
     extrema_path = target_root / "implementation_extrema_frequency.parquet"
     extrema_csv_path = target_root / "implementation_extrema_frequency.csv"
+    coverage_csv_path = target_root / "spread_coverage.csv"
+    tropical_csv_path = target_root / "tropical_spread_coverage.csv"
     metadata_path = target_root / "metadata.json"
     _atomic_parquet(cellwise, cellwise_path)
     _atomic_parquet(summary, summary_path)
     _atomic_parquet(c_anchor, anchor_path)
     _atomic_parquet(extrema, extrema_path)
     _atomic_csv(_extrema_fractions(extrema, implementations), extrema_csv_path)
+    coverage_csv = _format_spread_coverage(coverage)
+    _atomic_csv(coverage_csv, coverage_csv_path)
+    _atomic_csv(
+        coverage_csv.filter(np.asarray(coverage_csv["region"]) == "tropical").drop(
+            ["region"]
+        ),
+        tropical_csv_path,
+    )
     _atomic_json(
         {
             "schema_version": ANALYSIS_SCHEMA_VERSION,
@@ -177,6 +206,40 @@ def analyze_cellwise_quantile_spread(
             "weighting": weighting,
             "extrema_tie_policy": "first-in-implementation-order",
             "extrema_csv_units": "fraction-of-complete-case-weight",
+            "spread_coverage": {
+                "csv": coverage_csv_path.name,
+                "regions": {
+                    "tropical": "abs(cell-center-latitude) <= 23.44 degrees",
+                    "non_tropical": "abs(cell-center-latitude) > 23.44 degrees",
+                    "global": "all-canonical-grid-cells",
+                },
+                "denominator": "all-canonical-grid-cells-in-each-region",
+                "percentage_format": "two-significant-figures-with-percent-suffix",
+                "area_weight_format": "two-significant-figures",
+                "count_format": "exact-integer",
+                "thresholds_c": list(SPREAD_COVERAGE_THRESHOLDS_C),
+                "threshold_operator": ">=",
+                "threshold_equality_atol_c": SPREAD_THRESHOLD_ATOL_C,
+                "area_weight_source": "era5-cell-area-v1",
+                "population_source": str(population_path),
+            },
+            "tropical_spread_coverage": {
+                "csv": tropical_csv_path.name,
+                "latitude_bounds_degrees": [
+                    -TROPICAL_LATITUDE_LIMIT_DEGREES,
+                    TROPICAL_LATITUDE_LIMIT_DEGREES,
+                ],
+                "region_selection": "cell-center-latitude-inclusive",
+                "denominator": "all-canonical-grid-cells-in-latitude-band",
+                "percentage_format": "two-significant-figures-with-percent-suffix",
+                "area_weight_format": "two-significant-figures",
+                "count_format": "exact-integer",
+                "thresholds_c": list(SPREAD_COVERAGE_THRESHOLDS_C),
+                "threshold_operator": ">=",
+                "threshold_equality_atol_c": SPREAD_THRESHOLD_ATOL_C,
+                "area_weight_source": "era5-cell-area-v1",
+                "population_source": str(population_path),
+            },
             "weight_source": weight_source,
             "weight_sum": float(weights.sum()),
             "canonical_weight_sum": float(canonical_weights.sum()),
@@ -209,6 +272,8 @@ def analyze_cellwise_quantile_spread(
         metadata_path,
         figure_directory,
         extrema_csv_path,
+        tropical_csv_path,
+        coverage_csv_path,
     )
 
 
@@ -334,35 +399,6 @@ def _area_weights(source_cell_ids: list[str]) -> np.ndarray:
     return result
 
 
-def _weights(
-    weighting: Weighting,
-    source_cell_ids: list[str],
-    population_weights_path: str | Path,
-) -> tuple[np.ndarray, str | None]:
-    if weighting == "none":
-        return np.ones(len(source_cell_ids), dtype=np.float64), None
-    if weighting == "geometry":
-        return _area_weights(source_cell_ids), "era5-cell-area-v1"
-    path = Path(population_weights_path).expanduser().resolve()
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Population weights do not exist: {path}; run "
-            "scripts/compute_era5_population_weights.py first"
-        )
-    table = pq.read_table(path, columns=["source_cell_id", "population"])
-    population_ids = table["source_cell_id"].combine_chunks().to_pylist()
-    population = _integer_column(table, "population").astype(np.float64)
-    if len(population_ids) != len(set(population_ids)):
-        raise ValueError("Population weights contain duplicate source_cell_id values")
-    lookup = dict(zip(population_ids, population, strict=True))
-    weights = np.asarray([lookup.get(cell_id, np.nan) for cell_id in source_cell_ids])
-    if not np.isfinite(weights).all() or (weights < 0.0).any():
-        raise ValueError(
-            "Population weights are missing or invalid for the analysis grid"
-        )
-    return weights, str(path)
-
-
 def _cellwise_table(
     cell_ids: np.ndarray,
     latitude: np.ndarray,
@@ -419,6 +455,101 @@ def _global_summary(metrics: dict[str, np.ndarray], weights: np.ndarray) -> pa.T
                 )
         rows.append(row)
     return pa.Table.from_pylist(rows)
+
+
+def _spread_coverage(
+    metrics: dict[str, np.ndarray],
+    latitude: np.ndarray,
+    common: np.ndarray,
+    area_weights: np.ndarray,
+    population: np.ndarray,
+) -> pa.Table:
+    """Use each region's canonical totals; only complete cases can be affected.
+
+    Metrics are aligned to ``common`` cells; coordinates and weights cover the
+    canonical grid. Area weights are applied once; population is already a count.
+    Empty regions and zero population have undefined (null) fractions.
+    """
+    tropical = np.abs(latitude) <= TROPICAL_LATITUDE_LIMIT_DEGREES
+    rows: list[dict[str, object]] = []
+    for region, region_mask in (
+        ("tropical", tropical),
+        ("non_tropical", ~tropical),
+        ("global", np.ones(len(latitude), dtype=bool)),
+    ):
+        total_area = float(area_weights[region_mask].sum())
+        total_population = int(population[region_mask].sum())
+        region_complete = region_mask[common]
+        area = area_weights[common][region_complete]
+        people = population[common][region_complete]
+        coverage = {
+            "total_land_area_weight": total_area,
+            "total_population": total_population,
+            "complete_case_land_area_fraction": (
+                float(area.sum() / total_area) if total_area > 0 else None
+            ),
+            "complete_case_population_fraction": (
+                float(people.sum() / total_population) if total_population > 0 else None
+            ),
+        }
+        for percentile in PERCENTILES:
+            spread = metrics[f"spread_{percentile}_c"][region_complete]
+            for threshold in SPREAD_COVERAGE_THRESHOLDS_C:
+                # Histogram midpoint subtraction can put exact equality a few ULPs
+                # below an integer threshold. This tolerance only absorbs roundoff.
+                affected = (spread >= threshold) | np.isclose(
+                    spread, threshold, rtol=0.0, atol=SPREAD_THRESHOLD_ATOL_C
+                )
+                affected_population = int(people[affected].sum())
+                rows.append(
+                    {
+                        "region": region,
+                        "percentile": percentile,
+                        "threshold_c": threshold,
+                        "affected_cell_count": int(affected.sum()),
+                        "land_area_fraction": (
+                            float(area[affected].sum() / total_area)
+                            if total_area > 0
+                            else None
+                        ),
+                        "affected_population": affected_population,
+                        "population_fraction": (
+                            affected_population / total_population
+                            if total_population > 0
+                            else None
+                        ),
+                        **coverage,
+                    }
+                )
+    return pa.Table.from_pylist(rows)
+
+
+def _format_spread_coverage(coverage: pa.Table) -> pa.Table:
+    """Apply CSV display precision after calculating coverage at full precision."""
+    for index, name in enumerate(coverage.column_names):
+        if name.endswith("_fraction"):
+            values = [
+                format_percentage(100.0 * value) if value is not None else None
+                for value in coverage[name].to_pylist()
+            ]
+            coverage = coverage.set_column(
+                index,
+                name.removesuffix("_fraction") + "_percent",
+                pa.array(values, type=pa.string()),
+            )
+        elif name == "total_land_area_weight":
+            coverage = coverage.set_column(
+                index,
+                name,
+                pa.array(
+                    [
+                        format_two_significant_figures(value)
+                        for value in coverage[name].to_pylist()
+                    ],
+                    type=pa.string(),
+                ),
+            )
+    return coverage
 
 
 def _weighted_statistics(values: np.ndarray, weights: np.ndarray) -> dict[str, float]:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import rasterio
 import rioxarray
 import xarray as xr
@@ -26,6 +27,7 @@ DEFAULT_LANDSCAN_PATH = Path(
     "data/population/landscan-global-2024/landscan-global-2024.tif"
 )
 DEFAULT_OUTPUT_ROOT = Path("data/cellwise_population_weight")
+DEFAULT_POPULATION_WEIGHTS_PATH = DEFAULT_OUTPUT_ROOT / "population.parquet"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,41 @@ class PopulationWeightOutputs:
 
     population: Path
     metadata: Path
+
+
+def load_population_weights(
+    source_ids: list[str],
+    path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
+) -> tuple[np.ndarray, int]:
+    """Align persisted integer counts to source IDs and return the dataset total.
+
+    Counts are already aggregated onto ERA5 cells. Zero-population grids are
+    valid; callers choose their denominator and whether it must be positive.
+    """
+    population_path = Path(path).expanduser().resolve()
+    if not population_path.is_file():
+        raise FileNotFoundError(
+            f"Population weights do not exist: {population_path}; run "
+            "scripts/compute_era5_population_weights.py first"
+        )
+    table = pq.read_table(population_path, columns=["source_cell_id", "population"])
+    population_ids = table["source_cell_id"].combine_chunks().to_pylist()
+    counts = table["population"].combine_chunks()
+    if (
+        table["source_cell_id"].null_count
+        or counts.null_count
+        or not pa.types.is_integer(counts.type)
+        or len(population_ids) != len(set(population_ids))
+    ):
+        raise ValueError("Population weights contain invalid source_cell_id or population values")
+    population = np.asarray(counts.to_numpy(zero_copy_only=False), dtype=np.int64)
+    if (population < 0).any():
+        raise ValueError("Population weights contain negative population values")
+    lookup = dict(zip(population_ids, population, strict=True))
+    weights = np.asarray([lookup.get(source_id, -1) for source_id in source_ids], dtype=np.int64)
+    if (weights < 0).any():
+        raise ValueError("Population weights are missing a cell from the analysis grid")
+    return weights, int(population.sum(dtype=np.int64))
 
 
 def compute_era5_population_weights(
