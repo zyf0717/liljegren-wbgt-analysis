@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 import numpy as np
 import pyarrow as pa
@@ -23,6 +23,11 @@ PERCENTILES = tuple(
 SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
 SPREAD_MAP_COLOR_LIMITS_C = (0.0, 10.0)
 Weighting = Literal["none", "geometry", "population"]
+STACKED_QUANTITIES = (
+    ("wbgt", "WBGT"),
+    ("tnwb", r"$T_{\mathrm{nwb}}$"),
+    ("tg", r"$T_g$"),
+)
 
 
 def write_figures(
@@ -125,6 +130,75 @@ def _write_spread_maps(
             directory / f"{metric.replace('_c', '')}_map.png", dpi=220
         )
         plt.close(figure)
+
+
+def write_stacked_spread_maps(
+    cellwise_by_quantity: Mapping[str, pa.Table], directory: Path
+) -> tuple[Path, ...]:
+    """Render one vertical global map stack per percentile."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    directory.mkdir(parents=True, exist_ok=True)
+    outputs: list[Path] = []
+    for percentile in PERCENTILES:
+        figure, axes = plt.subplots(
+            len(STACKED_QUANTITIES),
+            1,
+            figsize=(10.0, 10.5),
+            layout="constrained",
+        )
+        figure.get_layout_engine().set(h_pad=0.08, hspace=0.04)
+        image = None
+        for axis, (quantity, quantity_label) in zip(
+            axes, STACKED_QUANTITIES, strict=True
+        ):
+            cellwise = cellwise_by_quantity[quantity]
+            longitude = _float_column(cellwise, "longitude")
+            latitude = _float_column(cellwise, "latitude")
+            image = plot_equal_earth_cells(
+                axis,
+                longitude,
+                latitude,
+                _float_column(cellwise, f"spread_{percentile}_c"),
+                regional=False,
+                point_size=0.35,
+                cmap="magma",
+                vmin=SPREAD_MAP_COLOR_LIMITS_C[0],
+                vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
+            )
+            configure_equal_earth_axis(axis)
+            axis.set_title(quantity_label)
+        if image is None:
+            raise ValueError("No spread maps were rendered")
+        colorbar = figure.colorbar(
+            image,
+            ax=axes,
+            label="Spread (°C)",
+            location="right",
+            shrink=0.8,
+            pad=0.025,
+        )
+        ticks = np.arange(
+            SPREAD_MAP_COLOR_LIMITS_C[0], SPREAD_MAP_COLOR_LIMITS_C[1] + 1, 2
+        )
+        colorbar.set_ticks(
+            ticks,
+            labels=[
+                f"≥ {tick:g}"
+                if np.isclose(tick, SPREAD_MAP_COLOR_LIMITS_C[1])
+                else f"{tick:g}"
+                for tick in ticks
+            ],
+        )
+        output = directory / f"stacked_spread_{percentile}.png"
+        figure.savefig(output, dpi=220, bbox_inches="tight", pad_inches=0.05)
+        plt.close(figure)
+        outputs.append(output)
+    return tuple(outputs)
 
 
 def _float_column(table: pa.Table, column: str) -> np.ndarray:

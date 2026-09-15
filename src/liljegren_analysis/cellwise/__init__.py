@@ -16,6 +16,7 @@ from .paths import (
 from .spread import (
     QuantileSpreadOutputs,
     analyze_cellwise_quantile_spread,
+    plot_stacked_cellwise_quantile_spread,
 )
 from .population import PopulationWeightOutputs, compute_era5_population_weights
 from .iso7243 import (
@@ -46,6 +47,7 @@ __all__ = [
     "DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT",
     "DEFAULT_REPLAY_WORKERS",
     "analyze_cellwise_quantile_spread",
+    "plot_stacked_cellwise_quantile_spread",
     "compute_joint_cellwise_temperature_quantiles",
     "compute_era5_population_weights",
     "analyze_cellwise_iso7243_classification",

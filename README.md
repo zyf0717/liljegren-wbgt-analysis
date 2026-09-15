@@ -92,6 +92,13 @@ Analyze cross-implementation spread:
 uv run python scripts/analyze_cellwise_quantile_spread.py --quantity wbgt
 ```
 
+After analyzing WBGT, Tnwb, and Tg, render separate P50 and P95 vertical map
+stacks with a shared 0–10 °C scale in each figure:
+
+```bash
+uv run python scripts/plot_cellwise_quantile_spread.py
+```
+
 Each spread analysis also writes `implementation_extrema_frequency.csv`: one
 row per implementation and extremum (`min`/`max`), with `p50` and `p95`
 columns containing fractions (0–1). Shares use the selected
@@ -100,24 +107,26 @@ over complete-case cells. Exact ties go to the first target in implementation
 order, matching the existing Parquet extrema frequencies; each percentile
 sums to 1 separately for minima and maxima.
 
-Each analysis also writes `spread_coverage.csv`, with one row per region
-(`tropical`, `non_tropical`, `global`), percentile (`p50`, `p95`), and inclusive
-spread threshold (≥1°C through ≥8°C): 48 rows. Tropical cells have centers
-between 23.44°S and 23.44°N inclusive; non-tropical cells are outside that band,
-and global includes the entire canonical land grid. The tropical subset is also
-written to `tropical_spread_coverage.csv` without the `region` column.
-`land_area_percent` applies the existing ERA5 geometric weights once;
+Each analysis also writes a transposed `spread_coverage.xlsx` workbook with
+`tropical`, `non_tropical`, and `global` sheets. Columns identify percentile
+(`p50`, `p95`) and inclusive spread threshold (≥1°C through ≥8°C); metrics are
+rows. Tropical cells have centers between 23.44°S and 23.44°N inclusive;
+non-tropical cells are outside that band, and global includes the entire
+canonical land grid. `affected_land_area_weight` reports the summed geometric
+weight of affected cells, while `land_area_percent` divides that value by the
+geometric weight of all canonical cells in the region. Thus it is already
+area-weighted rather than a percentage of cell count.
 `affected_population` sums raw population counts, and `population_percent`
 divides by `total_population` and multiplies by 100. Percentages use **all canonical cells
 in each region** as the denominator, including cells without complete
 quantiles. The two `complete_case_*_percent` columns expose that support;
-empty regions or zero population produce blank percentages. Percentage strings
-use two significant figures and a `%` suffix, matching the population-affected
-CSV (for example, `87%`, `1.2%`, `0.010%`); zeros are `0%` and full coverage is
-`100%`. Counts remain exact integers. Country inputs use
+empty regions or zero population produce blank percentages. Percentage cells
+are numeric and display at least one decimal place, with additional precision
+for small nonzero values so they never display as zero. Counts remain exact
+integers. Country inputs use
 their own grid for all regions (`global` means the entire country grid).
-`total_land_area_weight` is a normalized weight sum displayed to two significant
-figures, not km². Calculations retain full precision. Threshold equality allows
+Land-area weights are normalized ERA5-cell equivalents, not km², and display
+to two decimal places while retaining full numeric precision. Threshold equality allows
 1e-12°C of subtraction roundoff.
 Both coverage measures are independent of `--weighting`. Population counts
 are therefore required for every spread run; override the default file with

@@ -1029,6 +1029,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "openpyxl" },
     { name = "pandas" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -1044,7 +1045,6 @@ dev = [
     { name = "ipywidgets" },
     { name = "jupyterlab" },
     { name = "matplotlib" },
-    { name = "openpyxl" },
     { name = "plotly" },
     { name = "pytest" },
 ]
@@ -1052,6 +1052,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy" },
+    { name = "openpyxl" },
     { name = "pandas" },
     { name = "polars", specifier = ">=1.44.1" },
     { name = "pyarrow" },
@@ -1067,7 +1068,6 @@ dev = [
     { name = "ipywidgets", specifier = ">=8.1.9" },
     { name = "jupyterlab" },
     { name = "matplotlib" },
-    { name = "openpyxl" },
     { name = "plotly", specifier = ">=6.9.0" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]

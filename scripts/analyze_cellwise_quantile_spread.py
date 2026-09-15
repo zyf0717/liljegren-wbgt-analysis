@@ -46,8 +46,7 @@ def main() -> None:
     )
     print(outputs.cellwise_spread)
     print(outputs.extrema_frequency_csv)
-    print(outputs.tropical_spread_coverage_csv)
-    print(outputs.spread_coverage_csv)
+    print(outputs.spread_coverage_xlsx)
 
 
 if __name__ == "__main__":

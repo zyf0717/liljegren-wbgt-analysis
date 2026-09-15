@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,13 +21,15 @@ from ..io.artifacts import atomic_csv as _atomic_csv
 from ..io.artifacts import atomic_json as _atomic_json
 from ..io.artifacts import atomic_parquet as _atomic_parquet
 from ..io.artifacts import git_commit as _git_commit
-from ..io.formatting import format_percentage, format_two_significant_figures
 from ..results import RESULT_QUANTITIES, ResultQuantity
 from ._pipeline import DEFAULT_PROBABILITIES
 from ._spread_plots import (
     PERCENTILES,
+    SPREAD_METRICS,
     SPREAD_MAP_COLOR_LIMITS_C,
+    STACKED_QUANTITIES,
     write_figures,
+    write_stacked_spread_maps,
 )
 from .paths import (
     DEFAULT_QUANTILE_SPREAD_INPUT_ROOT,
@@ -33,11 +38,30 @@ from .paths import (
 from .population import DEFAULT_POPULATION_WEIGHTS_PATH, load_population_weights
 from .projection import country_boundary_from_metadata
 
-ANALYSIS_SCHEMA_VERSION = 7
+ANALYSIS_SCHEMA_VERSION = 9
 TROPICAL_LATITUDE_LIMIT_DEGREES = 23.44
 SPREAD_COVERAGE_THRESHOLDS_C = tuple(range(1, 9))
 SPREAD_THRESHOLD_ATOL_C = 1e-12
 Weighting = Literal["none", "geometry", "population"]
+COVERAGE_WORKBOOK_ROWS = (
+    ("affected_cell_count", "affected_cell_count", "integer"),
+    ("affected_land_area_weight", "affected_land_area_weight", "weight"),
+    ("land_area_fraction", "land_area_percent", "percentage"),
+    ("affected_population", "affected_population", "integer"),
+    ("population_fraction", "population_percent", "percentage"),
+    ("total_land_area_weight", "total_land_area_weight", "weight"),
+    ("total_population", "total_population", "integer"),
+    (
+        "complete_case_land_area_fraction",
+        "complete_case_land_area_percent",
+        "percentage",
+    ),
+    (
+        "complete_case_population_fraction",
+        "complete_case_population_percent",
+        "percentage",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -51,8 +75,24 @@ class QuantileSpreadOutputs:
     metadata: Path
     figure_directory: Path
     extrema_frequency_csv: Path
-    tropical_spread_coverage_csv: Path
-    spread_coverage_csv: Path
+    spread_coverage_xlsx: Path
+
+
+def plot_stacked_cellwise_quantile_spread(
+    output_root: str | Path = DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+) -> tuple[Path, ...]:
+    """Plot separate P50/P95 WBGT, Tnwb, and Tg map stacks."""
+
+    root = Path(output_root).expanduser().resolve()
+    columns = ["latitude", "longitude", *SPREAD_METRICS]
+    tables = {
+        quantity: pq.read_table(
+            root / quantity / "cellwise_quantile_spread.parquet",
+            columns=columns,
+        )
+        for quantity, _ in STACKED_QUANTITIES
+    }
+    return write_stacked_spread_maps(tables, root / "figures")
 
 
 def analyze_cellwise_quantile_spread(
@@ -170,22 +210,14 @@ def analyze_cellwise_quantile_spread(
     anchor_path = target_root / "c_anchor_quantile_differences.parquet"
     extrema_path = target_root / "implementation_extrema_frequency.parquet"
     extrema_csv_path = target_root / "implementation_extrema_frequency.csv"
-    coverage_csv_path = target_root / "spread_coverage.csv"
-    tropical_csv_path = target_root / "tropical_spread_coverage.csv"
+    coverage_xlsx_path = target_root / "spread_coverage.xlsx"
     metadata_path = target_root / "metadata.json"
     _atomic_parquet(cellwise, cellwise_path)
     _atomic_parquet(summary, summary_path)
     _atomic_parquet(c_anchor, anchor_path)
     _atomic_parquet(extrema, extrema_path)
     _atomic_csv(_extrema_fractions(extrema, implementations), extrema_csv_path)
-    coverage_csv = _format_spread_coverage(coverage)
-    _atomic_csv(coverage_csv, coverage_csv_path)
-    _atomic_csv(
-        coverage_csv.filter(np.asarray(coverage_csv["region"]) == "tropical").drop(
-            ["region"]
-        ),
-        tropical_csv_path,
-    )
+    _write_spread_coverage_xlsx(coverage, coverage_xlsx_path)
     _atomic_json(
         {
             "schema_version": ANALYSIS_SCHEMA_VERSION,
@@ -207,32 +239,17 @@ def analyze_cellwise_quantile_spread(
             "extrema_tie_policy": "first-in-implementation-order",
             "extrema_csv_units": "fraction-of-complete-case-weight",
             "spread_coverage": {
-                "csv": coverage_csv_path.name,
+                "xlsx": coverage_xlsx_path.name,
+                "layout": "transposed-one-sheet-per-region",
+                "sheets": ["tropical", "non_tropical", "global"],
                 "regions": {
                     "tropical": "abs(cell-center-latitude) <= 23.44 degrees",
                     "non_tropical": "abs(cell-center-latitude) > 23.44 degrees",
                     "global": "all-canonical-grid-cells",
                 },
                 "denominator": "all-canonical-grid-cells-in-each-region",
-                "percentage_format": "two-significant-figures-with-percent-suffix",
-                "area_weight_format": "two-significant-figures",
-                "count_format": "exact-integer",
-                "thresholds_c": list(SPREAD_COVERAGE_THRESHOLDS_C),
-                "threshold_operator": ">=",
-                "threshold_equality_atol_c": SPREAD_THRESHOLD_ATOL_C,
-                "area_weight_source": "era5-cell-area-v1",
-                "population_source": str(population_path),
-            },
-            "tropical_spread_coverage": {
-                "csv": tropical_csv_path.name,
-                "latitude_bounds_degrees": [
-                    -TROPICAL_LATITUDE_LIMIT_DEGREES,
-                    TROPICAL_LATITUDE_LIMIT_DEGREES,
-                ],
-                "region_selection": "cell-center-latitude-inclusive",
-                "denominator": "all-canonical-grid-cells-in-latitude-band",
-                "percentage_format": "two-significant-figures-with-percent-suffix",
-                "area_weight_format": "two-significant-figures",
+                "percentage_format": "numeric-adaptive-nonzero",
+                "area_weight_format": "numeric-two-decimal-display",
                 "count_format": "exact-integer",
                 "thresholds_c": list(SPREAD_COVERAGE_THRESHOLDS_C),
                 "threshold_operator": ">=",
@@ -272,8 +289,7 @@ def analyze_cellwise_quantile_spread(
         metadata_path,
         figure_directory,
         extrema_csv_path,
-        tropical_csv_path,
-        coverage_csv_path,
+        coverage_xlsx_path,
     )
 
 
@@ -501,14 +517,16 @@ def _spread_coverage(
                     spread, threshold, rtol=0.0, atol=SPREAD_THRESHOLD_ATOL_C
                 )
                 affected_population = int(people[affected].sum())
+                affected_area = float(area[affected].sum())
                 rows.append(
                     {
                         "region": region,
                         "percentile": percentile,
                         "threshold_c": threshold,
                         "affected_cell_count": int(affected.sum()),
+                        "affected_land_area_weight": affected_area,
                         "land_area_fraction": (
-                            float(area[affected].sum() / total_area)
+                            affected_area / total_area
                             if total_area > 0
                             else None
                         ),
@@ -524,32 +542,65 @@ def _spread_coverage(
     return pa.Table.from_pylist(rows)
 
 
-def _format_spread_coverage(coverage: pa.Table) -> pa.Table:
-    """Apply CSV display precision after calculating coverage at full precision."""
-    for index, name in enumerate(coverage.column_names):
-        if name.endswith("_fraction"):
-            values = [
-                format_percentage(100.0 * value) if value is not None else None
-                for value in coverage[name].to_pylist()
+def _write_spread_coverage_xlsx(coverage: pa.Table, path: Path) -> None:
+    """Write transposed regional coverage sheets atomically."""
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    rows = coverage.to_pylist()
+    for region in ("tropical", "non_tropical", "global"):
+        sheet = workbook.create_sheet(region)
+        region_rows = [row for row in rows if row["region"] == region]
+        sheet.append(
+            ["metric"]
+            + [
+                f"{str(row['percentile']).upper()} ≥ {row['threshold_c']}°C"
+                for row in region_rows
             ]
-            coverage = coverage.set_column(
-                index,
-                name.removesuffix("_fraction") + "_percent",
-                pa.array(values, type=pa.string()),
-            )
-        elif name == "total_land_area_weight":
-            coverage = coverage.set_column(
-                index,
-                name,
-                pa.array(
-                    [
-                        format_two_significant_figures(value)
-                        for value in coverage[name].to_pylist()
-                    ],
-                    type=pa.string(),
-                ),
-            )
-    return coverage
+        )
+        for source, label, value_type in COVERAGE_WORKBOOK_ROWS:
+            sheet.append([label] + [row[source] for row in region_rows])
+            for cell in sheet[sheet.max_row][1:]:
+                if value_type == "percentage" and cell.value is not None:
+                    cell.number_format = _excel_percentage_format(float(cell.value))
+                elif value_type == "integer":
+                    cell.number_format = "#,##0"
+                elif value_type == "weight":
+                    cell.number_format = "#,##0.00"
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+        for cell in sheet["A"]:
+            cell.font = Font(bold=True)
+        sheet.freeze_panes = "B2"
+        sheet.column_dimensions["A"].width = 40
+        for column in sheet.iter_cols(min_col=2, max_col=sheet.max_column):
+            sheet.column_dimensions[column[0].column_letter].width = 13
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, suffix=".xlsx")
+    os.close(descriptor)
+    temporary_path = Path(temporary)
+    try:
+        workbook.save(temporary_path)
+        with temporary_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _excel_percentage_format(value: float) -> str:
+    """Show at least one decimal and enough precision to expose nonzero values."""
+
+    percentage = 100.0 * abs(value)
+    if percentage == 0.0 or percentage >= 0.1:
+        decimals = 1
+    else:
+        decimals = min(12, math.ceil(-math.log10(percentage)) + 1)
+    return f"0.{decimals * '0'}%"
 
 
 def _weighted_statistics(values: np.ndarray, weights: np.ndarray) -> dict[str, float]:
