@@ -58,9 +58,25 @@ def test_visualization_notebooks_keep_interactive_equal_earth_views() -> None:
     yearly = _code("30-yearly-pairwise.ipynb")
     cellwise = _code("31-cellwise-quantile-spread.ipynb")
     assert "go.Heatmap" in yearly
-    assert "widgets.interactive_output" in yearly
+    assert "MATRIX_OUTPUT = widgets.Output()" in yearly
     assert "equal_earth_coordinates" in cellwise
     assert "go.Scattergl" in cellwise
+
+
+def test_yearly_pairwise_notebook_orders_and_exports_current_matrix() -> None:
+    yearly = _code("30-yearly-pairwise.ipynb")
+    assert "IMPLEMENTATION_ORDER = (REFERENCE, *EXPORT_IMPLEMENTATIONS)" in yearly
+    assert "index=IMPLEMENTATION_ORDER, columns=IMPLEMENTATION_ORDER" in yearly
+    assert "EXPORT_BUTTON.on_click(export_current_matrix)" in yearly
+    assert "EXPORT_STATUS = widgets.Label()" in yearly
+    assert "EXPORT_STATUS.value = str(output)" in yearly
+    assert "figure.show()" not in yearly
+    assert "widgets.interactive_output" not in yearly
+    assert "MATRIX_OUTPUT.clear_output(wait=False)" in yearly
+    assert "go.FigureWidget" not in yearly
+    assert "where(matrix.notna(), None)" in yearly
+    assert "to_numpy().tolist()" in yearly
+    assert "data/pairwise/yearly/2025" in yearly
 
 
 def test_import_smoke_notebook_tracks_only_used_dependencies() -> None:
