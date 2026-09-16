@@ -24,6 +24,7 @@ from .iso7243 import (
     analyze_cellwise_iso7243_classification,
 )
 from .iso7243_plots import (
+    plot_global_iso7243_non_consensus_stack,
     plot_cellwise_iso7243_classification,
     summarize_cellwise_iso7243_classification,
 )
@@ -54,5 +55,6 @@ __all__ = [
     "analyze_cellwise_iso7243_non_consensus",
     "plot_cellwise_iso7243_non_consensus",
     "plot_cellwise_iso7243_classification",
+    "plot_global_iso7243_non_consensus_stack",
     "summarize_cellwise_iso7243_classification",
 ]

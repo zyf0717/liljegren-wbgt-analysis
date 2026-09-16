@@ -13,6 +13,7 @@ from .non_consensus import DEFAULT_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .iso7243_plots import configure_percent_colorbar, _dynamic_color_upper_percent
 from .projection import (
+    add_map_colorbar,
     configure_equal_earth_axis,
     country_boundary_from_metadata,
     plot_country_boundary,
@@ -120,10 +121,12 @@ def _write_map(latitude: np.ndarray, longitude: np.ndarray, percent: np.ndarray,
     )
     plot_country_boundary(axis, country_boundary)
     plot_major_cities(axis, country_iso_a3)
-    colorbar = figure.colorbar(
+    colorbar = add_map_colorbar(
+        figure,
         image,
         ax=axis,
         label="WBGT classification non-consensus (% valid hours)",
+        capped=upper < 100.0,
     )
     configure_percent_colorbar(colorbar, upper)
     figure.savefig(png, dpi=220)

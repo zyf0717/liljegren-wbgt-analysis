@@ -150,6 +150,7 @@ uv run python scripts/analyze_cellwise_iso7243_classification.py \
   --thresholds-c 25 26 28 30 33
 uv run python scripts/plot_cellwise_iso7243_classification.py
 uv run python scripts/plot_cellwise_iso7243_non_consensus.py
+uv run python scripts/plot_global_iso7243_non_consensus_stack.py
 ```
 
 The analysis classifies raw **hourly WBGT only**. By default (`--sample-scope
@@ -175,8 +176,20 @@ dataset in parentheses. The unitless estimate is in billions for global products
 and millions for country products. Values use two significant figures. The
 grouped-bar figure displays that percentage of total population.
 The workflow additionally writes
-`figures/non_consensus_population_affected.png`, a line chart of total
-population percentage against the four annual non-consensus rate thresholds.
+`figures/non_consensus_population_affected.png`, a map of cells with an annual
+all-target non-consensus rate of at least 20% of valid hours. Cell colors show
+LandScan population counts on a continuous linear `rocket_r` scale, capped at the
+95th percentile of population across affected cells (including zeros).
+Higher populations use the darkest color, with a triangular colorbar extension
+indicating saturation. Colorbar values are thousands of people per cell.
+Cells below 20% are grey; zero-population affected cells use the lightest color.
+Unsupported cells are omitted.
+Map colorbars share narrow width settings and indicate upper saturation with a
+triangular extension instead of a `≥` tick label. Percentage scales reaching
+100% have no upper extension.
+The global stacked-map script writes `figures/non_consensus_stacked.png` at the
+same 1,635-pixel width, 220 DPI, and 12-point panel-title size as the stacked
+quantile-spread figures; its height follows its two-panel content.
 
 Use `--sample-scope pairwise` (Python: `sample_scope="pairwise"`) to require valid
 WBGT only in A and B for each pair. Each pair then has its own `n_compared`;

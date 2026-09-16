@@ -157,7 +157,10 @@ class EqualEarthProjectionTests(unittest.TestCase):
                 ("Osaka", 135.50107, 34.69379),
                 ("Fukuoka", 130.41667, 33.60000),
             ),
-            "THA": (("Bangkok", 100.5020, 13.7573),),
+            "THA": (
+                ("Bangkok", 100.5020, 13.7573),
+                ("Chiang Mai", 98.98468, 18.79038),
+            ),
         }
         for country_iso_a3, cities in cases.items():
             with self.subTest(country_iso_a3=country_iso_a3):

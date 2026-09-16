@@ -18,10 +18,18 @@ from .paths import DEFAULT_ISO7243_OUTPUT_ROOT
 from .iso7243 import load_hourly_metadata
 from .population import DEFAULT_POPULATION_WEIGHTS_PATH, load_population_weights
 from .projection import (
+    add_map_colorbar,
     configure_equal_earth_axis,
     country_boundary_from_metadata,
+    EQUAL_EARTH_X_LIMIT,
+    EQUAL_EARTH_Y_LIMIT,
+    PANEL_TITLE_FONT_SIZE_PT,
     plot_country_boundary,
     plot_equal_earth_cells,
+    plot_major_cities,
+    regional_map_figure_size,
+    STACKED_MAP_DPI,
+    STACKED_MAP_WIDTH_IN,
 )
 
 
@@ -48,6 +56,8 @@ class ISO7243PlotSummary:
     latitude: np.ndarray
     longitude: np.ndarray
     changed_fraction: np.ndarray
+    non_consensus_fraction: np.ndarray
+    population: np.ndarray
     histogram_shares: np.ndarray
     implementation_pairs: tuple[tuple[str, str], ...]
     pair_changed_fraction: np.ndarray
@@ -55,6 +65,7 @@ class ISO7243PlotSummary:
     total_population: int
     region_label: str | None
     country_boundary: BaseGeometry | None
+    country_iso_a3: str | None = None
 
 
 def plot_cellwise_iso7243_classification(
@@ -96,6 +107,31 @@ def plot_cellwise_iso7243_classification(
     )
 
 
+def plot_global_iso7243_non_consensus_stack(
+    input_root: str | Path = DEFAULT_INPUT_ROOT,
+    *,
+    output_directory: str | Path | None = None,
+    population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
+) -> Path:
+    """Render the global non-consensus maps on the shared stacked-map canvas."""
+
+    root = Path(input_root).expanduser().resolve()
+    target = (
+        Path(output_directory).expanduser().resolve()
+        if output_directory is not None
+        else root / "figures"
+    )
+    summary = summarize_cellwise_iso7243_classification(
+        root, population_weights_path=population_weights_path
+    )
+    if summary.region_label is not None:
+        raise ValueError("The standardized vertical stack requires global input")
+    target.mkdir(parents=True, exist_ok=True)
+    output = target / "non_consensus_stacked.png"
+    _write_global_non_consensus_stack(summary, output)
+    return output
+
+
 def summarize_cellwise_iso7243_classification(
     input_root: str | Path = DEFAULT_INPUT_ROOT,
     *,
@@ -126,6 +162,9 @@ def summarize_cellwise_iso7243_classification(
         if metadata.get("input_source") == "country-parquet"
         and isinstance(country_selection, dict)
         else None
+    )
+    raw_country_iso_a3 = (
+        country_selection.get("country_iso_a3") if region_label is not None else None
     )
     population, total_population = _population_weights(
         source_ids, population_weights_path, regional=region_label is not None
@@ -214,6 +253,10 @@ def summarize_cellwise_iso7243_classification(
         latitude=_float_column(lookup, "latitude"),
         longitude=_float_column(lookup, "longitude"),
         changed_fraction=mean,
+        non_consensus_fraction=np.divide(
+            non_unanimous, joint, out=np.full(len(cell_ids), np.nan), where=joint > 0
+        ),
+        population=population,
         histogram_shares=np.divide(histogram, totals[:, None],
                                   out=np.zeros_like(histogram), where=totals[:, None] > 0),
         implementation_pairs=implementation_pairs,
@@ -222,6 +265,7 @@ def summarize_cellwise_iso7243_classification(
         total_population=total_population,
         region_label=region_label,
         country_boundary=country_boundary_from_metadata(metadata),
+        country_iso_a3=raw_country_iso_a3 if isinstance(raw_country_iso_a3, str) else None,
     )
 
 
@@ -385,7 +429,8 @@ def _write_figure(summary: ISO7243PlotSummary, png: Path) -> None:
         summary.latitude if summary.region_label else None,
     )
     plot_country_boundary(map_axis, summary.country_boundary)
-    colorbar = figure.colorbar(
+    colorbar = add_map_colorbar(
+        figure,
         image,
         ax=map_axis,
         label="Mean pairwise WBGT class disagreement\n(% valid hours)",
@@ -455,10 +500,12 @@ def _write_pairwise_maps(summary: ISO7243PlotSummary, png: Path) -> None:
     for axis in tuple(axes.flat)[len(summary.implementation_pairs) :]:
         axis.set_visible(False)
     assert image is not None
-    colorbar = figure.colorbar(
+    colorbar = add_map_colorbar(
+        figure,
         image,
         ax=axes.ravel().tolist(),
         label="WBGT class disagreement (% valid hours)",
+        capped=color_upper_percent < 100.0,
         shrink=0.86,
     )
     configure_percent_colorbar(colorbar, color_upper_percent)
@@ -531,28 +578,194 @@ def _write_non_consensus_population_figure(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.ticker import FuncFormatter
+    import seaborn as sns
 
-    thresholds = np.asarray(POPULATION_AFFECTED_THRESHOLDS_PERCENT)
-    population_percent = (
-        100.0 * summary.population_affected[-1].astype(np.float64)
-        / summary.total_population
+    affected = summary.non_consensus_fraction >= 0.20
+    grey = summary.non_consensus_fraction < 0.20
+    population = summary.population[affected]
+    population_cap = float(np.quantile(population, 0.95)) if population.size else 0.0
+    figure_size = (
+        regional_map_figure_size(summary.longitude, summary.latitude)
+        if summary.region_label is not None
+        else (10.0, 4.8)
     )
-    figure, axis = plt.subplots(figsize=(7.0, 4.5), layout="constrained")
-    axis.plot(thresholds, population_percent, color="#4c78a8", marker="o", linewidth=2)
-    axis.set(
-        xlabel="Non-consensus rate (% valid hours)",
-        ylabel=(
-            f"Population affected (% of {summary.region_label} input-region population)"
-            if summary.region_label
-            else "Population affected (% of total population)"
-        ),
-        xticks=thresholds,
-        xlim=(thresholds[0] - 1, thresholds[-1] + 1),
-        ylim=(0.0, 100.0),
+    figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
+    plot_equal_earth_cells(
+        axis,
+        summary.longitude[grey],
+        summary.latitude[grey],
+        np.zeros(np.count_nonzero(grey)),
+        regional=summary.region_label is not None,
+        point_size=0.35,
+        cmap=ListedColormap(["#bdbdbd"]),
+        vmin=0.0,
+        vmax=1.0,
     )
-    axis.grid(color="#d9d9d9", linewidth=0.7)
-    axis.set_axisbelow(True)
+    image = plot_equal_earth_cells(
+        axis,
+        summary.longitude[affected],
+        summary.latitude[affected],
+        population,
+        regional=summary.region_label is not None,
+        point_size=0.35,
+        cmap=sns.color_palette("rocket_r", as_cmap=True),
+        vmin=0.0,
+        vmax=population_cap or 1.0,
+    )
+    configure_equal_earth_axis(
+        axis,
+        summary.longitude if summary.region_label else None,
+        summary.latitude if summary.region_label else None,
+    )
+    plot_country_boundary(axis, summary.country_boundary)
+    plot_major_cities(axis, summary.country_iso_a3)
+    colorbar = add_map_colorbar(
+        figure, image, ax=axis, label="Population (thousands) of grid cell"
+    )
+    colorbar.formatter = FuncFormatter(lambda value, _: f"{value / 1_000:g}")
+    colorbar.update_ticks()
+    colorbar.ax.yaxis.labelpad = 10
     figure.savefig(png, dpi=220)
+    plt.close(figure)
+
+
+def _write_global_non_consensus_stack(
+    summary: ISO7243PlotSummary, png: Path
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.ticker import FuncFormatter
+    import seaborn as sns
+
+    percent = 100.0 * summary.non_consensus_fraction
+    valid = np.isfinite(percent)
+    upper = _dynamic_color_upper_percent(percent)
+    affected = summary.non_consensus_fraction >= 0.20
+    grey = summary.non_consensus_fraction < 0.20
+    population = summary.population[affected]
+    population_cap = (
+        float(np.quantile(population, 0.95)) if population.size else 0.0
+    )
+    affected_population = int(population.sum(dtype=np.int64))
+
+    figure_width = STACKED_MAP_WIDTH_IN
+    map_left = 0.08
+    map_width = figure_width - 1.08
+    map_height = map_width * EQUAL_EARTH_Y_LIMIT / EQUAL_EARTH_X_LIMIT
+    colorbar_left = map_left + map_width + 0.12
+    colorbar_width = 0.13
+    bottom_margin = 0.16
+    title_heights = (0.38, 0.58)
+    panel_gap = 0.24
+    figure_height = (
+        bottom_margin
+        + 2.0 * map_height
+        + sum(title_heights)
+        + panel_gap
+        + 0.16
+    )
+    panel_bottoms = (
+        bottom_margin + map_height + title_heights[1] + panel_gap,
+        bottom_margin,
+    )
+    titles = (
+        "A) Non-consensus in ISO 7243 WBGT classifications",
+        (
+            f"B) {_format_population(affected_population)} billion people lived in "
+            "grid cells with ISO 7243 WBGT\n"
+            "classification non-consensus in ≥20% of valid hours"
+        ),
+    )
+
+    figure = plt.figure(figsize=(figure_width, figure_height))
+    for index, (bottom, title_height, title) in enumerate(
+        zip(panel_bottoms, title_heights, titles, strict=True)
+    ):
+        axis = figure.add_axes(
+            [
+                map_left / figure_width,
+                bottom / figure_height,
+                map_width / figure_width,
+                map_height / figure_height,
+            ]
+        )
+        colorbar_axis = figure.add_axes(
+            [
+                colorbar_left / figure_width,
+                bottom / figure_height,
+                colorbar_width / figure_width,
+                map_height / figure_height,
+            ]
+        )
+        if index == 0:
+            image = plot_equal_earth_cells(
+                axis,
+                summary.longitude[valid],
+                summary.latitude[valid],
+                percent[valid],
+                regional=False,
+                point_size=0.35,
+                cmap="cividis",
+                vmin=0.0,
+                vmax=upper,
+            )
+            colorbar_label = "WBGT classification non-consensus (% valid hours)"
+        else:
+            plot_equal_earth_cells(
+                axis,
+                summary.longitude[grey],
+                summary.latitude[grey],
+                np.zeros(np.count_nonzero(grey)),
+                regional=False,
+                point_size=0.35,
+                cmap=ListedColormap(["#bdbdbd"]),
+                vmin=0.0,
+                vmax=1.0,
+            )
+            image = plot_equal_earth_cells(
+                axis,
+                summary.longitude[affected],
+                summary.latitude[affected],
+                population,
+                regional=False,
+                point_size=0.35,
+                cmap=sns.color_palette("rocket_r", as_cmap=True),
+                vmin=0.0,
+                vmax=population_cap or 1.0,
+            )
+            colorbar_label = "Population (thousands) of grid cell"
+        configure_equal_earth_axis(axis)
+        colorbar = figure.colorbar(
+            image,
+            cax=colorbar_axis,
+            label=colorbar_label,
+            extend="max",
+            extendfrac=0.05,
+        )
+        colorbar.ax.yaxis.labelpad = 8
+        if index == 0:
+            configure_percent_colorbar(colorbar, upper)
+        else:
+            colorbar.formatter = FuncFormatter(
+                lambda value, _: f"{value / 1_000:g}"
+            )
+            colorbar.update_ticks()
+        figure.text(
+            (map_left + map_width / 2.0) / figure_width,
+            (bottom + map_height + title_height - 0.05) / figure_height,
+            title,
+            ha="center",
+            va="top",
+            fontsize=PANEL_TITLE_FONT_SIZE_PT,
+            linespacing=1.2,
+        )
+
+    figure.savefig(png, dpi=STACKED_MAP_DPI, facecolor="white")
     plt.close(figure)
 
 
@@ -566,17 +779,14 @@ def _dynamic_color_upper_percent(values: np.ndarray) -> float:
 
 
 def configure_percent_colorbar(colorbar, upper: float) -> None:
-    """Include the endpoint and explicitly mark saturated percentage colours."""
+    """Include the numeric endpoint without crowding adjacent percentage ticks."""
     ticks = colorbar.get_ticks()
     ticks = ticks[(ticks >= 0) & (ticks < upper)]
     if len(ticks) > 1:
         spacing = float(np.median(np.diff(ticks)))
         ticks = ticks[upper - ticks >= spacing / 2]
     ticks = np.unique(np.append(ticks, upper))
-    colorbar.set_ticks(ticks, labels=[
-        f"≥ {tick:g}" if tick == upper and upper < 100 else f"{tick:g}"
-        for tick in ticks
-    ])
+    colorbar.set_ticks(ticks, labels=[f"{tick:g}" for tick in ticks])
 
 
 def _integer_column(table: pa.Table, column: str) -> np.ndarray:

@@ -93,6 +93,10 @@ EQUAL_EARTH_Y_LIMIT = float(
     equal_earth_coordinates(np.array([0.0]), np.array([90.0]))[1][0]
 )
 ERA5_CELL_SIZE_DEGREES = 0.25
+STACKED_MAP_DPI = 220
+STACKED_MAP_WIDTH_PX = 1635
+STACKED_MAP_WIDTH_IN = STACKED_MAP_WIDTH_PX / STACKED_MAP_DPI
+PANEL_TITLE_FONT_SIZE_PT = 12.0
 _MAJOR_CITIES = {
     "JPN": (
         ("Tokyo", 139.69171, 35.68950, (-4.0, 4.0), "right"),
@@ -101,8 +105,37 @@ _MAJOR_CITIES = {
     ),
     "THA": (
         ("Bangkok", 100.5020, 13.7573, (4.0, 4.0), "left"),
+        ("Chiang Mai", 98.98468, 18.79038, (4.0, 4.0), "left"),
     ),
 }
+
+
+def add_map_colorbar(
+    figure: Any,
+    image: Any,
+    *,
+    ax: Any,
+    label: str,
+    capped: bool = True,
+    shrink: float = 1.0,
+) -> Any:
+    """Use a narrow map colorbar with a triangle for upper saturation."""
+    bounds = [axis.get_position() for axis in np.asarray(ax, dtype=object).ravel()]
+    height = (
+        (max(bound.y1 for bound in bounds) - min(bound.y0 for bound in bounds))
+        * figure.get_figheight() * shrink
+    )
+    return figure.colorbar(
+        image,
+        ax=ax,
+        label=label,
+        extend="max" if capped else "neither",
+        extendfrac=0.05,
+        fraction=0.035,
+        aspect=height / 0.16,
+        pad=0.025,
+        shrink=shrink,
+    )
 
 
 def country_boundary_from_metadata(
@@ -255,11 +288,11 @@ def plot_major_cities(axis: Any, country_iso_a3: str | None) -> None:
     axis.scatter(
         x,
         y,
-        s=18.0,
-        marker="o",
+        s=56.0,
+        marker="X",
         facecolors="0.1",
-        edgecolors="0.1",
-        linewidths=0.8,
+        edgecolors="white",
+        linewidths=0.6,
         zorder=5,
     )
     for (name, _, _, offset, horizontal_alignment), city_x, city_y in zip(

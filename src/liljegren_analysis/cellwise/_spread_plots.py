@@ -11,10 +11,13 @@ from shapely.geometry.base import BaseGeometry
 
 from ._pipeline import DEFAULT_PROBABILITIES
 from .projection import (
+    add_map_colorbar,
     configure_equal_earth_axis,
+    PANEL_TITLE_FONT_SIZE_PT,
     plot_country_boundary,
     plot_equal_earth_cells,
     regional_map_figure_size,
+    STACKED_MAP_DPI,
 )
 
 PERCENTILES = tuple(
@@ -115,17 +118,9 @@ def _write_spread_maps(
             latitude if region_label else None,
         )
         plot_country_boundary(axis, country_boundary)
-        colorbar = figure.colorbar(image, ax=axis, label="Spread (°C)")
+        colorbar = add_map_colorbar(figure, image, ax=axis, label="Spread (°C)")
         ticks = np.arange(SPREAD_MAP_COLOR_LIMITS_C[0], SPREAD_MAP_COLOR_LIMITS_C[1] + 1, 2)
-        colorbar.set_ticks(
-            ticks,
-            labels=[
-                f"≥ {tick:g}"
-                if np.isclose(tick, SPREAD_MAP_COLOR_LIMITS_C[1])
-                else f"{tick:g}"
-                for tick in ticks
-            ],
-        )
+        colorbar.set_ticks(ticks, labels=[f"{tick:g}" for tick in ticks])
         figure.savefig(
             directory / f"{metric.replace('_c', '')}_map.png", dpi=220
         )
@@ -153,8 +148,8 @@ def write_stacked_spread_maps(
         )
         figure.get_layout_engine().set(h_pad=0.08, hspace=0.04)
         image = None
-        for axis, (quantity, quantity_label) in zip(
-            axes, STACKED_QUANTITIES, strict=True
+        for panel_label, axis, (quantity, quantity_label) in zip(
+            ("A", "B", "C"), axes, STACKED_QUANTITIES, strict=True
         ):
             cellwise = cellwise_by_quantity[quantity]
             longitude = _float_column(cellwise, "longitude")
@@ -171,31 +166,30 @@ def write_stacked_spread_maps(
                 vmax=SPREAD_MAP_COLOR_LIMITS_C[1],
             )
             configure_equal_earth_axis(axis)
-            axis.set_title(quantity_label)
+            axis.set_title(
+                f"{panel_label}) {quantity_label}",
+                fontsize=PANEL_TITLE_FONT_SIZE_PT,
+            )
         if image is None:
             raise ValueError("No spread maps were rendered")
-        colorbar = figure.colorbar(
+        colorbar = add_map_colorbar(
+            figure,
             image,
             ax=axes,
-            label="Spread (°C)",
-            location="right",
+            label="Range (°C)",
             shrink=0.8,
-            pad=0.025,
         )
         ticks = np.arange(
             SPREAD_MAP_COLOR_LIMITS_C[0], SPREAD_MAP_COLOR_LIMITS_C[1] + 1, 2
         )
-        colorbar.set_ticks(
-            ticks,
-            labels=[
-                f"≥ {tick:g}"
-                if np.isclose(tick, SPREAD_MAP_COLOR_LIMITS_C[1])
-                else f"{tick:g}"
-                for tick in ticks
-            ],
-        )
+        colorbar.set_ticks(ticks, labels=[f"{tick:g}" for tick in ticks])
         output = directory / f"stacked_spread_{percentile}.png"
-        figure.savefig(output, dpi=220, bbox_inches="tight", pad_inches=0.05)
+        figure.savefig(
+            output,
+            dpi=STACKED_MAP_DPI,
+            bbox_inches="tight",
+            pad_inches=0.05,
+        )
         plt.close(figure)
         outputs.append(output)
     return tuple(outputs)

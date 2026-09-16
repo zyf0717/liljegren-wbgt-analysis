@@ -12,14 +12,18 @@ import pytest
 from iso7243_fixtures import CELLS, NAMES, PAIR_COUNT, reference_pairwise_counts, write_days
 from liljegren_analysis.cellwise.iso7243 import analyze_cellwise_iso7243_classification
 from liljegren_analysis.cellwise.iso7243_plots import (
+    ISO7243PlotSummary,
     _accumulate_population_affected,
     _format_population,
     _format_percentage,
     _format_two_significant_figures,
+    _write_non_consensus_population_figure,
     configure_percent_colorbar,
     plot_cellwise_iso7243_classification,
+    plot_global_iso7243_non_consensus_stack,
     summarize_cellwise_iso7243_classification,
 )
+from liljegren_analysis.cellwise.projection import STACKED_MAP_WIDTH_PX
 
 
 def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
@@ -35,6 +39,10 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     np.testing.assert_allclose(
         summary.changed_fraction, [2 / len(NAMES), 0, np.nan], equal_nan=True
     )
+    np.testing.assert_allclose(
+        summary.non_consensus_fraction, [1, 0, np.nan], equal_nan=True
+    )
+    np.testing.assert_array_equal(summary.population, [10, 0, 1000])
     assert summary.histogram_shares.shape == (3, 20)
     np.testing.assert_allclose(summary.histogram_shares.sum(axis=1), 1.)
     # Pairs containing Argonne disagree for the first cell; third cell is unsupported.
@@ -59,6 +67,10 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
     assert figures.pairwise_png.stat().st_size > 0
     assert figures.population_affected_png.stat().st_size > 0
     assert figures.non_consensus_population_png.stat().st_size > 0
+    stacked = plot_global_iso7243_non_consensus_stack(
+        out.metadata.parent, population_weights_path=weights
+    )
+    assert plt.imread(stacked).shape[1] == STACKED_MAP_WIDTH_PX
     population_csv = pcsv.read_csv(figures.population_affected_csv)
     assert population_csv.column_names == [
         "comparison_type", "implementation_a", "implementation_b",
@@ -171,6 +183,47 @@ def test_population_affected_thresholds_are_inclusive_and_exclude_unsupported_ce
     assert np.all(np.diff(totals, axis=1) <= 0)
 
 
+@pytest.mark.parametrize("region_label", [None, "Test region"])
+def test_non_consensus_population_map_filters_cells(tmp_path, monkeypatch, region_label):
+    summary = ISO7243PlotSummary(
+        latitude=np.asarray([0., 1., 2., 3., 4.]),
+        longitude=np.asarray([10., 11., 12., 13., 14.]),
+        changed_fraction=np.zeros(5),
+        non_consensus_fraction=np.asarray([0.20, 0.199, np.nan, 1., 0.3]),
+        population=np.asarray([20, 999, 1000, 80, 0]),
+        histogram_shares=np.zeros((3, 20)),
+        implementation_pairs=(),
+        pair_changed_fraction=np.empty((0, 5)),
+        population_affected=np.asarray([[100, 100, 100, 80]]),
+        total_population=2099,
+        region_label=region_label,
+        country_boundary=None,
+    )
+    monkeypatch.setattr(plt, "close", lambda figure: None)
+    try:
+        _write_non_consensus_population_figure(summary, tmp_path / "map.png")
+        figure = plt.gcf()
+        background, cells = figure.axes[0].collections
+        np.testing.assert_array_equal(background.get_array(), [0])
+        np.testing.assert_allclose(
+            background.get_facecolors(), [[189 / 255, 189 / 255, 189 / 255, 1]]
+        )
+        # Exactly 20% qualifies; below-threshold and unsupported populations do not.
+        # Zero-population affected cells use the low end of the gradient.
+        np.testing.assert_array_equal(cells.get_array(), [20, 80, 0])
+        assert cells.norm(0) == 0
+        assert cells.get_cmap().name == "rocket_r"
+        assert cells.get_clim() == pytest.approx((0., 74.))
+        assert cells.norm(37) == pytest.approx(0.5)
+        np.testing.assert_array_equal(cells.to_rgba(80), cells.to_rgba(74))
+        assert cells.colorbar.extend == "max"
+        assert figure.axes[0].get_legend() is None
+        assert figure.axes[1].get_ylabel() == "Population (thousands) of grid cell"
+    finally:
+        monkeypatch.undo()
+        plt.close("all")
+
+
 def test_no_supported_cells_remain_undefined(tmp_path):
     from iso7243_fixtures import NAMES
     from liljegren_analysis.cellwise.non_consensus_plots import plot_cellwise_iso7243_non_consensus
@@ -189,6 +242,7 @@ def test_no_supported_cells_remain_undefined(tmp_path):
     pq.write_table(pa.table({"source_cell_id": CELLS, "population": [10, 0, 1000]}), weights)
     summary = summarize_cellwise_iso7243_classification(out.metadata.parent, population_weights_path=weights)
     assert np.isnan(summary.changed_fraction).all()
+    assert np.isnan(summary.non_consensus_fraction).all()
     assert np.isnan(summary.pair_changed_fraction).all()
     assert np.equal(summary.histogram_shares, 0).all()
     non_consensus_figure = plot_cellwise_iso7243_non_consensus(out.metadata.parent).png
@@ -198,14 +252,20 @@ def test_no_supported_cells_remain_undefined(tmp_path):
         out.metadata.parent, population_weights_path=weights).png.stat().st_size > 0
 
 
-@pytest.mark.parametrize("upper,label", [(37., "≥ 37"), (41., "≥ 41"), (100., "100")])
+@pytest.mark.parametrize("upper,label", [(37., "37"), (41., "41"), (100., "100")])
 def test_colorbar_endpoint(upper, label):
+    from liljegren_analysis.cellwise.projection import add_map_colorbar
+
     figure, axis = plt.subplots()
     image = axis.scatter([0], [0], c=[0], vmin=0, vmax=upper)
-    bar = figure.colorbar(image)
+    bar = add_map_colorbar(
+        figure, image, ax=axis, label="Percent", capped=upper < 100
+    )
     configure_percent_colorbar(bar, upper)
     assert bar.get_ticks()[-1] == upper
     assert bar.ax.get_yticklabels()[-1].get_text() == label
+    assert bar.extend == ("max" if upper < 100 else "neither")
+    assert bar.extendfrac == 0.05
     if upper == 41:
         assert 40 not in bar.get_ticks()
     plt.close(figure)
