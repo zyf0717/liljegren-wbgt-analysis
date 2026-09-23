@@ -320,6 +320,70 @@ NASA POWER classification uses
 `scripts/analyze_nasa_power_classification.py` with an HSB run root and explicit
 date, threshold, and location scope.
 
+## 2025 heat-health WBGT weight search
+
+The Japan FDMA scripts search WBGT component weights against ambulance
+transports. Parallel 2025 workflows use Korean KDCA heat-illness reports and
+Taiwan HPA heat-injury visits. These are different outcomes, so each country
+has its own fit and score. All searches use the same Argonne HSB result run,
+LandScan 2024 population, and a 5% simplex grid followed by 1% refinement.
+
+The existing Japan sequence is:
+
+```bash
+uv run python scripts/download_fdma_heatstroke_2025.py
+uv run --with netCDF4 python scripts/extract_japan_hourly_argonne.py
+uv run --with ijson python scripts/build_japan_prefecture_cell_weights.py
+uv run python scripts/join_fdma_prefecture_daily.py
+OPENBLAS_NUM_THREADS=1 uv run --with statsmodels python scripts/search_fdma_wbgt_weights.py
+```
+
+For Korea, install Poppler's `pdftotext` and run:
+
+```bash
+uv run python scripts/download_kdca_heat_illness_2025.py
+uv run --with netCDF4 python scripts/extract_country_hourly_argonne.py \
+  --country KOR --start-date 2025-05-14 --end-date 2025-09-25
+uv run python scripts/build_region_cell_weights.py --country KOR
+uv run python scripts/join_region_daily.py --country KOR
+OPENBLAS_NUM_THREADS=1 uv run --with statsmodels python scripts/search_region_wbgt_weights.py --country KOR
+```
+
+For Taiwan:
+
+```bash
+uv run python scripts/download_hpa_heat_injury_2025.py
+uv run --with netCDF4 python scripts/extract_country_hourly_argonne.py --country TWN
+uv run python scripts/build_region_cell_weights.py --country TWN
+uv run python scripts/join_region_daily.py --country TWN
+OPENBLAS_NUM_THREADS=1 uv run --with statsmodels python scripts/search_region_wbgt_weights.py --country TWN
+```
+
+The HPA CSV is Big5 encoded; its resource URL is resolved from
+[dataset 157637](https://data.gov.tw/dataset/157637). HPA currently omits an
+intermediate TLS certificate, so its downloader pins that intermediate and
+still verifies the server. `--ca-bundle` or `--input-csv` supports alternate
+trust configuration or an existing downloaded file. KDCA's
+[final report](https://www.kdca.go.kr/bbs/kdca/258/265700/download.do) covers
+May 15–September 25, 2025; its dates mean symptom onset. Taiwan uses the full
+2025 calendar year and admission dates. Both joins use the same local date as
+the outcome. Taiwan's January 1 cannot have all 24 local hours from a
+UTC-2025-only HSB run, so it remains in the panel but is ineligible for
+fitting. December 31 can have a complete local day because it ends at
+15:00 UTC on that date.
+
+Korea's 17 and Taiwan's 22 regions use pinned geoBoundaries ADM1 data
+(Korea: Natural Earth, represented year 2021; Taiwan: OpenStreetMap/Wambacher,
+represented year 2017, ODbL 1.0). LandScan weights cover every boundary cell,
+including cells absent from HSB. A region day enters the search only if all
+24 hours have valid components and each hour covers at least 95% of the
+region's boundary-weighted population. In the current HSB run, this leaves
+11 Korean regions and 15 Taiwanese counties with eligible days. Taiwan's
+Kinmen, Matsu, and Penghu have no HSB exposure cells. All health rows remain
+in `region_daily_exposure.parquet`; excluded exposures are null. Raw hashes,
+coverage, eligible regions, candidate scores, held-out predictions, and the
+optimized-weight panel are under `data/kdca/2025/` and `data/hpa/2025/`.
+
 ## Notebooks
 
 Launch `uv run jupyter lab`. Every workflow notebook declares its editable

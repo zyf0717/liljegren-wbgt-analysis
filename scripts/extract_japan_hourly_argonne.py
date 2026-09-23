@@ -1,7 +1,7 @@
-"""Extract Japan hourly Argonne WBGT components and acquired ERA5 air temperature.
+"""Extract country hourly Argonne WBGT components and acquired ERA5 air temperature.
 
-The script stays separate from the analysis pipeline while reusing its country
-grid and HSB result contracts. Install this project and netCDF4 to run it.
+Japan remains the default. Korea and Taiwan use pinned ADM1 boundaries so
+their offshore and administrative cells are included. Install netCDF4 to run.
 """
 
 from __future__ import annotations
@@ -21,10 +21,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from shapely.ops import unary_union
 
 from liljegren_analysis.comparison.config import REFERENCE_IMPLEMENTATION
-from liljegren_analysis.country import CountryCell, country_cells, load_countries
+from liljegren_analysis.country import Country, CountryCell, country_cells, load_countries
 from liljegren_analysis.results import HSBRunResults
+from heat_health_common import SPECS, boundaries as load_region_boundaries
 
 IMPLEMENTATION = REFERENCE_IMPLEMENTATION
 ROW_ID = re.compile(r"era5-global-([ns])(\d{6})-([ew])(\d{7})-(\d{10})\Z")
@@ -48,20 +50,25 @@ OUTPUT_SCHEMA = pa.schema(
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--country", choices=("JPN", "KOR", "TWN"), default="JPN")
+    parser.add_argument("--region-boundaries", type=Path,
+                        help="Pinned ADM1 GeoJSON cache for KOR/TWN.")
     parser.add_argument("--run", type=Path, default=Path(".hsb/runs/wbgt-comparison-20260918-085051"))
     parser.add_argument("--acquired", type=Path, default=Path(".hsb/acquired/era5-global-2025"))
     parser.add_argument("--boundaries", type=Path, default=Path("data/boundaries/natural-earth-5.1.2-admin-0-countries-10m.geojson"))
     parser.add_argument("--start-date", type=date.fromisoformat, default=date(2025, 1, 1))
     parser.add_argument("--end-date", type=date.fromisoformat, default=date(2025, 12, 31))
-    parser.add_argument("--output", type=Path, default=Path("data/country/jpn/argonne-hourly-2025.parquet"))
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--force", action="store_true", help="Replace an existing output after successful extraction.")
     args = parser.parse_args()
     if args.start_date > args.end_date:
         parser.error("--start-date must be on or before --end-date")
+    if args.output is None:
+        args.output = Path(f"data/country/{args.country.lower()}/argonne-hourly-2025.parquet")
     return args
 
 
-def selected_cells(source: netCDF4.Dataset, japan_cells: list[CountryCell]) -> dict[str, tuple[int, int, float, float]]:
+def selected_cells(source: netCDF4.Dataset, country_selected_cells: list[CountryCell]) -> dict[str, tuple[int, int, float, float]]:
     latitude = np.asarray(source.variables["latitude"][:], dtype=np.float64)
     longitude = np.asarray(source.variables["longitude"][:], dtype=np.float64)
     if latitude.ndim != 1 or longitude.ndim != 1:
@@ -70,14 +77,14 @@ def selected_cells(source: netCDF4.Dataset, japan_cells: list[CountryCell]) -> d
     lat_index = {round(float(value), 4): index for index, value in enumerate(latitude)}
     lon_index = {round(float(value), 4): index for index, value in enumerate(normalized_longitude)}
     cells = {}
-    for cell in japan_cells:
+    for cell in country_selected_cells:
         try:
             cells[cell.cell_id] = (
                 lat_index[round(cell.latitude, 4)], lon_index[round(cell.longitude, 4)],
                 cell.latitude, cell.longitude,
             )
         except KeyError as error:
-            raise ValueError(f"Japan cell is absent from acquired ERA5 grid: {cell.cell_id}") from error
+            raise ValueError(f"Country cell is absent from acquired ERA5 grid: {cell.cell_id}") from error
     return cells
 
 
@@ -141,9 +148,15 @@ def extract(args: argparse.Namespace) -> int:
     output = args.output.expanduser().resolve()
     if output.exists() and not args.force:
         raise FileExistsError(f"Output exists: {output}; pass --force to replace it")
-    japan_cells = country_cells(load_countries(boundaries, ("JPN",))[0])
-    if not japan_cells:
-        raise ValueError("No ERA5 grid cells overlap Japan")
+    if args.country == "JPN":
+        selected_country_cells = country_cells(load_countries(boundaries, ("JPN",))[0])
+    else:
+        spec = SPECS[args.country]
+        region_path = args.region_boundaries or Path(f"data/boundaries/geoboundaries-{args.country.lower()}-adm1.geojson")
+        geometries, _ = load_region_boundaries(spec, region_path)
+        selected_country_cells = country_cells(Country("", spec.iso3, spec.iso3, unary_union(list(geometries.values()))))
+    if not selected_country_cells:
+        raise ValueError(f"No ERA5 grid cells overlap {args.country}")
     results = HSBRunResults.from_hsb_run(run)
     expected = expected_shards(run, args.start_date, args.end_date)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +181,7 @@ def extract(args: argparse.Namespace) -> int:
                         source.close()
                     path = acquired / "raw" / str(day.year) / f"{day.month:02d}" / "instantaneous.nc"
                     source = netCDF4.Dataset(path)
-                    current_cells = selected_cells(source, japan_cells)
+                    current_cells = selected_cells(source, selected_country_cells)
                     if cells is not None and set(cells) != set(current_cells):
                         raise ValueError(f"ERA5 grid changed in {path}")
                     cells = current_cells
@@ -220,7 +233,7 @@ def extract(args: argparse.Namespace) -> int:
                             pending_rows = 0
                         day_count += result.num_rows
                 if day_count == 0:
-                    raise ValueError(f"No Japan Argonne rows found for {day}")
+                    raise ValueError(f"No {args.country} Argonne rows found for {day}")
                 total += day_count
                 print(f"{day}: {day_count:,} rows", file=sys.stderr, flush=True)
                 day += timedelta(days=1)
