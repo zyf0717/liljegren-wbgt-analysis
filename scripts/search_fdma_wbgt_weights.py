@@ -20,6 +20,7 @@ from join_fdma_prefecture_daily import join_daily, prefecture_hourly_components
 
 
 STANDARD = (70, 20, 10)
+AIR_ONLY = (0, 0, 100)
 COMPONENTS = ("tnwb_c", "tg_c", "ta_c")
 
 
@@ -148,9 +149,11 @@ def run_search(panel: pl.DataFrame, day_idx: np.ndarray, components: np.ndarray,
     scores.sort(key=lambda row: row["mean_poisson_deviance"])
     best = scores[0]
     selected = tuple(round(100 * best[key]) for key in ("wn", "wg", "wa"))
-    standard_exposure = daily_exposure(day_idx, components, STANDARD, panel.height, measure)
-    selected_exposure = daily_exposure(day_idx, components, selected, panel.height, measure)
-    return scores, best, cache[STANDARD], cache[selected], standard_exposure, selected_exposure
+    weights = {"standard": STANDARD, "air_only": AIR_ONLY, "selected": selected}
+    exposures = {label: daily_exposure(day_idx, components, weight, panel.height, measure)
+                 for label, weight in weights.items()}
+    predictions = {label: cache[weight] for label, weight in weights.items()}
+    return scores, best, predictions, exposures
 
 
 def main() -> None:
@@ -179,26 +182,28 @@ def main() -> None:
         "measures": {},
     }
     for measure in ("max", "mean"):
-        scores, best, baseline_prediction, selected_prediction, baseline_exposure, selected_exposure = run_search(
+        scores, best, predictions, exposures = run_search(
             panel, day_idx, components, measure
         )
         all_scores.extend(scores)
-        baseline = next(row for row in scores if (row["wn"], row["wg"], row["wa"]) == (0.7, 0.2, 0.1))
+        baseline = next(row for row in scores if tuple(round(100 * row[key]) for key in ("wn", "wg", "wa")) == STANDARD)
+        air_only = next(row for row in scores if tuple(round(100 * row[key]) for key in ("wn", "wg", "wa")) == AIR_ONLY)
         summary["measures"][measure] = {
             "best_weights": {key: best[key] for key in ("wn", "wg", "wa")},
             "best_mean_poisson_deviance": best["mean_poisson_deviance"],
             "standard_mean_poisson_deviance": baseline["mean_poisson_deviance"],
+            "air_only_mean_poisson_deviance": air_only["mean_poisson_deviance"],
             "improvement_mean_deviance": baseline["mean_poisson_deviance"] - best["mean_poisson_deviance"],
             "candidates_evaluated": len(scores),
         }
-        for label, predicted, exposure in (("standard", baseline_prediction, baseline_exposure),
-                                           ("selected", selected_prediction, selected_exposure)):
+        for label, predicted in predictions.items():
             all_predictions.append(panel.select("date_jst", "prefecture_code", "transports").with_columns(
                 pl.lit(measure).alias("measure"), pl.lit(label).alias("weights_type"),
-                pl.Series("exposure_c", exposure), pl.Series("predicted_transports", predicted),
+                pl.Series("exposure_c", exposures[label]), pl.Series("predicted_transports", predicted),
             ))
         print(f"{measure}: best {best['wn']:.2f}/{best['wg']:.2f}/{best['wa']:.2f}; "
-              f"deviance {best['mean_poisson_deviance']:.4f} vs standard {baseline['mean_poisson_deviance']:.4f}", flush=True)
+              f"deviance {best['mean_poisson_deviance']:.4f} vs standard {baseline['mean_poisson_deviance']:.4f} "
+              f"vs air-only {air_only['mean_poisson_deviance']:.4f}", flush=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     atomic_csv(pl.DataFrame(all_scores).to_arrow(), args.output_dir / "candidate_scores.csv")
     atomic_parquet(pl.concat(all_predictions).to_arrow(), args.output_dir / "heldout_predictions.parquet")

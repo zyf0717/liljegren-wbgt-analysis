@@ -327,6 +327,10 @@ transports. Parallel 2025 workflows use Korean KDCA heat-illness reports and
 Taiwan HPA heat-injury visits. These are different outcomes, so each country
 has its own fit and score. All searches use the same Argonne HSB result run,
 LandScan 2024 population, and a 5% simplex grid followed by 1% refinement.
+Each search saves held-out predictions for the original 70/20/10 weights,
+air-temperature-only 0/0/100 weights, and selected weights for both daily
+maximum and mean exposure. The summary records each comparator's Poisson
+deviance; `heldout_predictions.parquet` supports MAE and other error metrics.
 
 The existing Japan sequence is:
 

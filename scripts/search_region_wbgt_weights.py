@@ -15,7 +15,7 @@ import polars as pl
 from liljegren_analysis.io.artifacts import atomic_csv, atomic_json, atomic_parquet
 from heat_health_common import SPECS
 from join_region_daily import join_daily, region_hourly_components
-from search_fdma_wbgt_weights import STANDARD, COMPONENTS, candidates, cross_validate, daily_exposure
+from search_fdma_wbgt_weights import AIR_ONLY, STANDARD, COMPONENTS, candidates, cross_validate, daily_exposure
 
 
 def load_panel(country: str, hourly_path: Path, weights_path: Path,
@@ -95,9 +95,11 @@ def run_search(country: str, panel: pl.DataFrame, day_idx: np.ndarray,
     scores.sort(key=lambda row: row["mean_poisson_deviance"])
     best = scores[0]
     selected = tuple(round(100 * best[key]) for key in ("wn", "wg", "wa"))
-    exposures = {"standard": daily_exposure(day_idx, components, STANDARD, panel.height, measure),
-                 "selected": daily_exposure(day_idx, components, selected, panel.height, measure)}
-    return scores, best, cache[STANDARD], cache[selected], exposures
+    weights = {"standard": STANDARD, "air_only": AIR_ONLY, "selected": selected}
+    exposures = {label: daily_exposure(day_idx, components, weight, panel.height, measure)
+                 for label, weight in weights.items()}
+    predictions = {label: cache[weight] for label, weight in weights.items()}
+    return scores, best, predictions, exposures
 
 
 def search(country: str, hourly: Path, weights: Path, health: Path,
@@ -121,24 +123,27 @@ def search(country: str, hourly: Path, weights: Path, health: Path,
     all_scores = []
     predictions = []
     for measure in ("max", "mean"):
-        scores, best, baseline_prediction, selected_prediction, exposures = run_search(
+        scores, best, fitted_predictions, exposures = run_search(
             country, panel, day_idx, components, measure
         )
         all_scores.extend(scores)
-        baseline = next(row for row in scores if (row["wn"], row["wg"], row["wa"]) == (.7, .2, .1))
+        baseline = next(row for row in scores if tuple(round(100 * row[key]) for key in ("wn", "wg", "wa")) == STANDARD)
+        air_only = next(row for row in scores if tuple(round(100 * row[key]) for key in ("wn", "wg", "wa")) == AIR_ONLY)
         summary["measures"][measure] = {
             "best_weights": {key: best[key] for key in ("wn", "wg", "wa")},
             "best_mean_poisson_deviance": best["mean_poisson_deviance"],
             "standard_mean_poisson_deviance": baseline["mean_poisson_deviance"],
+            "air_only_mean_poisson_deviance": air_only["mean_poisson_deviance"],
             "improvement_mean_deviance": baseline["mean_poisson_deviance"] - best["mean_poisson_deviance"],
             "candidates_evaluated": len(scores),
         }
-        for label, fitted in (("standard", baseline_prediction), ("selected", selected_prediction)):
+        for label, fitted in fitted_predictions.items():
             predictions.append(panel.select("local_date", "region_code", "outcome_count").with_columns(
                 pl.lit(measure).alias("measure"), pl.lit(label).alias("weights_type"),
                 pl.Series("exposure_c", exposures[label]), pl.Series("predicted_outcome", fitted)))
         print(f"{country} {measure}: best {best['wn']:.2f}/{best['wg']:.2f}/{best['wa']:.2f}; "
-              f"deviance {best['mean_poisson_deviance']:.4f} vs {baseline['mean_poisson_deviance']:.4f}", flush=True)
+              f"deviance {best['mean_poisson_deviance']:.4f} vs standard {baseline['mean_poisson_deviance']:.4f} "
+              f"vs air-only {air_only['mean_poisson_deviance']:.4f}", flush=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     atomic_csv(pl.DataFrame(all_scores).to_arrow(), output_dir / "candidate_scores.csv")
     atomic_parquet(pl.concat(predictions).to_arrow(), output_dir / "heldout_predictions.parquet")
