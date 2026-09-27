@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from liljegren_analysis.cellwise.accumulator import (
+from analysis.cellwise.accumulator import (
     CellwiseHistogramAccumulator,
     counter_dtype,
 )
-from liljegren_analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
+from analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
 
 
 class CellwiseHistogramTests(unittest.TestCase):
@@ -37,13 +37,17 @@ class CellwiseHistogramTests(unittest.TestCase):
                 mode="w+",
             )
             try:
-                accumulator.update(np.asarray([0, 1, 0]), np.asarray([20.0, -80.0, 21.0]))
-                accumulator.update(np.asarray([0, 1, 1]), np.asarray([22.0, 80.0, 23.0]))
+                accumulator.update(
+                    np.asarray([0, 1, 0]), np.asarray([20.0, -80.0, 21.0])
+                )
+                accumulator.update(
+                    np.asarray([0, 1, 1]), np.asarray([22.0, 80.0, 23.0])
+                )
                 self.assertEqual(accumulator.valid.tolist(), [3, 3])
                 self.assertEqual(accumulator.underflow.tolist(), [0, 1])
                 self.assertEqual(accumulator.overflow.tolist(), [0, 1])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
-                accumulator.discard_cached_pages()
+                accumulator.flush()
                 self.assertEqual(accumulator.valid.tolist(), [3, 3])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
             finally:

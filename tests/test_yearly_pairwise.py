@@ -5,13 +5,9 @@ from datetime import date
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis.comparison import (
-    DailyPairwiseSummaries,
-    analyze_yearly_pairwise,
-    initialize_pairwise_output,
-    pairwise_matrices,
-    persist_daily_pairwise,
-)
+from analysis.comparison.pairwise import DailyPairwiseSummaries, persist_daily_pairwise
+from analysis.comparison.persistence import initialize_pairwise_output
+from analysis.comparison.yearly import analyze_yearly_pairwise, pairwise_matrices
 
 
 def _daily_tables(result_date: date) -> DailyPairwiseSummaries:
@@ -81,9 +77,7 @@ def test_yearly_api_pools_and_persists_outputs(tmp_path) -> None:
     input_root = tmp_path / "daily"
     result_date = date(2025, 1, 1)
     initialize_pairwise_output(input_root, "pairwise")
-    persist_daily_pairwise(
-        input_root, result_date, _daily_tables(result_date), "pairwise"
-    )
+    persist_daily_pairwise(input_root, result_date, _daily_tables(result_date))
 
     outputs = analyze_yearly_pairwise(
         input_root,
@@ -109,9 +103,7 @@ def test_yearly_api_requires_complete_date_coverage(tmp_path) -> None:
     input_root = tmp_path / "daily"
     result_date = date(2025, 1, 1)
     initialize_pairwise_output(input_root, "pairwise")
-    persist_daily_pairwise(
-        input_root, result_date, _daily_tables(result_date), "pairwise"
-    )
+    persist_daily_pairwise(input_root, result_date, _daily_tables(result_date))
 
     try:
         analyze_yearly_pairwise(

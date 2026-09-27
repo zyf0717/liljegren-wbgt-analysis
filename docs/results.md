@@ -1,37 +1,36 @@
 # HSB result files
 
-`HSBRunResults` resolves validated Parquet shards below:
+`discover_results()` lists trusted HSB Parquet shards below each run directory:
 
 ```text
 results/<result_date>/<run_id>/<implementation>/results.parquet
 ```
 
-Use `files()` to select deterministic file records; it does not read observation
-rows or expose a query-engine relation.
-
 ```python
-from liljegren_analysis.results import HSBRunResults
-from liljegren_analysis.io.results import iter_result_batches
+from datetime import date
+from pathlib import Path
+from analysis.results import date_range, discover_results, iter_result_batches
 
-files = HSBRunResults.from_hsb_run(hsb_run).files(
-    start_date="2025-01-01",
-    end_date="2025-01-07",
-    implementations=["heatstress", "meteor"],
+files = discover_results(
+    (Path("../HeatStressBench/.hsb/runs/example"),),
+    date_range(date(2025, 1, 1), date(2025, 1, 7)),
+    implementations=("heatstress", "meteor"),
 )
 for batch in iter_result_batches(files, ("row_id", "wbgt_status", "wbgt_c")):
-    ...
+    print(batch.num_rows)
 ```
 
-`files()` accepts one exact date (`result_date`), explicit dates (`dates`), or
-an inclusive date range (`start_date`/`end_date`), plus singular or plural run
-and implementation selectors. Integer run IDs are zero-padded to four digits.
-Plural selectors are deduplicated and empty selectors are rejected.
+Each `ResultFile` records its path, date, run ID, and implementation. Discovery
+is deterministic and rejects overlapping run scopes, which would double-count
+observations. Workflows discover their input inventory once and pass the selected
+records to computation. HSB schemas and identifier formats are trusted.
 
-Each `ResultFile` carries `path`, `result_date`, `run_id`, and
-`implementation`. Source schemas must include `cycle_ordinal`, `row_id`,
-`row_ordinal`, and qualified WBGT/Tg/Tnwb status/value columns. Any other
-schema is rejected before scanning.
+`iter_result_batches()` reads only requested columns and yields bounded Arrow
+record batches. Temperature calculations retain the workflow's status, missing
+value, and support rules. Cross-implementation observation identity is checked
+where daily common support is constructed.
 
-`iter_result_batches()` reads only its requested columns and yields bounded
-Arrow record batches. Use it for row-scale processing; use Polars only for the
-daily pairwise relational aggregation.
+Cellwise workflows also accept country caches produced by
+`extract_countries_observations()`. Their row-group index limits repeated scans
+to the requested date and implementation. Extraction records its resolved
+boundary path so country maps use the same geometry and clipping bounds.

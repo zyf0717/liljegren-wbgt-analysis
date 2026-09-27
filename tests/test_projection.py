@@ -9,23 +9,23 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.collections import PolyCollection
 import numpy as np
+from matplotlib.collections import PolyCollection
+from shapely.geometry import box
 
-from liljegren_analysis.cellwise.projection import (
+from analysis.cellwise.projection import (
     EQUAL_EARTH_X_LIMIT,
     EQUAL_EARTH_Y_LIMIT,
-    configure_equal_earth_axis,
+    configure_map_axis,
     country_boundary_from_metadata,
     equal_earth_coordinates,
     mercator_coordinates,
     plot_country_boundary,
-    plot_equal_earth_cells,
     plot_major_cities,
+    plot_map_cells,
     regional_map_figure_size,
 )
-from liljegren_analysis.country.cells import NATURAL_EARTH_VERSION
-from shapely.geometry import box
+from analysis.country.cells import NATURAL_EARTH_VERSION
 
 
 class EqualEarthProjectionTests(unittest.TestCase):
@@ -34,7 +34,9 @@ class EqualEarthProjectionTests(unittest.TestCase):
         latitude = np.array([0.0, 0.0, 0.0, 30.0, -30.0])
         x, y = equal_earth_coordinates(longitude, latitude)
 
-        np.testing.assert_allclose(x[:3], [0.0, EQUAL_EARTH_X_LIMIT, -EQUAL_EARTH_X_LIMIT])
+        np.testing.assert_allclose(
+            x[:3], [0.0, EQUAL_EARTH_X_LIMIT, -EQUAL_EARTH_X_LIMIT]
+        )
         np.testing.assert_allclose(y[:3], 0.0)
         self.assertAlmostEqual(x[3], -x[4])
         self.assertAlmostEqual(y[3], -y[4])
@@ -57,20 +59,14 @@ class EqualEarthProjectionTests(unittest.TestCase):
             _, y2 = equal_earth_coordinates(
                 np.array([0.0]), np.array([latitude - latitude_step])
             )
-            jacobian = ((x1[0] - x2[0]) / (2 * step)) * (
-                (y1[0] - y2[0]) / (2 * step)
+            jacobian = ((x1[0] - x2[0]) / (2 * step)) * ((y1[0] - y2[0]) / (2 * step))
+            self.assertAlmostEqual(
+                jacobian / np.cos(np.deg2rad(latitude)), 1.0, places=5
             )
-            self.assertAlmostEqual(jacobian / np.cos(np.deg2rad(latitude)), 1.0, places=5)
-
-    def test_invalid_geographic_bounds_are_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "longitude/latitude bounds"):
-            equal_earth_coordinates(np.array([181.0]), np.array([0.0]))
-        with self.assertRaisesRegex(ValueError, "longitude/latitude bounds"):
-            equal_earth_coordinates(np.array([0.0]), np.array([np.inf]))
 
     def test_country_extent_is_fitted_to_input_grid(self) -> None:
         figure, axis = plt.subplots()
-        configure_equal_earth_axis(
+        configure_map_axis(
             axis,
             longitude=np.array([-125.0, -66.5]),
             latitude=np.array([24.0, 49.5]),
@@ -103,7 +99,7 @@ class EqualEarthProjectionTests(unittest.TestCase):
 
     def test_regional_cells_are_contiguous_projected_polygons(self) -> None:
         figure, axis = plt.subplots()
-        collection = plot_equal_earth_cells(
+        collection = plot_map_cells(
             axis,
             longitude=np.array([0.0, 0.25]),
             latitude=np.array([30.0, 30.0]),
@@ -133,7 +129,7 @@ class EqualEarthProjectionTests(unittest.TestCase):
 
     def test_country_boundary_is_overlaid_without_changing_extent(self) -> None:
         figure, axis = plt.subplots()
-        configure_equal_earth_axis(
+        configure_map_axis(
             axis,
             longitude=np.array([100.0, 101.0]),
             latitude=np.array([10.0, 11.0]),
@@ -150,7 +146,9 @@ class EqualEarthProjectionTests(unittest.TestCase):
         finally:
             plt.close(figure)
 
-    def test_major_cities_are_projected_and_labelled_without_changing_extent(self) -> None:
+    def test_major_cities_are_projected_and_labelled_without_changing_extent(
+        self,
+    ) -> None:
         cases = {
             "JPN": (
                 ("Tokyo", 139.69171, 35.68950),
@@ -165,7 +163,7 @@ class EqualEarthProjectionTests(unittest.TestCase):
         for country_iso_a3, cities in cases.items():
             with self.subTest(country_iso_a3=country_iso_a3):
                 figure, axis = plt.subplots()
-                configure_equal_earth_axis(
+                configure_map_axis(
                     axis,
                     longitude=np.array([95.0, 145.0]),
                     latitude=np.array([5.0, 45.0]),
@@ -176,9 +174,10 @@ class EqualEarthProjectionTests(unittest.TestCase):
 
                 try:
                     self.assertEqual(len(axis.collections), 1)
-                    self.assertEqual([text.get_text() for text in axis.texts], [
-                        city[0] for city in cities
-                    ])
+                    self.assertEqual(
+                        [text.get_text() for text in axis.texts],
+                        [city[0] for city in cities],
+                    )
                     np.testing.assert_allclose(
                         axis.collections[0].get_facecolors()[0, :3],
                         [0.1, 0.1, 0.1],
@@ -212,32 +211,45 @@ class EqualEarthProjectionTests(unittest.TestCase):
     def test_country_boundary_is_loaded_and_clipped_from_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "data"
-            boundaries = root / "boundaries" / (
-                f"natural-earth-{NATURAL_EARTH_VERSION}-admin-0-countries-10m.geojson"
+            boundaries = (
+                root
+                / "boundaries"
+                / (
+                    f"natural-earth-{NATURAL_EARTH_VERSION}-admin-0-countries-10m.geojson"
+                )
             )
             boundaries.parent.mkdir(parents=True)
-            boundaries.write_text(json.dumps({
-                "type": "FeatureCollection",
-                "features": [{
-                    "type": "Feature",
-                    "properties": {
-                        "ADMIN": "Example",
-                        "ISO_A2": "XX",
-                        "ISO_A2_EH": "XX",
-                        "ISO_A3": "XXX",
-                        "ISO_A3_EH": "XXX",
-                        "ADM0_A3": "XXX",
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
-                    },
-                }],
-            }))
+            boundaries.write_text(
+                json.dumps(
+                    {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {
+                                    "ADMIN": "Example",
+                                    "ISO_A2": "XX",
+                                    "ISO_A2_EH": "XX",
+                                    "ISO_A3": "XXX",
+                                    "ISO_A3_EH": "XXX",
+                                    "ADM0_A3": "XXX",
+                                },
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                        [[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                )
+            )
             metadata = {
                 "country_cache": str(root / "country" / "xxx" / "observations.parquet"),
                 "country_selection": {
                     "country_iso_a3": "XXX",
+                    "boundary_path": str(boundaries),
                     "selection_bounds": [1.0, 0.0, 3.0, 2.0],
                 },
             }

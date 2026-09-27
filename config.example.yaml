@@ -1,0 +1,131 @@
+# Copy to config.yaml (ignored by Git). Paths are relative to the repository.
+# YAML anchors (&name / *name) share values; each workflow can override them.
+shared:
+  runs: &runs [../HeatStressBench/.hsb/runs/REPLACE_WITH_ERA5_RUN]
+  start_date: &start 2025-01-01
+  end_date: &end 2025-12-31
+  implementations: &targets
+    - argonne-liljegren-c
+    - heatstress
+    - meteor
+    - thermofeel
+    - kwodzicki-pywbgt
+    - kong-huber-pywbgt
+  pairwise_implementations: &pair_targets
+    - argonne-liljegren-c
+    - heatstress
+    - kong-huber-pywbgt
+    - kwodzicki-pywbgt
+    - meteor
+    - thermofeel
+  boundary_cache: &boundaries data/boundaries
+  population: &population data/analysis/population/population.parquet
+
+# Run daily comparisons before annual aggregation.
+daily_pairwise:
+  hsb_run_paths: *runs
+  start_date: *start
+  end_date: *end
+  implementations: *pair_targets
+  sample_scope: all-implementations # or pairwise
+  output_root: &daily data/analysis/pairwise/daily
+  workers: 1
+  overwrite: false
+
+yearly_pairwise:
+  input_root: *daily
+  output_root: data/analysis/pairwise/yearly
+  start_date: *start
+  end_date: *end
+  implementations: *pair_targets
+  sample_scope: all-implementations
+  reference_implementation: argonne-liljegren-c
+  export_implementations:
+    - heatstress
+    - meteor
+    - thermofeel
+    - kwodzicki-pywbgt
+    - kong-huber-pywbgt
+
+# For a country product, set hsb_run_paths: null and country_cache to the
+# extracted observations.parquet; choose a separate output_root.
+quantiles:
+  hsb_run_paths: *runs
+  country_cache: null
+  start_date: *start
+  end_date: *end
+  implementations: *targets
+  output_root: &quantiles data/analysis/cellwise/quantiles
+  probabilities: [0.50, 0.95]
+  exact_validation_cells: 100
+  exact_validation_seed: 0
+  date_workers: 8
+  replay_workers: 2
+  overwrite: false
+
+population:
+  input_raster: data/population/landscan-global-2024/landscan-global-2024.tif
+  output_root: data/analysis/population
+  overwrite: false
+
+quantile_spread:
+  input_root: *quantiles
+  output_root: &spread data/analysis/cellwise/spread
+  quantities: [wbgt, tnwb, tg]
+  weighting: geometry # none, geometry, or population
+  population_weights_path: *population
+
+plot_quantile_spread:
+  output_root: *spread
+
+iso7243:
+  hsb_run_paths: *runs
+  country_cache: null
+  start_date: *start
+  end_date: *end
+  implementations: *targets
+  thresholds_c: [25, 26, 28, 30, 33]
+  sample_scope: all-implementations
+  output_root: &iso7243 data/analysis/cellwise/iso7243
+  date_workers: 8
+  batch_size: 250000
+  overwrite: false
+
+plot_iso7243:
+  input_root: *iso7243
+  output_directory: null # defaults to input_root/figures
+  population_weights_path: *population
+
+plot_non_consensus:
+  input_root: *iso7243
+  output_directory: null
+
+plot_non_consensus_stack:
+  input_root: *iso7243
+  output_directory: null
+  population_weights_path: *population
+
+country_cells:
+  country_codes: [JPN]
+  boundaries: null # use the cached pinned Natural Earth boundaries
+  boundary_cache: *boundaries
+  output: data/analysis/country/cells.csv
+
+extract_country:
+  country_codes: [JPN]
+  runs: *runs
+  start_date: *start
+  end_date: *end
+  output_directory: data/analysis/country
+  boundaries: null
+  boundary_cache: *boundaries
+  bounds: null # optional [west, south, east, north]; one country only
+  overwrite: false
+
+country_classification:
+  cache_path: data/analysis/country/jpn/observations.parquet
+  start_date: *start
+  end_date: *end
+  thresholds_c: [21, 25, 28, 31]
+  implementations: *targets
+  output_root: data/analysis/country/jpn/classification

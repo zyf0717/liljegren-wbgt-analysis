@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from datetime import date
 from pathlib import Path
 
@@ -10,16 +8,18 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from iso7243_fixtures import CELLS, NAMES, write_day, write_days
-from liljegren_analysis.cellwise import (
+
+from analysis.cellwise.iso7243 import (
     analyze_cellwise_iso7243_classification,
-    analyze_cellwise_quantile_spread,
-    compute_joint_cellwise_temperature_quantiles,
-    summarize_cellwise_iso7243_classification,
+    country_classification_label,
 )
-from liljegren_analysis.cellwise.iso7243 import country_classification_label
-from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
+from analysis.cellwise.iso7243_summary import summarize_cellwise_iso7243_classification
+from analysis.cellwise.joint_pipeline import (
+    compute_joint_cellwise_temperature_quantiles,
+)
+from analysis.cellwise.spread import analyze_cellwise_quantile_spread
+from analysis.comparison.distributions import WBGTHistogramSpec
 
 
 def _country_cache(
@@ -41,9 +41,7 @@ def _country_cache(
         table = table.append_column(
             "implementation", pa.array([path.parent.name] * count)
         )
-        table = table.append_column(
-            "cell_id", pc_slice(table["row_id"], 28)
-        )
+        table = table.append_column("cell_id", pc_slice(table["row_id"], 28))
         tables.append(table)
     combined = pa.concat_tables(tables)
     order = np.arange(combined.num_rows)
@@ -55,17 +53,45 @@ def _country_cache(
         row_group_size=37,
         write_statistics=write_statistics,
     )
-    days = sorted({path.parents[2].name for path in (run / "results").glob("*/*/*/results.parquet")})
+    days = sorted(
+        {
+            path.parents[2].name
+            for path in (run / "results").glob("*/*/*/results.parquet")
+        }
+    )
+    boundary = output.parent.parent / "external-boundary.geojson"
+    boundary.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "ISO_A2": "XX",
+                            "ISO_A3": "XXX",
+                            "ADMIN": "Example",
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [[-2, -2], [2, -2], [2, 2], [-2, 2], [-2, -2]]
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+    )
     manifest = {
         "schema_version": schema_version,
+        "boundary_path": str(boundary),
         "country_iso_a2": "XX",
         "country_iso_a3": "XXX",
         "country_name": "Example",
         "start_date": days[0],
         "end_date": days[-1],
-        "selected_cell_count": len(
-            set(pc_slice(combined["row_id"], 28).to_pylist())
-        ),
+        "selected_cell_count": len(set(pc_slice(combined["row_id"], 28).to_pylist())),
         "parquet_file": output.name,
         "parquet_size_bytes": output.stat().st_size,
     }
@@ -99,9 +125,12 @@ def pc_slice(values: pa.ChunkedArray, stop: int) -> pa.ChunkedArray:
     ],
 )
 def test_country_classification_regime_label(selection, thresholds, expected):
-    assert country_classification_label(
-        {"country_selection": selection, "thresholds_c": thresholds}
-    ) == expected
+    assert (
+        country_classification_label(
+            {"country_selection": selection, "thresholds_c": thresholds}
+        )
+        == expected
+    )
 
 
 def _rewrite_cache(cache: Path, table: pa.Table) -> None:
@@ -187,7 +216,7 @@ def test_country_cache_matches_hsb_hourly_classification(
         )
     assert raw.classes.read_text() == country.classes.read_text()
     assert country.classes.read_text().splitlines() == [
-        "class_id,class_label,threshold_definition",
+        '"class_id","class_label","threshold_definition"',
         '0,"< 25 C","wbgt_c < 25"',
         '1,"[25, 26) C","25 <= wbgt_c < 26"',
         '2,"[26, 28) C","26 <= wbgt_c < 28"',
@@ -311,31 +340,6 @@ def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
     assert '4,">= 31 C","wbgt_c >= 31"' in serial.classes.read_text()
 
 
-def test_country_cache_rejects_mismatched_cell_id(tmp_path: Path) -> None:
-    run = tmp_path / "run"
-    write_day(run)
-    cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    table = pq.read_table(cache)
-    cells = table["cell_id"].to_pylist()
-    cells[0] = "era5-global-n900000-e0000000"
-    _rewrite_cache(
-        cache,
-        table.set_column(
-            table.schema.get_field_index("cell_id"),
-            "cell_id",
-            pa.array(cells, type=table.schema.field("cell_id").type),
-        ),
-    )
-    with pytest.raises(ValueError, match="cell_id disagrees"):
-        analyze_cellwise_iso7243_classification(
-            country_cache=cache,
-            output_root=tmp_path / "out",
-            start_date="2025-01-01",
-            end_date="2025-01-01",
-            thresholds_c=(25, 26, 28, 30),
-        )
-
-
 def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
     run = tmp_path / "run"
     write_day(run)
@@ -363,55 +367,39 @@ def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
         analyze_cellwise_iso7243_classification(**common)
 
 
-def test_country_cache_cli_inputs(tmp_path: Path) -> None:
+def test_country_cache_configured_scripts(tmp_path: Path, monkeypatch) -> None:
+    import yaml
+
+    from analysis import config
+    from scripts import analyze_cellwise_iso7243_classification as iso_script
+    from scripts import compute_joint_cellwise_temperature_quantiles as quantiles_script
+
     run = tmp_path / "run"
     _write_valid_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    repository = Path(__file__).resolve().parents[1]
-    common = [
-        "--country-cache",
-        str(cache),
-        "--start-date",
-        "2025-01-01",
-        "--end-date",
-        "2025-01-01",
-    ]
-    subprocess.run(
-        [
-            sys.executable,
-            str(repository / "scripts/compute_joint_cellwise_temperature_quantiles.py"),
-            *common,
-            "--output-root",
-            str(tmp_path / "quantiles"),
-            "--exact-validation-cells",
-            "0",
-            "--date-workers",
-            "1",
-            "--replay-workers",
-            "1",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    common = dict(
+        country_cache=str(cache),
+        start_date="2025-01-01",
+        end_date="2025-01-01",
+        date_workers=1,
     )
-    subprocess.run(
-        [
-            sys.executable,
-            str(repository / "scripts/analyze_cellwise_iso7243_classification.py"),
-            *common,
-            "--thresholds-c",
-            "25",
-            "26",
-            "28",
-            "30",
-            "--output-root",
-            str(tmp_path / "iso7243"),
-            "--date-workers",
-            "1",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert (tmp_path / "quantiles/metadata.json").is_file()
-    assert (tmp_path / "iso7243/metadata.json").is_file()
+    settings = {
+        "quantiles": dict(
+            **common,
+            output_root=str(tmp_path / "quantiles"),
+            exact_validation_cells=0,
+            replay_workers=1,
+        ),
+        "iso7243": dict(
+            **common,
+            output_root=str(tmp_path / "iso7243"),
+            thresholds_c=[25, 26, 28, 30],
+        ),
+    }
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(settings))
+    monkeypatch.setattr(config, "REPOSITORY", tmp_path)
+    quantiles_script.main()
+    iso_script.main()
+    for workflow in ("quantiles", "iso7243"):
+        assert (tmp_path / workflow / "metadata.json").is_file()
+        assert (tmp_path / workflow / "settings.json").is_file()

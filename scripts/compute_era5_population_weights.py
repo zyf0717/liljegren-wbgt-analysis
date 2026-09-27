@@ -1,30 +1,15 @@
-#!/usr/bin/env python3
-"""Aggregate LandScan population counts onto the global ERA5 grid."""
+"""Run population using config.yaml."""
 
-from __future__ import annotations
-
-import argparse
-from pathlib import Path
-
-from liljegren_analysis.cellwise.population import (
-    DEFAULT_LANDSCAN_PATH,
-    DEFAULT_OUTPUT_ROOT,
-    compute_era5_population_weights,
-)
+from analysis.cellwise.population import compute_era5_population_weights
+from analysis.config import load_settings
+from analysis.io.artifacts import save_settings
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-raster", type=Path, default=DEFAULT_LANDSCAN_PATH)
-    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--force", action="store_true")
-    arguments = parser.parse_args()
-    outputs = compute_era5_population_weights(
-        arguments.input_raster,
-        output_root=arguments.output_root,
-        force=arguments.force,
-    )
-    print(outputs.population)
+    settings = load_settings("population")
+    result = compute_era5_population_weights(**settings)
+    save_settings(settings, settings["output_root"])
+    print(result)
 
 
 if __name__ == "__main__":

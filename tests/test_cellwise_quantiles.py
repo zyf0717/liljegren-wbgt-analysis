@@ -4,10 +4,10 @@ import unittest
 
 import numpy as np
 
-from liljegren_analysis.cellwise import DEFAULT_PROBABILITIES
-from liljegren_analysis.cellwise.quantiles import quantile_table
-from liljegren_analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
-from liljegren_analysis.comparison.statistics import histogram_quantile_bin_indices
+from analysis.cellwise.quantiles import quantile_table
+from analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
+from analysis.comparison.statistics import histogram_quantile_bin_indices
+from analysis.config import DEFAULT_PROBABILITIES
 
 
 class CellwiseQuantileTests(unittest.TestCase):

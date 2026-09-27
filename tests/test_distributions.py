@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from liljegren_analysis.comparison.distributions import (
+from analysis.comparison.distributions import (
     absolute_difference_bin_bounds,
 )
 
@@ -18,6 +18,7 @@ class DistributionBinTests(unittest.TestCase):
         self.assertEqual(absolute_difference_bin_bounds(320), (20.0, 21.0))
         self.assertEqual(absolute_difference_bin_bounds(399), (99.0, 100.0))
         self.assertEqual(absolute_difference_bin_bounds(400), (100.0, None))
+
 
 if __name__ == "__main__":
     unittest.main()

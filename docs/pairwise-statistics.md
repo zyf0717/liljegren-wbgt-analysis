@@ -1,12 +1,13 @@
 # Single-pass daily-to-annual pairwise statistics
 
-`compute_daily_pairwise()` performs one date-scoped Polars lazy scan for WBGT,
-Tg, and Tnwb. A materialized base relation joins ERA5 latitude weights before any
+`compute_daily_pairwise(date, files, ...)` accepts preselected result records
+and performs a date-scoped Polars lazy scan for WBGT,
+Tg, and Tnwb. A shared lazy base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
 one self-join and expands quantities afterward. Complete-case scope selects the
 configured six-implementation inventory, aggregates all three quantities in
 one grouped pass, then expands 15 pairs after the 6:1 reduction.
-`persist_daily_pairwise()` validates and atomically replaces one Parquet date
+`persist_daily_pairwise()` atomically replaces one Parquet date
 directory containing all three summary tables.
 
 ## Population selection
@@ -22,7 +23,7 @@ quantity.
 Input roots are enumerated by `(run_id, implementation)` before scanning.
 Overlapping scopes are rejected to prevent many-to-many joins.
 
-## Schema-v7 Parquet date tables
+## Parquet date tables
 
 `daily_pairwise`, keyed by date, quantity, and implementation pair, contains
 authoritative sufficient statistics:
@@ -61,7 +62,7 @@ joint-validity agreement filter.
 `analyze_yearly_pairwise()` reads a requested range of completed date
 partitions, checks pair and implementation coverage, and writes the pooled
 pairwise table, quantity coverage, metadata, and reference-comparison workbook.
-The CLI in `scripts/analyze_yearly_pairwise.py` is a thin wrapper over this API.
+The yearly script and notebook call this function with settings from `config.yaml`.
 
 For count (N), signed sum (S_1), squared sum (S_2), and absolute sum
 (S_A):
@@ -84,8 +85,8 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-`metadata.json` records schema version 7, result-schema ID, sample scope,
-quantity-set version, the exact configured implementation cohort, and histogram
-version.
+`metadata.json` records the result-schema ID, sample scope, exact configured
+implementation cohort, and histogram definition version. The workflow resume
+manifest records the selected dates and input identity.
 Each completed date contains three Parquet files and a manifest written last;
 incomplete directories are not valid inputs.

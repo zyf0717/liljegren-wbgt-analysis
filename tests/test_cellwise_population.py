@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import tempfile
 import unittest
@@ -14,7 +13,8 @@ import xarray as xr
 from affine import Affine
 from rasterio.windows import Window
 
-from liljegren_analysis.cellwise import population
+from analysis.cellwise import population
+from analysis.grid import source_cell_id
 
 
 def latitude_band(values: np.ndarray) -> xr.DataArray:
@@ -33,11 +33,18 @@ def latitude_band(values: np.ndarray) -> xr.DataArray:
 
 
 class CellwisePopulationTests(unittest.TestCase):
-    def test_population_alignment_preserves_order_integer_counts_and_dataset_total(self) -> None:
+    def test_population_alignment_preserves_order_integer_counts_and_dataset_total(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "population.parquet"
             pq.write_table(
-                pa.table({"source_cell_id": ["b", "extra", "a"], "population": [0, 7, 9_000_000_000]}),
+                pa.table(
+                    {
+                        "source_cell_id": ["b", "extra", "a"],
+                        "population": [0, 7, 9_000_000_000],
+                    }
+                ),
                 path,
             )
             weights, total = population.load_population_weights(["a", "b"], path)
@@ -60,7 +67,9 @@ class CellwisePopulationTests(unittest.TestCase):
                 (["a", "b"], [1.0, 1.5]),
             ):
                 with self.subTest(ids=ids, counts=counts):
-                    pq.write_table(pa.table({"source_cell_id": ids, "population": counts}), path)
+                    pq.write_table(
+                        pa.table({"source_cell_id": ids, "population": counts}), path
+                    )
                     with self.assertRaises(ValueError):
                         population.load_population_weights(["a"], path)
 
@@ -76,8 +85,20 @@ class CellwisePopulationTests(unittest.TestCase):
         values = np.zeros((1, 43_200), dtype=np.int32)
         # Pixel centers immediately either side of the first two cell boundaries,
         # Greenwich's boundaries, and the dateline cell's western boundary.
-        columns = [0, 14, 15, 44, 45, 21_584, 21_585, 21_614, 21_615,
-                   43_184, 43_185, 43_199]
+        columns = [
+            0,
+            14,
+            15,
+            44,
+            45,
+            21_584,
+            21_585,
+            21_614,
+            21_615,
+            43_184,
+            43_185,
+            43_199,
+        ]
         values[0, columns] = 2 ** np.arange(len(columns))
         expected = np.zeros(1_440, dtype=np.int64)
         expected[0] = 1 + 2 + 1024 + 2048
@@ -120,9 +141,15 @@ class CellwisePopulationTests(unittest.TestCase):
 
     def test_raster_validation_rejects_invalid_grids_and_counts(self) -> None:
         profile = dict(
-            driver="GTiff", width=43_200, height=21_600, count=1, dtype="int32",
-            crs="EPSG:4326", nodata=population.LANDSCAN_NODATA,
-            transform=Affine(1 / 120, 0, -180, 0, -1 / 120, 90), sparse_ok=True,
+            driver="GTiff",
+            width=43_200,
+            height=21_600,
+            count=1,
+            dtype="int32",
+            crs="EPSG:4326",
+            nodata=population.LANDSCAN_NODATA,
+            transform=Affine(1 / 120, 0, -180, 0, -1 / 120, 90),
+            sparse_ok=True,
         )
         for changes, message in [
             ({"count": 2}, "one band"),
@@ -140,11 +167,9 @@ class CellwisePopulationTests(unittest.TestCase):
                         population._validate_landscan_raster(source)
 
     def test_source_cell_ids_follow_era5_convention(self) -> None:
+        self.assertEqual(source_cell_id(0, 0), "era5-global-n000000-e0000000")
         self.assertEqual(
-            population._source_cell_id(0, 0), "era5-global-n000000-e0000000"
-        )
-        self.assertEqual(
-            population._source_cell_id(-900_000, -1_800_000),
+            source_cell_id(-900_000, -1_800_000),
             "era5-global-s900000-w1800000",
         )
 
@@ -180,7 +205,8 @@ class CellwisePopulationTests(unittest.TestCase):
             )
             table = pq.read_table(outputs.population)
             self.assertEqual(
-                table.column_names, ["source_cell_id", "latitude", "longitude", "population"]
+                table.column_names,
+                ["source_cell_id", "latitude", "longitude", "population"],
             )
             actual = table["population"].to_numpy().reshape(721, 1440)
             # Independent geographic assignment covers all row boundaries,
@@ -207,12 +233,12 @@ class CellwisePopulationTests(unittest.TestCase):
             self.assertNotIn("population_weight_definition", metadata)
             self.assertEqual(metadata["population_total"], int(expected.sum()))
             self.assertEqual(metadata["era5_cell_count"], 721 * 1440)
-            with raster.open("rb") as stream:
-                self.assertEqual(
-                    metadata["source_sha256"], hashlib.file_digest(stream, "sha256").hexdigest()
-                )
+            self.assertEqual(metadata["source_size_bytes"], raster.stat().st_size)
+            self.assertEqual(metadata["source_mtime_ns"], raster.stat().st_mtime_ns)
             with self.assertRaises(FileExistsError):
-                population.compute_era5_population_weights(raster, output_root=root / "output")
+                population.compute_era5_population_weights(
+                    raster, output_root=root / "output"
+                )
 
 
 if __name__ == "__main__":

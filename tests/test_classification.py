@@ -6,14 +6,10 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+from reference_classification import analyze_wbgt_classification
 
-from liljegren_analysis.cellwise import DEFAULT_JOINT_IMPLEMENTATIONS
-from liljegren_analysis.classification import (
-    DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
-    analyze_era5_country_cache,
-    analyze_nasa_power_run,
-    analyze_wbgt_classification,
-)
+from analysis.classification.era5 import analyze_era5_country_cache
+from analysis.config import DEFAULT_IMPLEMENTATIONS
 
 
 class ClassificationTests(unittest.TestCase):
@@ -73,7 +69,7 @@ class ClassificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / "observations.parquet"
             rows = []
-            for implementation in (*DEFAULT_CLASSIFICATION_IMPLEMENTATIONS, "extra"):
+            for implementation in (*DEFAULT_IMPLEMENTATIONS, "extra"):
                 rows.extend(
                     {
                         "result_date": date(2025, 1, 1),
@@ -92,9 +88,7 @@ class ClassificationTests(unittest.TestCase):
                     for row_id, value in (
                         (
                             "one",
-                            24.0
-                            if implementation == "argonne-liljegren-c"
-                            else 26.0,
+                            24.0 if implementation == "argonne-liljegren-c" else 26.0,
                         ),
                         ("two", 30.0),
                     )
@@ -106,31 +100,25 @@ class ClassificationTests(unittest.TestCase):
                 cache, date(2025, 1, 1), date(2025, 1, 1), (25.0,)
             )
 
-            self.assertEqual(analysis.observation_summary.loc[0, "result_rows"], 12)
             self.assertEqual(
-                analysis.observation_summary.loc[0, "implementations"],
-                len(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
+                analysis["observation_summary.csv"].loc[0, "result_rows"], 12
             )
-            self.assertIsNone(analysis.classification.classified)
-            self.assertIsNone(analysis.classification.paired)
-            pair_summary = analysis.classification.outputs[
-                "pair_change_summary.csv"
-            ]
+            self.assertEqual(
+                analysis["observation_summary.csv"].loc[0, "implementations"],
+                len(DEFAULT_IMPLEMENTATIONS),
+            )
+            pair_summary = analysis["pair_change_summary.csv"]
             pair = pair_summary.loc[
                 pair_summary["implementation_a"].eq("argonne-liljegren-c")
                 & pair_summary["implementation_b"].eq("heatstress")
             ].iloc[0]
+            self.assertEqual(pair["n_changed"], 1)
             self.assertEqual(
-                pair["n_changed"], 1
-            )
-            self.assertEqual(
-                analysis.outputs["non_consensus_summary.csv"].loc[
-                    0, "n_non_consensus"
-                ],
+                analysis["non_consensus_summary.csv"].loc[0, "n_non_consensus"],
                 1,
             )
             selected = source.loc[
-                source["implementation"].isin(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS)
+                source["implementation"].isin(DEFAULT_IMPLEMENTATIONS)
             ].copy()
             expected = analyze_wbgt_classification(
                 selected,
@@ -143,84 +131,28 @@ class ClassificationTests(unittest.TestCase):
                     "cell_id",
                 ],
                 month_column="result_date",
-                implementations=DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
+                implementations=DEFAULT_IMPLEMENTATIONS,
             )
             for filename, expected_frame in expected.outputs.items():
                 pd.testing.assert_frame_equal(
-                    analysis.classification.outputs[filename],
+                    analysis[filename],
                     expected_frame,
                     check_dtype=False,
                 )
-
-    def test_nasa_adapter_loads_matched_result_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "dataset").mkdir()
-            pd.DataFrame(
-                {
-                    "row_id": ["one", "two"],
-                    "location_id": ["alpha", "alpha"],
-                    "interval_start_utc": [
-                        "2025-01-01T00:00:00Z",
-                        "2025-01-01T01:00:00Z",
-                    ],
-                    "longitude_deg_east": [0.0, 0.0],
-                    "latitude_deg_north": [0.0, 0.0],
-                }
-            ).to_csv(root / "dataset" / "workload.csv", index=False)
-            for implementation in (*DEFAULT_CLASSIFICATION_IMPLEMENTATIONS, "extra"):
-                values = (
-                    [24.0, 30.0]
-                    if implementation == "argonne-liljegren-c"
-                    else [26.0, 30.0]
-                )
-                directory = root / "results" / "2025" / "0001" / implementation
-                directory.mkdir(parents=True)
-                pd.DataFrame(
-                    {
-                        "cycle_ordinal": [1, 1],
-                        "row_id": ["one", "two"],
-                        "row_ordinal": [1, 2],
-                        "wbgt_status": ["ok", "ok"],
-                        "wbgt_c": values,
-                    }
-                ).to_parquet(directory / "results.parquet")
-
-            analysis = analyze_nasa_power_run(
-                root,
-                date(2025, 1, 1),
-                date(2025, 1, 1),
-                (25.0,),
-                location_ids=["alpha"],
-            )
-
-            self.assertEqual(analysis.workload_summary.loc[0, "workload_rows"], 2)
-            self.assertEqual(
-                set(analysis.status_summary["implementation"]),
-                set(DEFAULT_CLASSIFICATION_IMPLEMENTATIONS),
-            )
-            pair_summary = analysis.outputs["location_pair_change_summary.csv"]
-            pair = pair_summary.loc[
-                pair_summary["implementation_a"].eq("argonne-liljegren-c")
-                & pair_summary["implementation_b"].eq("heatstress")
-            ].iloc[0]
-            self.assertEqual(
-                pair["n_changed"], 1
-            )
-            self.assertEqual(
-                analysis.outputs["location_non_consensus_summary.csv"].loc[
-                    0, "n_non_consensus"
-                ],
-                1,
-            )
 
     def test_era5_streaming_matches_shared_engine_across_months(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / "observations.parquet"
             rows = []
             for result_date, samples in (
-                (date(2025, 1, 31), (("one", (24.0, 26.0, 24.0)), ("two", (30.0,) * 3))),
-                (date(2025, 2, 1), (("three", (24.0, 26.0, None)), ("four", (30.0,) * 3))),
+                (
+                    date(2025, 1, 31),
+                    (("one", (24.0, 26.0, 24.0)), ("two", (30.0,) * 3)),
+                ),
+                (
+                    date(2025, 2, 1),
+                    (("three", (24.0, 26.0, None)), ("four", (30.0,) * 3)),
+                ),
             ):
                 for implementation_index, implementation in enumerate(("a", "b", "c")):
                     for row_id, values in samples:
@@ -268,7 +200,7 @@ class ClassificationTests(unittest.TestCase):
 
             for filename, expected_frame in expected.outputs.items():
                 pd.testing.assert_frame_equal(
-                    analysis.classification.outputs[filename],
+                    analysis[filename],
                     expected_frame,
                     check_dtype=False,
                 )
@@ -307,20 +239,12 @@ class ClassificationTests(unittest.TestCase):
                 .rename(columns={"size": "n"})
             )
             pd.testing.assert_frame_equal(
-                analysis.quantity_coverage, coverage, check_dtype=False
+                analysis["quantity_coverage.csv"], coverage, check_dtype=False
             )
             self.assertEqual(
-                analysis.outputs["monthly_non_consensus_summary.csv"][
-                    "n_joint"
-                ].tolist(),
+                analysis["monthly_non_consensus_summary.csv"]["n_joint"].tolist(),
                 [2, 1],
             )
-
-    def test_country_classification_default_matches_iso7243_targets(self) -> None:
-        self.assertEqual(
-            DEFAULT_CLASSIFICATION_IMPLEMENTATIONS,
-            DEFAULT_JOINT_IMPLEMENTATIONS,
-        )
 
 
 if __name__ == "__main__":

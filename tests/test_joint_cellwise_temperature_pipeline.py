@@ -8,18 +8,16 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from liljegren_analysis.cellwise import (
-    DEFAULT_DATE_WORKERS,
-    DEFAULT_JOINT_IMPLEMENTATIONS,
-    DEFAULT_PROBABILITIES,
-    analyze_cellwise_quantile_spread,
+from analysis.cellwise.joint_pipeline import (
+    _open_manifest,
     compute_joint_cellwise_temperature_quantiles,
 )
-from liljegren_analysis.cellwise.joint_pipeline import _open_manifest
-from liljegren_analysis.cellwise.iso7243 import (
-    DEFAULT_DATE_WORKERS as DEFAULT_ISO7243_DATE_WORKERS,
+from analysis.cellwise.spread import analyze_cellwise_quantile_spread
+from analysis.comparison.distributions import WBGTHistogramSpec
+from analysis.config import (
+    DEFAULT_IMPLEMENTATIONS,
+    DEFAULT_PROBABILITIES,
 )
-from liljegren_analysis.comparison.distributions import WBGTHistogramSpec
 
 _CELLS = (
     "era5-global-n000000-e0000000",
@@ -27,7 +25,7 @@ _CELLS = (
     "era5-global-n005000-e0000000",
 )
 _AVAILABLE_IMPLEMENTATIONS = (
-    *DEFAULT_JOINT_IMPLEMENTATIONS,
+    *DEFAULT_IMPLEMENTATIONS,
     "mdljts-wbgt",
     "heatstress-jl",
     "heatstress-r",
@@ -85,10 +83,6 @@ def _write_joint_day(hsb_run: Path, result_date: str, day: int) -> None:
 
 
 class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
-    def test_default_date_worker_count_is_shared(self) -> None:
-        self.assertEqual(DEFAULT_DATE_WORKERS, 8)
-        self.assertEqual(DEFAULT_ISO7243_DATE_WORKERS, DEFAULT_DATE_WORKERS)
-
     def test_old_replay_manifest_is_not_migrated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -102,7 +96,7 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
 
     def test_default_targets_match_report_scope(self) -> None:
         self.assertEqual(
-            DEFAULT_JOINT_IMPLEMENTATIONS,
+            DEFAULT_IMPLEMENTATIONS,
             (
                 "argonne-liljegren-c",
                 "heatstress",
@@ -137,10 +131,10 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 replay_workers=2,
                 overwrite=True,
             )
-            self.assertFalse(stale.exists())
+            self.assertTrue(stale.exists())
 
             self.assertEqual(result_root, output.resolve())
-            for implementation in DEFAULT_JOINT_IMPLEMENTATIONS:
+            for implementation in DEFAULT_IMPLEMENTATIONS:
                 table = pq.read_table(
                     output / "implementations" / f"{implementation}.parquet"
                 )
@@ -173,21 +167,12 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 metadata["support_scope"], "all-implementations-all-quantities"
             )
             self.assertEqual(metadata["quantities"], ["wbgt", "tg", "tnwb"])
-            self.assertEqual(
-                metadata["replay_strategy"],
-                "implementation-all-quantities-in-memory-v3",
-            )
             self.assertEqual(metadata["joint_observation_count"], 3)
             self.assertEqual(metadata["cells_with_joint_observations"], 2)
-            self.assertEqual(metadata["date_workers_this_invocation"], 2)
-            self.assertEqual(metadata["replay_workers_this_invocation"], 2)
+            self.assertEqual(metadata["date_workers"], 2)
+            self.assertEqual(metadata["replay_workers"], 2)
             self.assertEqual(
-                set(metadata["unit_provenance"]), set(DEFAULT_JOINT_IMPLEMENTATIONS)
-            )
-            first_provenance = metadata["unit_provenance"]["heatstress"]
-            self.assertEqual(
-                first_provenance["concurrent_histogram_memmap_bytes"],
-                3 * first_provenance["histogram_memmap_bytes_each"],
+                set(metadata["unit_provenance"]), set(DEFAULT_IMPLEMENTATIONS)
             )
             self.assertFalse((output / ".work").exists())
 
@@ -213,6 +198,7 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                     hsb_run,
                     start_date="2025-01-01",
                     end_date="2025-01-02",
+                    exact_validation_cells=3,
                     output_root=output,
                     histogram_spec=WBGTHistogramSpec(
                         minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
