@@ -8,15 +8,15 @@ from datetime import date
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 
-from ..grid import CellGrid
+from ..grid import CellGrid, identity_batch
 from ..results import (
     RESULT_COLUMNS,
     RESULT_QUANTITIES,
     CellwiseSource,
     ResultQuantity,
     iter_source_batches,
+    valid_quantity,
 )
 
 HOURS_PER_DAY = 24
@@ -36,41 +36,14 @@ class JointMaskCache:
         return ((packed[byte_ids] >> bit_ids) & 1).astype(bool, copy=False)
 
 
-def identity_batch(
-    batch: pa.RecordBatch, *, source_cell_ids: pa.Array
-) -> tuple[np.ndarray, ...]:
-    row_ids = batch.column("row_id")
-    cells = pc.index_in(
-        pc.utf8_slice_codeunits(row_ids, 0, 28), value_set=source_cell_ids
-    )
-    # A changed cell universe would make the dense cell/hour index invalid.
-    if cells.null_count:
-        raise ValueError("Result contains cells outside the analysis grid")
-    hours = pc.cast(pc.utf8_slice_codeunits(row_ids, 37, 39), pa.uint8())
-    return (
-        np.asarray(cells, dtype=np.int64),
-        np.asarray(hours, dtype=np.int64),
-        np.asarray(batch.column("cycle_ordinal"), dtype=np.uint32),
-        np.asarray(batch.column("row_ordinal"), dtype=np.uint32),
-    )
-
-
 def quantity_values_and_validity(
     batch: pa.RecordBatch,
 ) -> tuple[dict[ResultQuantity, np.ndarray], dict[ResultQuantity, np.ndarray]]:
     values: dict[ResultQuantity, np.ndarray] = {}
     valid: dict[ResultQuantity, np.ndarray] = {}
-    for index, quantity in enumerate(RESULT_QUANTITIES):
-        value_array = pc.cast(batch.column(4 + index * 2), pa.float64(), safe=True)
-        valid_array = pc.fill_null(
-            pc.and_(
-                pc.equal(batch.column(3 + index * 2), "ok"),
-                pc.is_finite(value_array),
-            ),
-            False,
-        )
-        values[quantity] = value_array.to_numpy(zero_copy_only=False)
-        valid[quantity] = valid_array.to_numpy(zero_copy_only=False)
+    for quantity in RESULT_QUANTITIES:
+        values[quantity] = np.asarray(batch[quantity + "_c"], dtype=np.float64)
+        valid[quantity] = valid_quantity(batch, quantity)
     return values, valid
 
 

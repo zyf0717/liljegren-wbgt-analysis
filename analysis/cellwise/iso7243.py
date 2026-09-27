@@ -15,12 +15,12 @@ from zipfile import BadZipFile
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from analysis.config import DEFAULT_IMPLEMENTATIONS
 
 from ..classification.core import class_definitions, validate_thresholds
+from ..classification.daily import load_daily_classes
 from ..config import (
     DEFAULT_DATE_WORKERS,
     DEFAULT_ISO7243_OUTPUT_ROOT,
@@ -41,18 +41,15 @@ from ..results import (
     build_source_grid,
     current_source_fingerprint,
     date_range,
-    iter_source_batches,
     resolve_source,
     source_metadata,
 )
-from ._joint_io import identity_batch
 
 ISO7243_SCHEMA_VERSION = 2
 ANALYSIS = "iso7243-hourly-wbgt-classification-v2"
 SUPPORT_SCOPE = "all-implementations-wbgt-only"
 PAIRWISE_SUPPORT_SCOPE = "pairwise-wbgt-only"
 DEFAULT_BATCH_SIZE = 250_000
-_COLUMNS = ("cycle_ordinal", "row_id", "row_ordinal", "wbgt_status", "wbgt_c")
 
 
 @dataclass(frozen=True)
@@ -350,71 +347,31 @@ def _run_day(day: date) -> None:
 
 
 def _scan_day(state: ClassificationState, day: date) -> np.ndarray:
-    names, thresholds = state.names, state.thresholds
-    cell_count, sample_scope = state.cell_count, state.sample_scope
+    names, cell_count, sample_scope = state.names, state.cell_count, state.sample_scope
+    classes = load_daily_classes(
+        state.source,
+        day,
+        names,
+        state.thresholds,
+        state.source_ids,
+        batch_size=state.batch_size,
+    ).classes
+    validity = classes >= 0
+    joint = validity.all(axis=0)
     size = cell_count * 24
-    class_dtype = np.min_scalar_type(len(thresholds))
-    classes = np.zeros((len(names), size), dtype=class_dtype)
-    validity = (
-        np.zeros((len(names), size), dtype=bool) if sample_scope == "pairwise" else None
-    )
-    joint = np.ones(size, dtype=bool)
-    reference_seen = np.zeros(size, dtype=bool)
-    reference = np.zeros((3, size), dtype=np.uint32)
-    scopes: dict[str, int] = {}
-    for index, name in enumerate(names):
-        seen = np.zeros(size, dtype=bool)
-        for item in iter_source_batches(
-            state.source, day, name, _COLUMNS, batch_size=state.batch_size
-        ):
-            batch = item.batch
-            scope = scopes.setdefault(item.run_id, len(scopes) + 1)
-            cells, hours, cycles, ordinals = identity_batch(
-                batch,
-                source_cell_ids=state.source_ids,
-            )
-            flat = cells * 24 + hours
-            if len(np.unique(flat)) != len(flat) or seen[flat].any():
-                raise ValueError(f"Duplicate cell/hour identity for {name} on {day}")
-            seen[flat] = True
-            known = reference_seen[flat]
-            if (
-                np.any(reference[0, flat[known]] != scope)
-                or np.any(reference[1, flat[known]] != cycles[known])
-                or np.any(reference[2, flat[known]] != ordinals[known])
-            ):
-                raise ValueError(f"Conflicting result provenance for {name} on {day}")
-            fresh = flat[~known]
-            reference[0, fresh] = scope
-            reference[1, fresh] = cycles[~known]
-            reference[2, fresh] = ordinals[~known]
-            reference_seen[flat] = True
-            values = batch.column("wbgt_c")
-            valid = pc.fill_null(
-                pc.and_(
-                    pc.equal(batch.column("wbgt_status"), "ok"),
-                    pc.is_finite(values),
-                ),
-                False,
-            ).to_numpy(zero_copy_only=False)
-            joint[flat] &= valid
-            if validity is not None:
-                validity[index, flat] = valid
-            classes[index, flat[valid]] = np.searchsorted(
-                thresholds,
-                values.to_numpy(zero_copy_only=False)[valid],
-                side="right",
-            ).astype(class_dtype)
-        joint &= seen
     pairs = tuple(combinations(range(len(names)), 2))
     stride = 3 if sample_scope == "pairwise" else 2
     counts = np.empty((2 + stride * len(pairs), cell_count), dtype=np.uint8)
     counts[0] = joint.reshape(cell_count, 24).sum(axis=1, dtype=np.uint8)
     non_consensus = np.zeros(size, dtype=bool)
     for index, (a, b) in enumerate(pairs):
-        supported = joint if validity is None else validity[a] & validity[b]
+        supported = (
+            joint
+            if sample_scope == "all-implementations"
+            else validity[a] & validity[b]
+        )
         offset = 2 + stride * index
-        if validity is not None:
+        if sample_scope == "pairwise":
             counts[offset] = supported.reshape(cell_count, 24).sum(
                 axis=1, dtype=np.uint8
             )

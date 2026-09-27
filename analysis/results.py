@@ -9,6 +9,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -130,22 +131,28 @@ def resolve_source(
         for item in inventory:
             grouped.setdefault((item.result_date, item.implementation), []).append(item)
         files = {key: tuple(items) for key, items in grouped.items()}
-        for day in dates:
-            reference = None
-            for name in implementations:
-                shards = files.get((day, name), ())
-                scopes = tuple(sorted(item.run_id for item in shards))
-                if not scopes:
-                    raise ValueError(f"Missing {name} result shards on {day}")
-                if reference is not None and scopes != reference:
-                    raise ValueError(f"Implementation shard scopes differ on {day}")
-                reference = scopes
+        _check_scopes(
+            {key: tuple(item.run_id for item in items) for key, items in files.items()},
+            dates,
+            implementations,
+        )
         return HSBSource(
             runs,
             files,
             input_fingerprint(tuple(sorted(item.path for item in inventory))),
         )
-    return _country_source(Path(country_cache), dates, implementations)
+    source = open_country_cache(Path(country_cache))
+    if (
+        date.fromisoformat(source.manifest["start_date"]) > dates[0]
+        or date.fromisoformat(source.manifest["end_date"]) < dates[-1]
+    ):
+        raise ValueError("Requested dates exceed the country cache range")
+    _check_scopes(
+        {key: tuple(run for run, _ in groups) for key, groups in source.scopes.items()},
+        dates,
+        implementations,
+    )
+    return source
 
 
 def iter_source_batches(
@@ -237,7 +244,7 @@ def _iter_country_batches(
     batch_size: int,
 ):
     reader = _country_reader(str(source.path), source.fingerprint)
-    routed = source.scopes[current_date, implementation]
+    routed = source.scopes.get((current_date, implementation), ())
     row_groups = sorted({group for _, groups in routed for group in groups})
     read_columns = list(dict.fromkeys((*columns, *_ROUTING_COLUMNS)))
     day = pa.scalar(current_date, type=pa.date32())
@@ -266,34 +273,21 @@ def _iter_country_batches(
                 yield SourceBatch(result_batch, run_id)
 
 
-def _country_source(
-    raw_path: Path,
-    dates: tuple[date, ...],
-    implementations: tuple[str, ...],
-) -> CountryParquetSource:
+def open_country_cache(raw_path: Path) -> CountryParquetSource:
     path = raw_path.expanduser().resolve()
     manifest_path = path.with_name("manifest.json")
     manifest = json.loads(manifest_path.read_text())
-    if (
-        date.fromisoformat(manifest["start_date"]) > dates[0]
-        or date.fromisoformat(manifest["end_date"]) < dates[-1]
-    ):
-        raise ValueError("Requested dates exceed the country cache range")
     manifest_fingerprint = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     fingerprint = _country_fingerprint(path, manifest_fingerprint)
     if "scopes" not in manifest:
         raise ValueError(
             "Country cache lacks routing metadata; re-extract into a fresh output directory"
         )
-    triples = {
-        (
-            date.fromisoformat(row["result_date"]),
-            row["implementation"],
-            row["run_id"],
-        ): tuple(row["row_groups"])
-        for row in manifest["scopes"]
-    }
-    scopes = _validate_country_inventory(triples, dates, implementations)
+    scopes = {}
+    for row in manifest["scopes"]:
+        key = (date.fromisoformat(row["result_date"]), row["implementation"])
+        scopes.setdefault(key, []).append((row["run_id"], tuple(row["row_groups"])))
+    scopes = {key: tuple(sorted(groups)) for key, groups in scopes.items()}
     return CountryParquetSource(
         path, manifest_path, manifest, scopes, fingerprint, manifest_fingerprint
     )
@@ -308,33 +302,27 @@ def _country_fingerprint(path: Path, manifest_fingerprint: str) -> str:
     return digest.hexdigest()
 
 
-def _validate_country_inventory(
-    triples: dict[tuple[date, str, str], tuple[int, ...]],
-    dates: tuple[date, ...],
-    implementations: tuple[str, ...],
-) -> dict[tuple[date, str], tuple[tuple[str, tuple[int, ...]], ...]]:
-    result: dict[tuple[date, str], tuple[tuple[str, tuple[int, ...]], ...]] = {}
-    for current_date in dates:
-        reference_runs: tuple[str, ...] | None = None
-        for implementation in implementations:
-            values = tuple(
-                sorted(
-                    (run_id, groups)
-                    for (day, name, run_id), groups in triples.items()
-                    if day == current_date and name == implementation
-                )
-            )
-            if not values:
-                raise ValueError(
-                    f"Country cache lacks {implementation} on {current_date}"
-                )
-            runs = tuple(run_id for run_id, _ in values)
-            if reference_runs is None:
-                reference_runs = runs
-            elif runs != reference_runs:
-                raise ValueError(f"Country cache run scopes differ on {current_date}")
-            result[current_date, implementation] = values
-    return result
+def _check_scopes(scopes, dates, implementations):
+    for day in dates:
+        reference = None
+        for name in implementations:
+            runs = tuple(sorted(scopes.get((day, name), ())))
+            if not runs:
+                raise ValueError(f"Missing {name} result shards on {day}")
+            if reference is not None and runs != reference:
+                raise ValueError(f"Implementation shard scopes differ on {day}")
+            reference = runs
+
+
+def valid_quantity(table: pa.Table | pa.RecordBatch, quantity: str) -> np.ndarray:
+    """Successful finite values; missing statuses and values are invalid."""
+    return pc.fill_null(
+        pc.and_(
+            pc.equal(table[quantity + "_status"], "ok"),
+            pc.is_finite(table[quantity + "_c"]),
+        ),
+        False,
+    ).to_numpy(zero_copy_only=False)
 
 
 @cache

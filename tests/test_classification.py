@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -10,6 +11,27 @@ from reference_classification import analyze_wbgt_classification
 
 from analysis.classification.era5 import analyze_era5_country_cache
 from analysis.config import DEFAULT_IMPLEMENTATIONS
+
+
+def write_cache(source, path):
+    from test_cellwise_country_source import cache_scopes
+
+    source = source.copy()
+    cell = "era5-global-n000000-e0000000"
+    source["cell_id"] = cell
+    source["run_id"] = source["run_id"].astype(str)
+    hours = source.groupby("result_date")["row_id"].transform(
+        lambda ids: pd.factorize(ids)[0]
+    )
+    source["row_ordinal"] = hours.astype("uint32")
+    source["row_id"] = [
+        f"{cell}-{day:%Y%m%d}{hour:02}" for day, hour in zip(source.result_date, hours)
+    ]
+    source.to_parquet(path)
+    path.with_name("manifest.json").write_text(
+        json.dumps({"scopes": cache_scopes(path)})
+    )
+    return source
 
 
 class ClassificationTests(unittest.TestCase):
@@ -94,7 +116,7 @@ class ClassificationTests(unittest.TestCase):
                     )
                 )
             source = pd.DataFrame(rows)
-            source.to_parquet(cache)
+            source = write_cache(source, cache)
 
             analysis = analyze_era5_country_cache(
                 cache, date(2025, 1, 1), date(2025, 1, 1), (25.0,)
@@ -174,7 +196,7 @@ class ClassificationTests(unittest.TestCase):
                             }
                         )
             source = pd.DataFrame(rows)
-            source.to_parquet(cache)
+            source = write_cache(source, cache)
 
             analysis = analyze_era5_country_cache(
                 cache,
@@ -249,3 +271,34 @@ class ClassificationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_shuffled_cache_missing_implementation_and_month_boundary(tmp_path):
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from iso7243_fixtures import write_day
+    from test_cellwise_country_source import _country_cache, _rewrite_cache
+
+    run = tmp_path / "run"
+    for day in ("2025-01-31", "2025-02-01"):
+        write_day(run, day)
+    cache = _country_cache(run, tmp_path / "country/observations.parquet")
+    rows = pq.read_table(cache).to_pandas()
+    rows = rows.loc[
+        ~(rows.result_date.eq(date(2025, 1, 31)) & rows.implementation.eq("thermofeel"))
+    ]
+    _rewrite_cache(cache, pa.Table.from_pandas(rows, preserve_index=False))
+    actual = analyze_era5_country_cache(
+        cache, date(2025, 1, 1), date(2025, 2, 28), [25, 30]
+    )
+    valid = rows.wbgt_status.eq("ok") & np.isfinite(rows.wbgt_c)
+    expected = analyze_wbgt_classification(
+        rows.loc[valid],
+        [25, 30],
+        pair_keys=["result_date", "run_id", "cycle_ordinal", "row_id", "cell_id"],
+        month_column="result_date",
+        implementations=DEFAULT_IMPLEMENTATIONS,
+    )
+    for name, table in expected.outputs.items():
+        pd.testing.assert_frame_equal(actual[name], table, check_dtype=False)

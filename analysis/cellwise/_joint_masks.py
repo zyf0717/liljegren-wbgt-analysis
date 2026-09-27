@@ -11,13 +11,12 @@ from pathlib import Path
 
 import numpy as np
 
-from ..grid import CellGrid, load_grid
+from ..grid import CellGrid, identity_batch, load_grid
 from ..io.artifacts import atomic_path
 from ..results import RESULT_COLUMNS, CellwiseSource, iter_source_batches
 from ._joint_io import (
     HOURS_PER_DAY,
     JointMaskCache,
-    identity_batch,
     quantity_values_and_validity,
 )
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 ERA5_SPACING_DEGREES = 0.25
@@ -107,3 +108,22 @@ LATITUDE_WEIGHT_TABLE = pa.table(
 
 def area_weights(source_ids: Sequence[str]) -> np.ndarray:
     return np.asarray([LATITUDE_WEIGHTS[value[12:19]] for value in source_ids])
+
+
+def identity_batch(
+    batch: pa.RecordBatch, *, source_cell_ids: pa.Array
+) -> tuple[np.ndarray, ...]:
+    row_ids = batch.column("row_id")
+    cells = pc.index_in(
+        pc.utf8_slice_codeunits(row_ids, 0, 28), value_set=source_cell_ids
+    )
+    # A changed cell universe would make the dense cell/hour index invalid.
+    if cells.null_count:
+        raise ValueError("Result contains cells outside the analysis grid")
+    hours = pc.cast(pc.utf8_slice_codeunits(row_ids, 37, 39), pa.uint8())
+    return (
+        np.asarray(cells, dtype=np.int64),
+        np.asarray(hours, dtype=np.int64),
+        np.asarray(batch.column("cycle_ordinal"), dtype=np.uint32),
+        np.asarray(batch.column("row_ordinal"), dtype=np.uint32),
+    )
