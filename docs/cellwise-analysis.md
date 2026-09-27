@@ -41,8 +41,7 @@ Both coverage measures are independent of `weighting`. Population counts
 are therefore required for every spread run; override the default file with
 `population_weights_path`.
 
-The population pipeline reads LandScan Global 2024 through `rioxarray`, using
-Rasterio windows to stream one ERA5 latitude band at a time. Integer counts
+The population pipeline reads LandScan Global 2024 with Rasterio windows and NumPy reductions, to stream one ERA5 latitude band at a time. Integer counts
 are summed into cells centered on ERA5 grid points, extending 0.125° in each
 direction, wrapping longitude at the dateline and clipping latitude at the
 poles. Outputs under the configured population output directory contain raw population

@@ -9,8 +9,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import rasterio
-import rioxarray
-import xarray as xr
 from rasterio.transform import from_origin
 from rasterio.windows import from_bounds
 
@@ -102,8 +100,7 @@ def compute_era5_population_weights(
 
     with rasterio.open(raster_path) as raster:
         _validate_landscan_raster(raster)
-        with rioxarray.open_rasterio(raster, cache=False) as source:
-            populations = _aggregate_population(source)
+        populations = _aggregate_population(raster)
 
     total_population = int(populations.sum(dtype=np.int64))
     if total_population <= 0:
@@ -166,10 +163,10 @@ def _validate_landscan_raster(source: rasterio.io.DatasetReader) -> None:
         raise ValueError("LandScan raster must contain int32 population counts")
 
 
-def _aggregate_population(source: xr.DataArray) -> np.ndarray:
+def _aggregate_population(source: rasterio.io.DatasetReader) -> np.ndarray:
     populations = np.empty((len(ERA5_LATITUDES), len(ERA5_LONGITUDES)), dtype=np.int64)
     half_spacing = ERA5_SPACING_DEGREES / 2
-    transform = source.rio.transform()
+    transform = source.transform
     for row_index, latitude in enumerate(ERA5_LATITUDES):
         window = (
             from_bounds(
@@ -182,22 +179,18 @@ def _aggregate_population(source: xr.DataArray) -> np.ndarray:
             .round_offsets()
             .round_lengths()
         )
-        band = source.rio.isel_window(window).isel(band=0).load()
+        band = source.read(1, window=window)
         populations[row_index] = _sum_latitude_band(band)
     return populations.ravel()
 
 
-def _sum_latitude_band(band: xr.DataArray) -> np.ndarray:
-    """Sum a loaded latitude band into centered, dateline-wrapped ERA5 cells."""
-    population = band.where(band != band.rio.nodata, 0)
-    if bool((population < 0).any()):
+def _sum_latitude_band(band: np.ndarray) -> np.ndarray:
+    """Sum a latitude band into centered, dateline-wrapped ERA5 cells."""
+    population = np.where(band == LANDSCAN_NODATA, 0, band)
+    if (population < 0).any():
         raise ValueError("LandScan raster contains negative population values")
-    pixels_per_cell = round(ERA5_SPACING_DEGREES / band.rio.resolution()[0])
+    pixels_per_cell = round(ERA5_SPACING_DEGREES / LANDSCAN_RESOLUTION_DEGREES)
     # The western half of the -180-degree cell is the raster's final columns.
-    return (
-        population.sum("y", dtype=np.int64)
-        .roll(x=pixels_per_cell // 2, roll_coords=False)
-        .coarsen(x=pixels_per_cell, boundary="exact")
-        .sum()
-        .values
-    )
+    columns = population.sum(axis=0, dtype=np.int64)
+    centered = np.roll(columns, pixels_per_cell // 2)
+    return centered.reshape(-1, pixels_per_cell).sum(axis=1, dtype=np.int64)

@@ -9,27 +9,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import rasterio
-import xarray as xr
 from affine import Affine
 from rasterio.windows import Window
 
 from analysis.cellwise import population
 from analysis.grid import source_cell_id
-
-
-def latitude_band(values: np.ndarray) -> xr.DataArray:
-    band = xr.DataArray(
-        values,
-        dims=("y", "x"),
-        coords={
-            "x": -180 + (np.arange(values.shape[1]) + 0.5) / 120,
-            "y": 90 - (np.arange(values.shape[0]) + 0.5) / 120,
-        },
-    )
-    band.rio.write_crs(4326, inplace=True)
-    band.rio.write_transform(Affine(1 / 120, 0, -180, 0, -1 / 120, 90), inplace=True)
-    band.rio.write_nodata(population.LANDSCAN_NODATA, inplace=True)
-    return band
 
 
 class CellwisePopulationTests(unittest.TestCase):
@@ -77,7 +61,7 @@ class CellwisePopulationTests(unittest.TestCase):
         values = np.ones((30, 60), dtype=np.int32)
         values[0, 0] = population.LANDSCAN_NODATA
 
-        totals = population._sum_latitude_band(latitude_band(values))
+        totals = population._sum_latitude_band(values)
 
         self.assertEqual(totals.tolist(), [899, 900])
 
@@ -109,9 +93,7 @@ class CellwisePopulationTests(unittest.TestCase):
         expected[721] = 256
         expected[1439] = 512
 
-        np.testing.assert_array_equal(
-            population._sum_latitude_band(latitude_band(values)), expected
-        )
+        np.testing.assert_array_equal(population._sum_latitude_band(values), expected)
 
     def test_band_matches_geographic_pixel_center_assignment(self) -> None:
         rng = np.random.default_rng(7243)
@@ -125,19 +107,19 @@ class CellwisePopulationTests(unittest.TestCase):
         expected = np.zeros(1440, dtype=np.int64)
         np.add.at(expected, indices, valid.sum(axis=0, dtype=np.int64))
 
-        actual = population._sum_latitude_band(latitude_band(values))
+        actual = population._sum_latitude_band(values)
         np.testing.assert_array_equal(actual, expected)
         self.assertEqual(int(actual.sum()), int(valid.sum(dtype=np.int64)))
 
     def test_band_accumulates_in_int64_and_rejects_negative_population(self) -> None:
         values = np.full((30, 60), 10_000_000, dtype=np.int32)
         np.testing.assert_array_equal(
-            population._sum_latitude_band(latitude_band(values)),
+            population._sum_latitude_band(values),
             [9_000_000_000, 9_000_000_000],
         )
         values[0, -1] = -1
         with self.assertRaisesRegex(ValueError, "negative population"):
-            population._sum_latitude_band(latitude_band(values))
+            population._sum_latitude_band(values)
 
     def test_raster_validation_rejects_invalid_grids_and_counts(self) -> None:
         profile = dict(
