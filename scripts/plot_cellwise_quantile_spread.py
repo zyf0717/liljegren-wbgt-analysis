@@ -8,8 +8,8 @@ from analysis.config import load_settings
 from analysis.io.artifacts import save_settings
 
 
-def main() -> None:
-    settings = load_settings("plot_quantile_spread")
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("plot_quantile_spread")
     for quantity in ("wbgt", "tnwb", "tg"):
         plot_quantile_spread(settings["output_root"] / quantity)
     result = plot_stacked_cellwise_quantile_spread(**settings)

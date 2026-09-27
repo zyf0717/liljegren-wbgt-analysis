@@ -5,8 +5,8 @@ from analysis.config import load_settings
 from analysis.io.artifacts import save_settings
 
 
-def main() -> None:
-    settings = load_settings("plot_non_consensus_stack")
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("plot_non_consensus_stack")
     result = plot_global_iso7243_non_consensus_stack(**settings)
     save_settings(
         settings,

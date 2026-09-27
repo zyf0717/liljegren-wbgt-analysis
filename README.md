@@ -34,13 +34,28 @@ resolve against the repository root. Date ranges include both endpoints.
 Input paths, implementation selections, and quantile probabilities are explicit
 settings; annual pairwise aggregation inherits its scope from the daily product.
 
-Scripts take no command-line arguments. Run them as modules from the repository
+Individual workflow scripts take no command-line arguments. Run them as modules from the repository
 root. They read their section, call the core function, and save effective
 settings alongside the outputs. The sample writes new products under
 `results/<hsb-run>/`; existing datasets and older products are not migrated or removed.
 
 The example uses four daily workers and two Polars compute threads per worker.
 BLAS/OpenMP/MKL default to one thread; explicit environment settings take precedence.
+
+Run the selected workflows sequentially with:
+
+```bash
+uv run python -m scripts.run_pipeline --config config.yaml
+```
+
+`pipeline.steps` maps workflow names to lists of settings sections; omit a workflow
+or use `[]` to disable it. Python fixes the workflow order, and each section runs
+in its own subprocess. The example includes global, JPN, and THA products. Workers
+within a step still follow its settings. Timestamped logs under
+`pipeline.output_root` capture stdout/stderr and start/exit events; the runner
+stops on failure. It adds no caching or overwrite policy: daily/classification/
+quantile workflows reuse their checkpoints, summaries and plots regenerate, and
+population/extraction require disabling after completion or `overwrite: true`.
 
 ## Workflows
 

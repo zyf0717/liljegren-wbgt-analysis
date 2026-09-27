@@ -21,6 +21,25 @@ shared:
   boundary_cache: &boundaries data/boundaries
   population: &population results/REPLACE_WITH_ERA5_RUN/population/population.parquet
 
+# Omit a workflow or use [] to disable it. Python fixes the execution order;
+# lists select settings sections, run one at a time (including country variants).
+pipeline:
+  output_root: results/REPLACE_WITH_ERA5_RUN/pipeline
+  steps:
+    population: [population]
+    country_cells: [country_cells]
+    extract_country: [extract_country]
+    daily_pairwise: [daily_pairwise]
+    yearly_pairwise: [yearly_pairwise]
+    iso7243: [iso7243, iso7243_jpn, iso7243_tha]
+    plot_iso7243: [plot_iso7243, plot_iso7243_jpn, plot_iso7243_tha]
+    plot_non_consensus: [plot_non_consensus, plot_non_consensus_jpn, plot_non_consensus_tha]
+    plot_non_consensus_stack: [plot_non_consensus_stack]
+    country_classification: [country_classification, country_classification_tha]
+    quantiles: [quantiles]
+    quantile_spread: [quantile_spread]
+    plot_quantile_spread: [plot_quantile_spread]
+
 # Run daily comparisons before annual aggregation.
 daily_pairwise:
   hsb_run_paths: *runs
@@ -58,7 +77,7 @@ quantiles:
   exact_validation_cells: 100
   exact_validation_seed: 0
   date_workers: 2
-  replay_workers: 1
+  replay_workers: 2
   overwrite: false
 
 population:
@@ -76,7 +95,7 @@ quantile_spread:
 plot_quantile_spread:
   output_root: *spread
 
-iso7243:
+iso7243: &iso7243_settings
   hsb_run_paths: *runs
   country_cache: null
   start_date: *start
@@ -89,12 +108,12 @@ iso7243:
   batch_size: 65536
   overwrite: false
 
-plot_iso7243:
+plot_iso7243: &plot_iso7243_settings
   input_root: *iso7243
   output_directory: null # defaults to input_root/figures
   population_weights_path: *population
 
-plot_non_consensus:
+plot_non_consensus: &plot_non_consensus_settings
   input_root: *iso7243
   output_directory: null
 
@@ -121,10 +140,46 @@ extract_country:
   bounds: null # optional [west, south, east, north]; one country only
   overwrite: false
 
-country_classification:
-  cache_path: results/REPLACE_WITH_ERA5_RUN/country/jpn/observations.parquet
+country_classification: &country_classification_settings
+  cache_path: &jpn_cache results/REPLACE_WITH_ERA5_RUN/country/jpn/observations.parquet
   start_date: *start
   end_date: *end
-  thresholds_c: [21, 25, 28, 31]
+  thresholds_c: &jpn_thresholds [21, 25, 28, 31]
   implementations: *targets
   output_root: results/REPLACE_WITH_ERA5_RUN/country/jpn/classification
+
+country_classification_tha:
+  <<: *country_classification_settings
+  cache_path: &tha_cache results/REPLACE_WITH_ERA5_RUN/country/tha/observations.parquet
+  thresholds_c: &tha_thresholds [30, 32, 34]
+  output_root: results/REPLACE_WITH_ERA5_RUN/country/tha/classification
+
+iso7243_jpn: &country_iso7243_settings
+  <<: *iso7243_settings
+  hsb_run_paths: null
+  country_cache: *jpn_cache
+  thresholds_c: *jpn_thresholds
+  output_root: &jpn_iso7243 results/REPLACE_WITH_ERA5_RUN/country/jpn/iso7243
+  date_workers: 1
+
+iso7243_tha:
+  <<: *country_iso7243_settings
+  country_cache: *tha_cache
+  thresholds_c: *tha_thresholds
+  output_root: &tha_iso7243 results/REPLACE_WITH_ERA5_RUN/country/tha/iso7243
+
+plot_iso7243_jpn:
+  <<: *plot_iso7243_settings
+  input_root: *jpn_iso7243
+
+plot_iso7243_tha:
+  <<: *plot_iso7243_settings
+  input_root: *tha_iso7243
+
+plot_non_consensus_jpn:
+  <<: *plot_non_consensus_settings
+  input_root: *jpn_iso7243
+
+plot_non_consensus_tha:
+  <<: *plot_non_consensus_settings
+  input_root: *tha_iso7243

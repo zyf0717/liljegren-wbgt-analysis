@@ -7,8 +7,8 @@ from analysis.config import load_settings
 from analysis.io.artifacts import save_settings
 
 
-def main() -> None:
-    settings = load_settings("quantiles")
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("quantiles")
     result = compute_joint_cellwise_temperature_quantiles(**settings)
     save_settings(settings, settings["output_root"])
     print(result)

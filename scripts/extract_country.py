@@ -5,8 +5,8 @@ from analysis.country.extraction import extract_countries_observations
 from analysis.io.artifacts import save_settings
 
 
-def main() -> None:
-    settings = load_settings("extract_country")
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("extract_country")
     result = extract_countries_observations(**settings)
     save_settings(settings, settings["output_directory"])
     print(result)
