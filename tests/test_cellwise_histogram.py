@@ -34,7 +34,6 @@ class CellwiseHistogramTests(unittest.TestCase):
                 cell_count=2,
                 histogram_spec=DEFAULT_WBGT_HISTOGRAM,
                 dtype=np.dtype(np.uint16),
-                mode="w+",
             )
             try:
                 accumulator.update(
@@ -43,12 +42,12 @@ class CellwiseHistogramTests(unittest.TestCase):
                 accumulator.update(
                     np.asarray([0, 1, 1]), np.asarray([22.0, 80.0, 23.0])
                 )
-                self.assertEqual(accumulator.valid.tolist(), [3, 3])
-                self.assertEqual(accumulator.underflow.tolist(), [0, 1])
-                self.assertEqual(accumulator.overflow.tolist(), [0, 1])
+                self.assertEqual(accumulator.histogram.sum(axis=1).tolist(), [3, 3])
+                self.assertEqual(accumulator.histogram[:, 0].tolist(), [0, 1])
+                self.assertEqual(accumulator.histogram[:, -1].tolist(), [0, 1])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
-                accumulator.flush()
-                self.assertEqual(accumulator.valid.tolist(), [3, 3])
+                accumulator.histogram.flush()
+                self.assertEqual(accumulator.histogram.sum(axis=1).tolist(), [3, 3])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
             finally:
                 accumulator.close()
@@ -63,10 +62,10 @@ class CellwiseHistogramTests(unittest.TestCase):
                 cell_count=1,
                 histogram_spec=DEFAULT_WBGT_HISTOGRAM,
                 dtype=np.dtype(np.uint16),
-                mode="w+",
             )
             try:
-                accumulator.valid[0] = np.iinfo(np.uint16).max
+                bin_id = DEFAULT_WBGT_HISTOGRAM.bin_ids(np.asarray([20.0]))[0]
+                accumulator.histogram[0, bin_id] = np.iinfo(np.uint16).max
                 with self.assertRaisesRegex(OverflowError, "counter overflow"):
                     accumulator.update(np.asarray([0]), np.asarray([20.0]))
             finally:

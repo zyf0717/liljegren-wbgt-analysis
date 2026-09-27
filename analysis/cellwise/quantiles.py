@@ -13,9 +13,6 @@ def quantile_table(
     *,
     cell_ids: np.ndarray,
     histogram: np.ndarray,
-    valid: np.ndarray,
-    underflow: np.ndarray,
-    overflow: np.ndarray,
     histogram_spec: WBGTHistogramSpec,
     probabilities: tuple[float, ...],
     chunk_rows: int = 8_192,
@@ -26,17 +23,19 @@ def quantile_table(
         raise ValueError("chunk_rows must be positive")
     count = len(cell_ids)
     indices = np.full((count, len(probabilities)), -1, dtype=np.int64)
+    totals = np.empty(count, dtype=np.uint64)
     for start in range(0, count, chunk_rows):
         stop = min(start + chunk_rows, count)
+        totals[start:stop] = histogram[start:stop].sum(axis=1, dtype=np.uint64)
         indices[start:stop] = histogram_quantile_bin_indices(
             histogram[start:stop], probabilities
         )
 
     columns: dict[str, pa.Array] = {
         "cell_id": pa.array(cell_ids, type=pa.int64()),
-        "n_valid": pa.array(valid),
-        "underflow_n": pa.array(underflow),
-        "overflow_n": pa.array(overflow),
+        "n_valid": pa.array(totals),
+        "underflow_n": pa.array(np.array(histogram[:, 0], copy=True)),
+        "overflow_n": pa.array(np.array(histogram[:, -1], copy=True)),
     }
     for column, probability in enumerate(probabilities):
         label = f"p{int(probability * 100):02d}"

@@ -156,7 +156,6 @@ def _replay_implementation(state: ReplayState, implementation: str) -> dict:
                 cell_count=grid.cell_count,
                 histogram_spec=histogram_spec,
                 dtype=dtype,
-                mode="w+",
             )
         for current_date in dates:
             selected_count = 0
@@ -182,29 +181,35 @@ def _replay_implementation(state: ReplayState, implementation: str) -> dict:
                 raise ValueError(
                     f"Joint count reconciliation failed for {implementation} on {current_date}"
                 )
-        partials: dict[ResultQuantity, pa.Table] = {}
+        n_expected = len(dates) * HOURS_PER_DAY
+        columns = {
+            "cell_id": grid.table["cell_id"],
+            "n_expected": pa.array(
+                np.full(grid.cell_count, n_expected, dtype=np.uint32)
+            ),
+            "n_joint": pa.array(joint_counts),
+            "joint_coverage_fraction": pa.array(joint_counts / n_expected),
+        }
         quantity_provenance: dict[str, object] = {}
         joint_total = int(joint_counts.astype(np.uint64).sum())
         cell_ids = grid.table["cell_id"].combine_chunks().to_numpy(zero_copy_only=False)
         for quantity in RESULT_QUANTITIES:
             accumulator = accumulators[quantity]
-            if not np.array_equal(accumulator.valid, joint_counts.astype(dtype)):
-                raise ValueError(
-                    f"Joint cell counts differ for {implementation}/{quantity}"
-                )
-            if int(accumulator.histogram.sum(dtype=np.uint64)) != joint_total:
-                raise ValueError(
-                    f"Histogram coverage differs for {implementation}/{quantity}"
-                )
             result = quantile_table(
                 cell_ids=cell_ids,
                 histogram=accumulator.histogram,
-                valid=accumulator.valid,
-                underflow=accumulator.underflow,
-                overflow=accumulator.overflow,
                 histogram_spec=histogram_spec,
                 probabilities=probabilities,
             )
+            if not np.array_equal(np.asarray(result["n_valid"]), joint_counts):
+                raise ValueError(
+                    f"Joint cell counts differ for {implementation}/{quantity}"
+                )
+            native = native_counts[quantity]
+            if np.any(native < joint_counts):
+                raise ValueError(
+                    f"Native coverage is smaller than joint coverage for {quantity}"
+                )
             _validate_regular_quantiles(result, probabilities, implementation, quantity)
             validation = _validate_exact_values(
                 result,
@@ -214,8 +219,16 @@ def _replay_implementation(state: ReplayState, implementation: str) -> dict:
                 probabilities,
                 state.sample_seed,
             )
-            partials[quantity] = _quantity_partial(
-                result, native_counts[quantity], quantity
+            columns[f"{quantity}_native_valid_n"] = pa.array(native)
+            columns.update(
+                {
+                    f"{quantity}_{name}": result[name]
+                    for name in result.column_names
+                    if name not in {"cell_id", "n_valid"}
+                }
+            )
+            columns[f"{quantity}_native_coverage_fraction"] = pa.array(
+                native / n_expected
             )
             quantity_provenance[quantity] = {
                 "native_valid_observation_count": int(
@@ -226,11 +239,9 @@ def _replay_implementation(state: ReplayState, implementation: str) -> dict:
             }
             accumulator.close()
             del accumulators[quantity]
-        wide = _wide_implementation_table(
-            grid=grid, dates=dates, joint_counts=joint_counts, partials=partials
-        )
         atomic_parquet(
-            wide, state.output_root / "implementations" / f"{implementation}.parquet"
+            pa.table(columns),
+            state.output_root / "implementations" / f"{implementation}.parquet",
         )
         return {"quantities": quantity_provenance}
     finally:
@@ -305,59 +316,3 @@ def _validate_regular_quantiles(
                 raise ValueError(
                     f"{implementation}/{quantity} {label} reaches an open histogram edge bin"
                 )
-
-
-def _quantity_partial(
-    result: pa.Table,
-    native_counts: np.ndarray,
-    quantity: ResultQuantity,
-) -> pa.Table:
-    columns: dict[str, pa.Array | pa.ChunkedArray] = {
-        "cell_id": result["cell_id"],
-        f"{quantity}_native_valid_n": pa.array(native_counts),
-    }
-    for name in result.column_names:
-        if name in {"cell_id", "n_valid"}:
-            continue
-        column = result[name]
-        if name in {"underflow_n", "overflow_n"}:
-            # These two Arrow arrays can be zero-copy views of accumulator
-            # memmaps, which are closed immediately after this unit returns.
-            column = pa.array(
-                np.array(
-                    column.combine_chunks().to_numpy(zero_copy_only=False), copy=True
-                )
-            )
-        columns[f"{quantity}_{name}"] = column
-    return pa.table(columns)
-
-
-def _wide_implementation_table(
-    *,
-    grid: CellGrid,
-    dates: tuple[date, ...],
-    joint_counts: np.ndarray,
-    partials: dict[ResultQuantity, pa.Table],
-) -> pa.Table:
-    n_expected = len(dates) * HOURS_PER_DAY
-    columns: dict[str, pa.Array | pa.ChunkedArray] = {
-        "cell_id": grid.table["cell_id"],
-        "n_expected": pa.array(np.full(grid.cell_count, n_expected, dtype=np.uint32)),
-        "n_joint": pa.array(joint_counts),
-        "joint_coverage_fraction": pa.array(joint_counts / n_expected),
-    }
-    for quantity in RESULT_QUANTITIES:
-        partial = partials[quantity]
-        if not partial["cell_id"].equals(grid.table["cell_id"]):
-            raise ValueError(f"Partial cell order differs for {quantity}")
-        native_name = f"{quantity}_native_valid_n"
-        native = partial[native_name].combine_chunks().to_numpy(zero_copy_only=False)
-        if np.any(native < joint_counts):
-            raise ValueError(
-                f"Native coverage is smaller than joint coverage for {quantity}"
-            )
-        for name in partial.column_names:
-            if name != "cell_id":
-                columns[name] = partial[name]
-        columns[f"{quantity}_native_coverage_fraction"] = pa.array(native / n_expected)
-    return pa.table(columns)
