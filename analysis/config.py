@@ -61,7 +61,8 @@ def load_settings(workflow: str, config_path: str | Path | None = None) -> dict:
     with path.open() as stream:
         config = yaml.safe_load(stream)
     if not isinstance(config, dict) or not isinstance(config.get(workflow), dict):
-        raise ValueError(f"Missing or invalid configuration section: {workflow}")
+        # The YAML content is invalid; the function arguments are valid.
+        raise ValueError(f"Missing or invalid configuration section: {workflow}")  # noqa: TRY004
     settings = deepcopy(config[workflow])
     for key, value in settings.items():
         if value is None:

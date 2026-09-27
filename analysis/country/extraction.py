@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -273,7 +273,7 @@ def extract_countries_observations(
                 item.output.parent.mkdir(parents=True, exist_ok=True)
                 extraction = CountryExtraction(
                     4,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                     item.country.iso_a2,
                     iso_a3,
                     item.country.name,

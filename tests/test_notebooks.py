@@ -29,7 +29,7 @@ def code_cells(name):
 def execute(name, *, after_setup=None):
     namespace = {"__name__": "__main__"}
     for index, code in enumerate(code_cells(name)):
-        exec(compile(code, name, "exec"), namespace)
+        exec(compile(code, name, "exec"), namespace)  # noqa: S102 — trusted notebook cells
         if index == 0 and after_setup:
             after_setup(namespace)
     return namespace
@@ -45,7 +45,7 @@ def test_notebook_setup_executes(path, monkeypatch):
         "load_settings",
         lambda name: original(name, NOTEBOOKS.parent / "config.example.yaml"),
     )
-    exec(compile(code_cells(path.name)[0], path.name, "exec"), {})
+    exec(compile(code_cells(path.name)[0], path.name, "exec"), {})  # noqa: S102
 
 
 def test_daily_and_yearly_notebooks_run_export_and_record_overrides(
@@ -55,23 +55,23 @@ def test_daily_and_yearly_notebooks_run_export_and_record_overrides(
     run = tmp_path / "run"
     for name, values in (("alpha", [25.0, 30.0]), ("beta", [26.0, 32.0])):
         _write_results(run, name, values)
-    shared = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        implementations=["alpha", "beta"],
-    )
+    shared = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "implementations": ["alpha", "beta"],
+    }
     settings = {
         "daily_pairwise": dict(
             **shared, hsb_run_paths=[str(run)], output_root="daily", workers=2
         ),
-        "yearly_pairwise": dict(
-            start_date=shared["start_date"],
-            end_date=shared["end_date"],
-            input_root="daily",
-            output_root="yearly",
-            reference_implementation="alpha",
-            export_implementations=["beta"],
-        ),
+        "yearly_pairwise": {
+            "start_date": shared["start_date"],
+            "end_date": shared["end_date"],
+            "input_root": "daily",
+            "output_root": "yearly",
+            "reference_implementation": "alpha",
+            "export_implementations": ["beta"],
+        },
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(settings))
     execute(
@@ -106,23 +106,23 @@ def test_quantile_and_map_notebooks_execute_with_small_grid(tmp_path, monkeypatc
         pa.table({"source_cell_id": _CELLS, "population": [10, 20, 30]}), population
     )
     settings = {
-        "quantiles": dict(
-            implementations=list(DEFAULT_IMPLEMENTATIONS),
-            probabilities=list(DEFAULT_PROBABILITIES),
-            hsb_run_paths=[str(run)],
-            start_date="2025-01-01",
-            end_date="2025-01-01",
-            output_root="quantiles",
-            date_workers=1,
-            replay_workers=1,
-            exact_validation_cells=3,
-        ),
-        "quantile_spread": dict(
-            input_root="quantiles",
-            output_root="spread",
-            quantities=["wbgt"],
-            population_weights_path=str(population),
-        ),
+        "quantiles": {
+            "implementations": list(DEFAULT_IMPLEMENTATIONS),
+            "probabilities": list(DEFAULT_PROBABILITIES),
+            "hsb_run_paths": [str(run)],
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-01",
+            "output_root": "quantiles",
+            "date_workers": 1,
+            "replay_workers": 1,
+            "exact_validation_cells": 3,
+        },
+        "quantile_spread": {
+            "input_root": "quantiles",
+            "output_root": "spread",
+            "quantities": ["wbgt"],
+            "population_weights_path": str(population),
+        },
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(settings))
     execute("11-cellwise-temperature-quantiles.ipynb")
@@ -165,14 +165,14 @@ def test_country_classification_notebook_executes(tmp_path, monkeypatch):
     cache = tmp_path / "country/xxx/observations.parquet"
     assert pq.read_table(cache).num_rows > 0
     settings = {
-        "country_classification": dict(
-            implementations=list(DEFAULT_IMPLEMENTATIONS),
-            cache_path=str(cache),
-            start_date="2025-01-01",
-            end_date="2025-01-01",
-            thresholds_c=[25, 30],
-            output_root="classification",
-        )
+        "country_classification": {
+            "implementations": list(DEFAULT_IMPLEMENTATIONS),
+            "cache_path": str(cache),
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-01",
+            "thresholds_c": [25, 30],
+            "output_root": "classification",
+        }
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(settings))
     monkeypatch.setattr(config, "REPOSITORY", tmp_path)

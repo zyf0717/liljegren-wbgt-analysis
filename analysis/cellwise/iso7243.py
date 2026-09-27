@@ -308,14 +308,13 @@ def _initialize_worker(
 def _run_day(day: date) -> None:
     counts = _scan_day(_WORKER, day)
     path = _WORKER.work / f"{day.isoformat()}.npz"
-    with atomic_path(path) as temporary:
-        with temporary.open("wb") as stream:
-            np.savez_compressed(
-                stream,
-                counts=counts,
-                signature=_WORKER.signature,
-                day=day.isoformat(),
-            )
+    with atomic_path(path) as temporary, temporary.open("wb") as stream:
+        np.savez_compressed(
+            stream,
+            counts=counts,
+            signature=_WORKER.signature,
+            day=day.isoformat(),
+        )
 
 
 def _scan_day(state: ClassificationState, day: date) -> np.ndarray:
@@ -441,26 +440,28 @@ def _write_outputs(
         ]
     )
     path = root / "cell_pair_differences.parquet"
-    with atomic_path(path) as temporary:
-        with pq.ParquetWriter(temporary, schema, compression="zstd") as writer:
-            for (a, b), (compared, higher, lower) in zip(
-                combinations(range(len(names)), 2),
-                _pair_counts(counts, sample_scope),
-                strict=True,
-            ):
-                writer.write_table(
-                    pa.Table.from_arrays(
-                        [
-                            pa.array(ids),
-                            pa.array(np.full(len(ids), a, dtype=np.uint8)),
-                            pa.array(np.full(len(ids), b, dtype=np.uint8)),
-                            pa.array(compared, type=pa.uint32()),
-                            pa.array(higher, type=pa.uint32()),
-                            pa.array(lower, type=pa.uint32()),
-                        ],
-                        schema=schema,
-                    )
+    with (
+        atomic_path(path) as temporary,
+        pq.ParquetWriter(temporary, schema, compression="zstd") as writer,
+    ):
+        for (a, b), (compared, higher, lower) in zip(
+            combinations(range(len(names)), 2),
+            _pair_counts(counts, sample_scope),
+            strict=True,
+        ):
+            writer.write_table(
+                pa.Table.from_arrays(
+                    [
+                        pa.array(ids),
+                        pa.array(np.full(len(ids), a, dtype=np.uint8)),
+                        pa.array(np.full(len(ids), b, dtype=np.uint8)),
+                        pa.array(compared, type=pa.uint32()),
+                        pa.array(higher, type=pa.uint32()),
+                        pa.array(lower, type=pa.uint32()),
+                    ],
+                    schema=schema,
                 )
+            )
     percent = np.divide(
         100.0 * counts[1], counts[0], out=np.full(len(ids), np.nan), where=counts[0] > 0
     )
@@ -491,13 +492,13 @@ def load_hourly_metadata(root: Path) -> dict[str, object]:
     if not path.is_file():
         raise ValueError(f"Missing completion metadata: {path}")
     metadata = json.loads(path.read_text())
-    expected = dict(
-        schema_version=ISO7243_SCHEMA_VERSION,
-        analysis=ANALYSIS,
-        complete=True,
-        observation_basis="hourly",
-        classification_quantity="wbgt",
-    )
+    expected = {
+        "schema_version": ISO7243_SCHEMA_VERSION,
+        "analysis": ANALYSIS,
+        "complete": True,
+        "observation_basis": "hourly",
+        "classification_quantity": "wbgt",
+    }
     sample_scope = metadata.get("sample_scope")
     expected_support = (
         PAIRWISE_SUPPORT_SCOPE if sample_scope == "pairwise" else SUPPORT_SCOPE

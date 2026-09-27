@@ -137,7 +137,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 )
             self.assertEqual(list((output / "figures").glob("*.pdf")), [])
 
-            cellwise = pq.read_table((output / "cellwise_quantile_spread.parquet"))
+            cellwise = pq.read_table(output / "cellwise_quantile_spread.parquet")
             expected_spread = float(len(IMPLEMENTATIONS) - 1)
             self.assertEqual(
                 cellwise["spread_p50_c"].to_pylist(), [expected_spread] * 2
@@ -153,12 +153,12 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 cellwise["max_implementation_p95"].to_pylist(),
                 [IMPLEMENTATIONS[-1]] * 2,
             )
-            summary = pq.read_table((output / "global_quantile_spread_summary.parquet"))
+            summary = pq.read_table(output / "global_quantile_spread_summary.parquet")
             self.assertEqual(
                 summary["metric"].to_pylist(),
                 [f"spread_{percentile}_c" for percentile in PERCENTILES],
             )
-            anchor = pq.read_table((output / "c_anchor_quantile_differences.parquet"))
+            anchor = pq.read_table(output / "c_anchor_quantile_differences.parquet")
             self.assertEqual(
                 anchor.num_rows, len(PERCENTILES) * (len(IMPLEMENTATIONS) - 1)
             )
@@ -168,11 +168,11 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             )
             self.assertEqual(
                 pq.read_table(
-                    (output / "implementation_extrema_frequency.parquet")
+                    output / "implementation_extrema_frequency.parquet"
                 ).num_rows,
                 len(PERCENTILES) * len(IMPLEMENTATIONS),
             )
-            csv = pcsv.read_csv((output / "implementation_extrema_frequency.csv"))
+            csv = pcsv.read_csv(output / "implementation_extrema_frequency.csv")
             self.assertEqual(
                 csv.column_names, ["implementation", "extremum", *PERCENTILES]
             )
@@ -184,9 +184,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(
                 csv.to_pylist(),
                 _extrema_fractions(
-                    pq.read_table(
-                        (output / "implementation_extrema_frequency.parquet")
-                    ),
+                    pq.read_table(output / "implementation_extrema_frequency.parquet"),
                     IMPLEMENTATIONS,
                 ).to_pylist(),
             )
@@ -239,7 +237,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 population_weights_path=population_path,
             )
             self.assertEqual(
-                pq.read_table((unweighted / "cellwise_quantile_spread.parquet"))[
+                pq.read_table(unweighted / "cellwise_quantile_spread.parquet")[
                     "weight"
                 ].to_pylist(),
                 [1.0, 1.0],
@@ -252,7 +250,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 population_weights_path=population_path,
             )
             population_cellwise = pq.read_table(
-                (population_weighted / "cellwise_quantile_spread.parquet")
+                population_weighted / "cellwise_quantile_spread.parquet"
             )
             self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
             population_metadata = json.loads(

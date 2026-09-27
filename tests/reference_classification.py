@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 
 import numpy as np
@@ -19,7 +20,7 @@ def class_definitions(thresholds_c: Sequence[float]) -> pd.DataFrame:
         else f">= {lower:g} C"
         if index == len(thresholds)
         else f"[{lower:g}, {upper:g}) C"
-        for index, (lower, upper) in enumerate(zip(bounds, bounds[1:]))
+        for index, (lower, upper) in enumerate(itertools.pairwise(bounds))
     ]
     return pd.DataFrame({"class_id": range(len(labels)), "class_label": labels})
 

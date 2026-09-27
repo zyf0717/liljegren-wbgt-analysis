@@ -106,14 +106,14 @@ def analyze_era5_country_cache(
         )
     outputs["observation_summary.csv"] = pd.DataFrame(
         [
-            dict(
-                result_rows=result_rows,
-                valid_wbgt_observations=int(valid_counts.sum()),
-                implementations=len(names),
-                cells=int(cells_seen.sum()),
-                first_date=dates[0],
-                last_date=dates[-1],
-            )
+            {
+                "result_rows": result_rows,
+                "valid_wbgt_observations": int(valid_counts.sum()),
+                "implementations": len(names),
+                "cells": int(cells_seen.sum()),
+                "first_date": dates[0],
+                "last_date": dates[-1],
+            }
         ]
     )
     outputs["quantity_coverage.csv"] = pd.DataFrame(

@@ -86,11 +86,9 @@ class AreaWeightedTests(unittest.TestCase):
                 ),
             )
         row = next(
-            (
-                item
-                for item in summaries.pairwise.to_pylist()
-                if item["quantity"] == "wbgt"
-            )
+            item
+            for item in summaries.pairwise.to_pylist()
+            if item["quantity"] == "wbgt"
         )
         differences = [x - y for x, y in zip(left, right, strict=True)]
         weights = [_weight(latitude) for latitude in latitudes]

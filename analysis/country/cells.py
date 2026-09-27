@@ -96,7 +96,7 @@ def load_countries(boundaries: Path, country_codes: Iterable[str]) -> list[Count
         document = json.load(source)
     features = document.get("features")
     if not isinstance(features, list):
-        raise ValueError(f"GeoJSON has no feature collection: {boundaries}")
+        raise ValueError(f"GeoJSON has no feature collection: {boundaries}")  # noqa: TRY004
 
     matched: dict[str, Country] = {}
     for feature in features:
@@ -283,9 +283,11 @@ def export_country_cells(
     countries = load_countries(boundaries, country_codes)
     rows = [cell for country in countries for cell in country_cells(country)]
     output.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_path(output) as temporary:
-        with temporary.open("w", encoding="utf-8", newline="") as destination:
-            _write_csv(destination, rows)
+    with (
+        atomic_path(output) as temporary,
+        temporary.open("w", encoding="utf-8", newline="") as destination,
+    ):
+        _write_csv(destination, rows)
     return output
 
 

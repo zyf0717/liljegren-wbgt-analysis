@@ -19,14 +19,14 @@ def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path)
     run = tmp_path / "run"
     _write_joint_day(run, "2025-01-01", 1)
     _write_joint_day(run, "2025-01-02", 2)
-    settings = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-02",
-        histogram_spec=WBGTHistogramSpec(minimum_c=-70, maximum_c=70, width_c=1),
-        exact_validation_cells=3,
-        date_workers=1,
-        replay_workers=1,
-    )
+    settings = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-02",
+        "histogram_spec": WBGTHistogramSpec(minimum_c=-70, maximum_c=70, width_c=1),
+        "exact_validation_cells": 3,
+        "date_workers": 1,
+        "replay_workers": 1,
+    }
     reference = compute_joint_cellwise_temperature_quantiles(
         run,
         output_root=tmp_path / "reference",
@@ -45,15 +45,17 @@ def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path)
         if calls == 8:
             raise RuntimeError("interrupted after partial histogram update")
 
-    with patch.object(CellwiseHistogramAccumulator, "update", interrupt):
-        with pytest.raises(RuntimeError, match="partial histogram"):
-            compute_joint_cellwise_temperature_quantiles(
-                run,
-                output_root=output,
-                **settings,
-                implementations=DEFAULT_IMPLEMENTATIONS,
-                probabilities=DEFAULT_PROBABILITIES,
-            )
+    with (
+        patch.object(CellwiseHistogramAccumulator, "update", interrupt),
+        pytest.raises(RuntimeError, match="partial histogram"),
+    ):
+        compute_joint_cellwise_temperature_quantiles(
+            run,
+            output_root=output,
+            **settings,
+            implementations=DEFAULT_IMPLEMENTATIONS,
+            probabilities=DEFAULT_PROBABILITIES,
+        )
     assert not (output / "metadata.json").exists()
     completed = output / "implementations" / f"{DEFAULT_IMPLEMENTATIONS[0]}.parquet"
     before = completed.stat().st_mtime_ns

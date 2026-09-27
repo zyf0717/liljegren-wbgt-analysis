@@ -37,7 +37,7 @@ class WBGTHistogramSpec:
 
     @property
     def regular_bin_count(self) -> int:
-        return int(round((self.maximum_c - self.minimum_c) / self.width_c))
+        return round((self.maximum_c - self.minimum_c) / self.width_c)
 
     @property
     def bin_count(self) -> int:

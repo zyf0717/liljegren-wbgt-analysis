@@ -98,7 +98,7 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
         out, population_weights_path=weights
     )
     assert plt.imread(stacked).shape[1] == STACKED_MAP_WIDTH_PX
-    population_csv = pcsv.read_csv((figures / "population_affected.csv"))
+    population_csv = pcsv.read_csv(figures / "population_affected.csv")
     assert population_csv.column_names == [
         "comparison_type",
         "implementation_a",

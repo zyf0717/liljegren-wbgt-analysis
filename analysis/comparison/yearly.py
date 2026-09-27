@@ -253,20 +253,20 @@ def _write_reference_xlsx(
         "n",
         *(name for name in STATISTIC_SPECS if name.startswith("area_weighted_")),
     )
-    with atomic_path(path) as temporary_path:
-        with pd.ExcelWriter(temporary_path, engine="openpyxl") as writer:
-            for metric in metrics:
-                comparison = pd.DataFrame(
-                    {
-                        quantity.upper(): matrices[quantity][metric][reference]
-                        for quantity in QUANTITY_ORDER
-                    }
-                ).loc[list(implementations)]
-                sheet = (
-                    metric.replace("area_weighted_", "aw_")
-                    .replace("absolute", "abs")
-                    .replace("difference", "diff")
-                )
-                comparison.rename_axis("implementation").to_excel(
-                    writer, sheet_name=sheet
-                )
+    with (
+        atomic_path(path) as temporary_path,
+        pd.ExcelWriter(temporary_path, engine="openpyxl") as writer,
+    ):
+        for metric in metrics:
+            comparison = pd.DataFrame(
+                {
+                    quantity.upper(): matrices[quantity][metric][reference]
+                    for quantity in QUANTITY_ORDER
+                }
+            ).loc[list(implementations)]
+            sheet = (
+                metric.replace("area_weighted_", "aw_")
+                .replace("absolute", "abs")
+                .replace("difference", "diff")
+            )
+            comparison.rename_axis("implementation").to_excel(writer, sheet_name=sheet)

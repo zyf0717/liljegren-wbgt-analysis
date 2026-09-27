@@ -247,19 +247,19 @@ def test_threshold_equality_and_incomplete_support(tmp_path):
     for hour, values in enumerate(((24.9, 25.0, 24.9), (31.1, 30.9, None))):
         for name, value in zip(("a", "b", "c"), values):
             rows.append(
-                dict(
-                    result_date=date(2025, 1, 1),
-                    run_id="1",
-                    cycle_ordinal=1,
-                    row_id=str(hour),
-                    implementation=name,
-                    wbgt_status="ok" if value is not None else "failed",
-                    wbgt_c=value,
-                    tg_status="ok",
-                    tg_c=35.0,
-                    tnwb_status="ok",
-                    tnwb_c=20.0,
-                )
+                {
+                    "result_date": date(2025, 1, 1),
+                    "run_id": "1",
+                    "cycle_ordinal": 1,
+                    "row_id": str(hour),
+                    "implementation": name,
+                    "wbgt_status": "ok" if value is not None else "failed",
+                    "wbgt_c": value,
+                    "tg_status": "ok",
+                    "tg_c": 35.0,
+                    "tnwb_status": "ok",
+                    "tnwb_c": 20.0,
+                }
             )
     cache = tmp_path / "observations.parquet"
     source = write_cache(pd.DataFrame(rows), cache)

@@ -115,15 +115,15 @@ def test_daily_script_resume_input_changes_and_interrupted_write(tmp_path, monke
     run = tmp_path / "run"
     for name, values in (("alpha", [25.0, 30.0]), ("beta", [26.0, 31.0])):
         _write_results(run, name, values)
-    settings = dict(
-        hsb_run_paths=[str(run)],
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        implementations=["alpha", "beta"],
-        output_root="out",
-        workers=1,
-        overwrite=False,
-    )
+    settings = {
+        "hsb_run_paths": [str(run)],
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "implementations": ["alpha", "beta"],
+        "output_root": "out",
+        "workers": 1,
+        "overwrite": False,
+    }
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump({"daily_pairwise": settings}))
     real_write = artifacts.pq.write_table
@@ -136,9 +136,11 @@ def test_daily_script_resume_input_changes_and_interrupted_write(tmp_path, monke
             raise RuntimeError("interrupted write")
         return real_write(table, destination, **kwargs)
 
-    with patch.object(artifacts.pq, "write_table", side_effect=interrupt):
-        with pytest.raises(RuntimeError, match="interrupted write"):
-            daily_pairwise.main()
+    with (
+        patch.object(artifacts.pq, "write_table", side_effect=interrupt),
+        pytest.raises(RuntimeError, match="interrupted write"),
+    ):
+        daily_pairwise.main()
     assert not persistence.completed_pairwise_dates(tmp_path / "out")
     daily_pairwise.main()
     result_path = tmp_path / "out/dates/2025-01-01/pairwise.parquet"

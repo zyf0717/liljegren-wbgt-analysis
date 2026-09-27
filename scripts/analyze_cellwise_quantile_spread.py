@@ -20,7 +20,7 @@ def main() -> None:
         if settings.get("population_weights_path") is not None:
             export_spread_coverage(outputs, settings["population_weights_path"])
         save_settings(arguments, arguments["output_root"])
-        print((outputs / "cellwise_quantile_spread.parquet"))
+        print(outputs / "cellwise_quantile_spread.parquet")
 
 
 if __name__ == "__main__":

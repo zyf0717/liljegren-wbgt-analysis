@@ -68,12 +68,12 @@ def test_daily_serial_parallel_and_single_discovery(tmp_path):
     run = tmp_path / "run"
     _write_joint_day(run, "2025-01-01", 1)
     _write_joint_day(run, "2025-01-02", 2)
-    settings = dict(
-        hsb_run_paths=(run,),
-        start_date=date(2025, 1, 1),
-        end_date=date(2025, 1, 2),
-        implementations=DEFAULT_IMPLEMENTATIONS,
-    )
+    settings = {
+        "hsb_run_paths": (run,),
+        "start_date": date(2025, 1, 1),
+        "end_date": date(2025, 1, 2),
+        "implementations": DEFAULT_IMPLEMENTATIONS,
+    }
     with patch.object(
         workflows, "discover_results", wraps=workflows.discover_results
     ) as discover:

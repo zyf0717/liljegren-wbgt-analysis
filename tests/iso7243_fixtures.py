@@ -45,17 +45,17 @@ def write_day(root, day="2025-01-01", *, complex_rows=True, names=NAMES):
                 if ci == 2 and index == 0:
                     status = "invalid"
                 rows.append(
-                    dict(
-                        cycle_ordinal=1,
-                        row_id=f"{cell}-{day.replace('-', '')}{hour:02}",
-                        row_ordinal=ci * 24 + hour,
-                        wbgt_c=value,
-                        wbgt_status=status,
-                        tg_status="invalid",
-                        tg_c=np.nan,
-                        tnwb_status="invalid",
-                        tnwb_c=None,
-                    )
+                    {
+                        "cycle_ordinal": 1,
+                        "row_id": f"{cell}-{day.replace('-', '')}{hour:02}",
+                        "row_ordinal": ci * 24 + hour,
+                        "wbgt_c": value,
+                        "wbgt_status": status,
+                        "tg_status": "invalid",
+                        "tg_c": np.nan,
+                        "tnwb_status": "invalid",
+                        "tnwb_c": None,
+                    }
                 )
         if index % 2:
             rows.reverse()

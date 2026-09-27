@@ -21,13 +21,13 @@ from analysis.cellwise import iso7243
 
 
 def analyze(run, output, **kwargs):
-    options = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        thresholds_c=[25.0, 30.0],
-        output_root=output,
-        date_workers=1,
-    )
+    options = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "thresholds_c": [25.0, 30.0],
+        "output_root": output,
+        "date_workers": 1,
+    }
     options.update(kwargs)
     return iso7243.analyze_cellwise_iso7243_classification(
         run,
@@ -42,14 +42,14 @@ def test_raw_reference_direction_and_wbgt_only_support(tmp_path, batch_size):
     write_day(run)
     output = analyze(run, tmp_path / "out", batch_size=batch_size)
     expected = reference_counts(run, ["2025-01-01"])
-    non = pq.read_table((output / "cellwise_non_consensus.parquet"))
+    non = pq.read_table(output / "cellwise_non_consensus.parquet")
     np.testing.assert_array_equal(non["n_joint"], expected[0])
     np.testing.assert_array_equal(non["n_non_consensus"], expected[1])
     assert non["n_joint"].to_pylist() == [18, 24, 0]
     np.testing.assert_allclose(
         non["non_consensus_percent"].to_pylist(), [100 / 6, 0, np.nan], equal_nan=True
     )
-    pairs = pq.read_table((output / "cell_pair_differences.parquet"))
+    pairs = pq.read_table(output / "cell_pair_differences.parquet")
     assert pairs.num_rows == 3 * PAIR_COUNT
     assert pairs.schema.field("n_compared").type == pa.uint32()
     assert pairs.schema.field("n_higher").type == pa.uint32()
@@ -95,16 +95,18 @@ def test_parallel_resume_and_completed_reuse(tmp_path, sample_scope):
                 np.testing.assert_array_equal(left[column], right[column])
             else:
                 assert left[column].equals(right[column])
-    with patch.object(
-        iso7243, "_write_outputs", side_effect=RuntimeError("interrupted")
+    with (
+        patch.object(
+            iso7243, "_write_outputs", side_effect=RuntimeError("interrupted")
+        ),
+        pytest.raises(RuntimeError, match="interrupted"),
     ):
-        with pytest.raises(RuntimeError, match="interrupted"):
-            analyze(
-                run,
-                tmp_path / "resume",
-                end_date="2025-01-02",
-                sample_scope=sample_scope,
-            )
+        analyze(
+            run,
+            tmp_path / "resume",
+            end_date="2025-01-02",
+            sample_scope=sample_scope,
+        )
     with patch.object(iso7243, "_scan_day", side_effect=AssertionError("must reuse")):
         resumed = analyze(
             run, tmp_path / "resume", end_date="2025-01-02", sample_scope=sample_scope
@@ -119,8 +121,8 @@ def test_parallel_resume_and_completed_reuse(tmp_path, sample_scope):
             sample_scope=sample_scope,
             implementations=DEFAULT_IMPLEMENTATIONS,
         )
-    assert pq.read_table((resumed / "cell_pair_differences.parquet")).equals(
-        pq.read_table((serial / "cell_pair_differences.parquet"))
+    assert pq.read_table(resumed / "cell_pair_differences.parquet").equals(
+        pq.read_table(serial / "cell_pair_differences.parquet")
     )
     assert (same / "cellwise_non_consensus.parquet") == (
         resumed / "cellwise_non_consensus.parquet"
@@ -144,7 +146,7 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
         run, tmp_path / "pairwise", sample_scope="pairwise", batch_size=batch_size
     )
     expected = reference_pairwise_counts(run, ["2025-01-01"])
-    pairs = pq.read_table((out / "cell_pair_differences.parquet"))
+    pairs = pq.read_table(out / "cell_pair_differences.parquet")
     for pi in range(PAIR_COUNT):
         for ci, column in enumerate(("n_compared", "n_higher", "n_lower")):
             np.testing.assert_array_equal(
@@ -153,7 +155,7 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
     assert pairs["n_compared"][0].as_py() == 24
     assert pairs["n_higher"][0].as_py() == 8
     assert pairs["n_lower"][0].as_py() == 1
-    non = pq.read_table((out / "cellwise_non_consensus.parquet"))
+    non = pq.read_table(out / "cellwise_non_consensus.parquet")
     common = reference_counts(run, ["2025-01-01"])
     np.testing.assert_array_equal(non["n_joint"], common[0])
     np.testing.assert_array_equal(non["n_non_consensus"], common[1])
@@ -192,7 +194,7 @@ def test_uint32_counts_above_255(tmp_path):
     run = tmp_path / "run"
     write_days(run, 12, complex_rows=False)
     out = analyze(run, tmp_path / "out", end_date="2025-01-12")
-    pairs = pq.read_table((out / "cell_pair_differences.parquet"))
+    pairs = pq.read_table(out / "cell_pair_differences.parquet")
     assert pairs["n_compared"][0].as_py() == 288
     assert pairs["n_higher"][0].as_py() == 288
     assert pairs["n_lower"][0].as_py() == 0
@@ -257,7 +259,7 @@ def test_class_dtype_promotion(tmp_path):
     thresholds = list(np.arange(-240.0, 31.0))
     out = analyze(run, tmp_path / "out", thresholds_c=thresholds)
     assert (
-        pq.read_table((out / "cell_pair_differences.parquet"))["n_higher"][0].as_py()
+        pq.read_table(out / "cell_pair_differences.parquet")["n_higher"][0].as_py()
         == 24
     )
 
@@ -276,7 +278,7 @@ def test_corrupt_checkpoint_and_changed_input(tmp_path):
         analyze(run, root)
     analyze(run, root, overwrite=True)
     assert (
-        pq.read_table((out / "cell_pair_differences.parquet"))["n_higher"][0].as_py()
+        pq.read_table(out / "cell_pair_differences.parquet")["n_higher"][0].as_py()
         == 24
     )
 

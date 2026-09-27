@@ -197,13 +197,13 @@ def test_country_cache_matches_hsb_hourly_classification(
     run = tmp_path / "run"
     write_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    common = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        thresholds_c=(25, 26, 28, 30),
-        date_workers=1,
-        batch_size=11,
-    )
+    common = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "thresholds_c": (25, 26, 28, 30),
+        "date_workers": 1,
+        "batch_size": 11,
+    }
 
     raw = analyze_cellwise_iso7243_classification(
         run,
@@ -225,11 +225,11 @@ def test_country_cache_matches_hsb_hourly_classification(
         "cell_pair_differences",
         "cell_lookup",
     ):
-        assert pq.read_table((raw / f"{name}.parquet")).equals(
-            pq.read_table((country / f"{name}.parquet"))
+        assert pq.read_table(raw / f"{name}.parquet").equals(
+            pq.read_table(country / f"{name}.parquet")
         )
-    raw_non_consensus = pq.read_table((raw / "cellwise_non_consensus.parquet"))
-    country_non_consensus = pq.read_table((country / "cellwise_non_consensus.parquet"))
+    raw_non_consensus = pq.read_table(raw / "cellwise_non_consensus.parquet")
+    country_non_consensus = pq.read_table(country / "cellwise_non_consensus.parquet")
     for column in raw_non_consensus.column_names:
         np.testing.assert_equal(
             np.asarray(raw_non_consensus[column]),
@@ -277,14 +277,14 @@ def test_country_cache_matches_hsb_joint_quantiles(
         write_statistics=write_statistics,
     )
     spec = WBGTHistogramSpec(-70.0, 70.0, 1.0, 99)
-    common = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        histogram_spec=spec,
-        exact_validation_cells=2,
-        date_workers=1,
-        replay_workers=1,
-    )
+    common = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "histogram_spec": spec,
+        "exact_validation_cells": 2,
+        "date_workers": 1,
+        "replay_workers": 1,
+    }
 
     raw_root = compute_joint_cellwise_temperature_quantiles(
         run,
@@ -330,11 +330,11 @@ def test_country_cache_requires_exclusive_input_and_output_root(tmp_path: Path) 
     run = tmp_path / "run"
     write_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    common = dict(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        thresholds_c=(25, 26, 28, 30),
-    )
+    common = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "thresholds_c": (25, 26, 28, 30),
+    }
 
     with pytest.raises(ValueError, match="exactly one"):
         analyze_cellwise_iso7243_classification(
@@ -350,13 +350,13 @@ def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
     run = tmp_path / "run"
     write_days(run, 2)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    common = dict(
-        country_cache=cache,
-        start_date="2025-01-01",
-        end_date="2025-01-02",
-        thresholds_c=(21, 25, 28, 31),
-        batch_size=11,
-    )
+    common = {
+        "country_cache": cache,
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-02",
+        "thresholds_c": (21, 25, 28, 31),
+        "batch_size": 11,
+    }
     serial = analyze_cellwise_iso7243_classification(
         output_root=tmp_path / "serial",
         date_workers=1,
@@ -369,8 +369,8 @@ def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
         **common,
         implementations=DEFAULT_IMPLEMENTATIONS,
     )
-    assert pq.read_table((serial / "cell_pair_differences.parquet")).equals(
-        pq.read_table((parallel / "cell_pair_differences.parquet"))
+    assert pq.read_table(serial / "cell_pair_differences.parquet").equals(
+        pq.read_table(parallel / "cell_pair_differences.parquet")
     )
     assert (serial / "classes.csv").read_text() == (
         parallel / "classes.csv"
@@ -382,13 +382,13 @@ def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
     run = tmp_path / "run"
     write_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    common = dict(
-        country_cache=cache,
-        output_root=tmp_path / "out",
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        thresholds_c=(25, 26, 28, 30),
-    )
+    common = {
+        "country_cache": cache,
+        "output_root": tmp_path / "out",
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "thresholds_c": (25, 26, 28, 30),
+    }
     analyze_cellwise_iso7243_classification(
         **common,
         implementations=DEFAULT_IMPLEMENTATIONS,
@@ -421,13 +421,13 @@ def test_country_cache_configured_scripts(tmp_path: Path, monkeypatch) -> None:
     run = tmp_path / "run"
     _write_valid_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
-    common = dict(
-        implementations=list(DEFAULT_IMPLEMENTATIONS),
-        country_cache=str(cache),
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        date_workers=1,
-    )
+    common = {
+        "implementations": list(DEFAULT_IMPLEMENTATIONS),
+        "country_cache": str(cache),
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-01",
+        "date_workers": 1,
+    }
     settings = {
         "quantiles": dict(
             probabilities=list(DEFAULT_PROBABILITIES),

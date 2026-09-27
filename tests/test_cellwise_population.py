@@ -108,17 +108,17 @@ class CellwisePopulationTests(unittest.TestCase):
             population._sum_latitude_band(values)
 
     def test_raster_validation_rejects_invalid_grids_and_counts(self) -> None:
-        profile = dict(
-            driver="GTiff",
-            width=43_200,
-            height=21_600,
-            count=1,
-            dtype="int32",
-            crs="EPSG:4326",
-            nodata=population.LANDSCAN_NODATA,
-            transform=Affine(1 / 120, 0, -180, 0, -1 / 120, 90),
-            sparse_ok=True,
-        )
+        profile = {
+            "driver": "GTiff",
+            "width": 43_200,
+            "height": 21_600,
+            "count": 1,
+            "dtype": "int32",
+            "crs": "EPSG:4326",
+            "nodata": population.LANDSCAN_NODATA,
+            "transform": Affine(1 / 120, 0, -180, 0, -1 / 120, 90),
+            "sparse_ok": True,
+        }
         for changes, message in [
             ({"count": 2}, "one band"),
             ({"width": 43_199}, "global grid"),
@@ -129,10 +129,13 @@ class CellwisePopulationTests(unittest.TestCase):
             ({"nodata": -9999}, "nodata"),
             ({"dtype": "float64"}, "int32"),
         ]:
-            with self.subTest(changes=changes), rasterio.MemoryFile() as memory:
-                with memory.open(**(profile | changes)) as source:
-                    with self.assertRaisesRegex(ValueError, message):
-                        population._validate_landscan_raster(source)
+            with (
+                self.subTest(changes=changes),
+                rasterio.MemoryFile() as memory,
+                memory.open(**(profile | changes)) as source,
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                population._validate_landscan_raster(source)
 
     def test_source_cell_ids_follow_era5_convention(self) -> None:
         self.assertEqual(source_cell_id(0, 0), "era5-global-n000000-e0000000")
@@ -171,7 +174,7 @@ class CellwisePopulationTests(unittest.TestCase):
             outputs = population.compute_era5_population_weights(
                 raster, output_root=root / "output"
             )
-            table = pq.read_table((outputs / "population.parquet"))
+            table = pq.read_table(outputs / "population.parquet")
             self.assertEqual(
                 table.column_names,
                 ["source_cell_id", "latitude", "longitude", "population"],

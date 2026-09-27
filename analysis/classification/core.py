@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Sequence
 
@@ -16,7 +17,7 @@ def validate_thresholds(thresholds_c: Sequence[float]) -> tuple[float, ...]:
     if (
         not thresholds
         or any(not math.isfinite(value) for value in thresholds)
-        or any(left >= right for left, right in zip(thresholds, thresholds[1:]))
+        or any(left >= right for left, right in itertools.pairwise(thresholds))
     ):
         raise ValueError("thresholds_c must be finite and strictly increasing")
     return thresholds
@@ -26,7 +27,7 @@ def class_definitions(thresholds_c: Sequence[float]) -> pd.DataFrame:
     """Describe lower-inclusive threshold bands; thresholds are validated at entry."""
     bounds = (-np.inf, *thresholds_c, np.inf)
     rows = []
-    for index, (lower, upper) in enumerate(zip(bounds, bounds[1:])):
+    for index, (lower, upper) in enumerate(itertools.pairwise(bounds)):
         if index == 0:
             label, definition = f"< {upper:g} C", f"wbgt_c < {upper:g}"
         elif index == len(thresholds_c):
