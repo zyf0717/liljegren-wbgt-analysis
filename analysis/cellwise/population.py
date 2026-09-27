@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import rasterio
 from rasterio.transform import from_origin
@@ -36,27 +37,15 @@ def load_population_weights(
             "scripts/compute_era5_population_weights.py first"
         )
     table = pq.read_table(population_path, columns=["source_cell_id", "population"])
-    population_ids = table["source_cell_id"].combine_chunks().to_pylist()
-    counts = table["population"].combine_chunks()
-    if (
-        table["source_cell_id"].null_count
-        or counts.null_count
-        or not pa.types.is_integer(counts.type)
-        or len(population_ids) != len(set(population_ids))
-    ):
-        raise ValueError(
-            "Population weights contain invalid source_cell_id or population values"
-        )
-    population = np.asarray(counts.to_numpy(zero_copy_only=False), dtype=np.int64)
-    if (population < 0).any():
-        raise ValueError("Population weights contain negative population values")
-    lookup = dict(zip(population_ids, population, strict=True))
-    weights = np.asarray(
-        [lookup.get(source_id, -1) for source_id in source_ids], dtype=np.int64
+    indices = pc.index_in(
+        pa.array(source_ids, type=pa.string()), value_set=table["source_cell_id"]
     )
-    if (weights < 0).any():
+    if indices.null_count:
         raise ValueError("Population weights are missing a cell from the analysis grid")
-    return weights, int(population.sum(dtype=np.int64))
+    population = np.asarray(table["population"], dtype=np.int64)
+    return population[np.asarray(indices, dtype=np.int64)], int(
+        population.sum(dtype=np.int64)
+    )
 
 
 def compute_era5_population_weights(

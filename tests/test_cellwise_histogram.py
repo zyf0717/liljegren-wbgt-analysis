@@ -22,9 +22,6 @@ class CellwiseHistogramTests(unittest.TestCase):
             spec.bin_ids(np.asarray([-70.01, -70.0, -69.98, 69.98, 70.0])),
             np.asarray([0, 1, 2, 7000, 7001]),
         )
-        self.assertEqual(spec.bin_bounds(0), (None, -70.0))
-        self.assertEqual(spec.bin_bounds(1), (-70.0, -69.98))
-        self.assertEqual(spec.bin_bounds(7001), (70.0, None))
 
     def test_daily_updates_equal_pooled_observation_histogram(self) -> None:
         with tempfile.TemporaryDirectory() as root:

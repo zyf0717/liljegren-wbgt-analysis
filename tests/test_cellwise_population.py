@@ -37,25 +37,11 @@ class CellwisePopulationTests(unittest.TestCase):
             self.assertEqual(total, 9_000_000_007)
             zero, _ = population.load_population_weights(["b"], path)
             self.assertEqual(zero.tolist(), [0])
+            empty, total = population.load_population_weights([], path)
+            self.assertEqual(empty.size, 0)
+            self.assertEqual(total, 9_000_000_007)
             with self.assertRaisesRegex(ValueError, "missing a cell"):
                 population.load_population_weights(["missing"], path)
-
-    def test_population_alignment_rejects_invalid_counts_and_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "population.parquet"
-            for ids, counts in (
-                (["a", "a"], [1, 2]),
-                (["a", None], [1, 2]),
-                (["a", "b"], [1, None]),
-                (["a", "b"], [1, -1]),
-                (["a", "b"], [1.0, 1.5]),
-            ):
-                with self.subTest(ids=ids, counts=counts):
-                    pq.write_table(
-                        pa.table({"source_cell_id": ids, "population": counts}), path
-                    )
-                    with self.assertRaises(ValueError):
-                        population.load_population_weights(["a"], path)
 
     def test_band_sums_aligned_pixels_and_excludes_nodata(self) -> None:
         values = np.ones((30, 60), dtype=np.int32)

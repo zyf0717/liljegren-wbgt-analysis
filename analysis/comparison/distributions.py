@@ -69,18 +69,6 @@ class WBGTHistogramSpec:
         result[numeric >= self.maximum_c] = self.overflow_bin_id
         return result
 
-    def bin_bounds(self, bin_id: int) -> tuple[float | None, float | None]:
-        """Return lower/upper bounds, with ``None`` for an open edge."""
-
-        if bin_id == self.underflow_bin_id:
-            return None, self.minimum_c
-        if 1 <= bin_id <= self.regular_bin_count:
-            lower = self.minimum_c + (bin_id - 1) * self.width_c
-            return lower, lower + self.width_c
-        if bin_id == self.overflow_bin_id:
-            return self.maximum_c, None
-        raise ValueError(f"Invalid WBGT bin ID: {bin_id}")
-
 
 DEFAULT_WBGT_HISTOGRAM = WBGTHistogramSpec()
 
@@ -91,15 +79,6 @@ ABS_BIN_SEGMENTS = (
     (5.0, 20.0, 0.25, 260),
     (20.0, 100.0, 1.0, 320),
 )
-
-
-def absolute_difference_bin_bounds(bin_id: int) -> tuple[float, float | None]:
-    for lower, upper, width, first in ABS_BIN_SEGMENTS:
-        if bin_id < first + round((upper - lower) / width):
-            return lower + (bin_id - first) * width, lower + (
-                bin_id - first + 1
-            ) * width
-    return 100.0, None
 
 
 def absolute_difference_bins(values):
