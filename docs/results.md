@@ -31,6 +31,7 @@ value, and support rules. Cross-implementation observation identity is checked
 where daily common support is constructed.
 
 Cellwise workflows also accept country caches produced by
-`extract_countries_observations()`. Their row-group index limits repeated scans
-to the requested date and implementation. Extraction records its resolved
+`extract_countries_observations()`. Extraction records row-group routing in the manifest, limiting repeated scans
+to the requested date and implementation without a per-analysis index cache.
+Extraction records its resolved
 boundary path so country maps use the same geometry and clipping bounds.

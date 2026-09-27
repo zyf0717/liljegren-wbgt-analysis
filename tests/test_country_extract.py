@@ -134,7 +134,7 @@ class CountryExtractionTests(unittest.TestCase):
                 ["era5-global-n002500-e0002500"] * 2,
             )
             self.assertEqual(extraction.selection_bounds, (0.12, 0.12, 0.37, 0.15))
-            self.assertEqual(extraction.schema_version, 3)
+            self.assertEqual(extraction.schema_version, 4)
 
     def test_routes_one_scan_to_multiple_countries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -197,7 +197,14 @@ class CountryExtractionTests(unittest.TestCase):
     def test_buffered_writer_emits_bounded_row_groups(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "rows.parquet"
-            table = pa.table({"value": range(600_000)})
+            table = pa.table(
+                {
+                    "value": range(600_000),
+                    "result_date": [date(2025, 1, 1)] * 600_000,
+                    "implementation": ["alpha"] * 600_000,
+                    "run_id": ["run"] * 600_000,
+                }
+            )
             writer = _BufferedParquetWriter(path, table.schema)
 
             writer.write(table.slice(0, 200_000))
@@ -214,3 +221,43 @@ class CountryExtractionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_buffered_routing_tracks_scopes_across_group_boundaries(tmp_path, monkeypatch):
+    from analysis.country import extraction
+
+    monkeypatch.setattr(extraction, "_OUTPUT_ROW_GROUP_SIZE", 4)
+    path = tmp_path / "cache.parquet"
+
+    def rows(day, name, count):
+        return pa.table(
+            {
+                "result_date": [day] * count,
+                "implementation": [name] * count,
+                "run_id": ["run"] * count,
+                "value": range(count),
+            }
+        )
+
+    first = rows(date(2025, 1, 31), "a", 3)
+    second = rows(date(2025, 2, 1), "b", 6)
+    writer = _BufferedParquetWriter(path, first.schema)
+    writer.write(first)
+    writer.write(second)
+    writer.finish()
+    assert writer.routing() == [
+        {
+            "result_date": "2025-01-31",
+            "implementation": "a",
+            "run_id": "run",
+            "row_groups": [0],
+        },
+        {
+            "result_date": "2025-02-01",
+            "implementation": "b",
+            "run_id": "run",
+            "row_groups": [0, 1, 2],
+        },
+    ]
+    reader = pq.ParquetFile(path)
+    assert [reader.metadata.row_group(i).num_rows for i in range(3)] == [4, 4, 1]

@@ -21,7 +21,15 @@ from ..config import (
 )
 from ..grid import CellGrid, load_grid
 from ..io.artifacts import atomic_json, atomic_parquet, clear_outputs
-from ..results import RESULT_QUANTITIES, RESULT_SCHEMA_ID, date_range
+from ..results import (
+    RESULT_QUANTITIES,
+    RESULT_SCHEMA_ID,
+    build_source_grid,
+    current_source_fingerprint,
+    date_range,
+    resolve_source,
+    source_metadata,
+)
 from ._joint_io import HOURS_PER_DAY
 from ._joint_masks import generate_joint_masks, load_joint_masks
 from ._joint_replay import (
@@ -30,12 +38,6 @@ from ._joint_replay import (
 )
 from ._joint_replay import (
     sample_cells as _sample_cells,
-)
-from ._source import (
-    build_source_grid,
-    current_source_fingerprint,
-    resolve_source,
-    source_metadata,
 )
 from .accumulator import counter_dtype
 
@@ -81,7 +83,6 @@ def compute_joint_cellwise_temperature_quantiles(
             root,
             (
                 ".work",
-                ".source-index.json",
                 "grid.parquet",
                 "implementations",
                 "metadata.json",
@@ -97,7 +98,6 @@ def compute_joint_cellwise_temperature_quantiles(
         country_cache,
         dates,
         implementations,
-        index_path=root / ".source-index.json",
     )
     input_fingerprint = source.fingerprint
     country_metadata = source_metadata(source)

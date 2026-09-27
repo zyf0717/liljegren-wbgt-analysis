@@ -22,12 +22,25 @@ from analysis.cellwise.spread import analyze_cellwise_quantile_spread
 from analysis.comparison.distributions import WBGTHistogramSpec
 
 
+def cache_scopes(path):
+    reader = pq.ParquetFile(path)
+    groups = {}
+    columns = ["result_date", "implementation", "run_id"]
+    for index in range(reader.num_row_groups):
+        rows = reader.read_row_group(index, columns=columns).to_pylist()
+        for key in {tuple(str(row[name]) for name in columns) for row in rows}:
+            groups.setdefault(key, []).append(index)
+    return [
+        dict(zip(columns, key), row_groups=value)
+        for key, value in sorted(groups.items())
+    ]
+
+
 def _country_cache(
     run: Path,
     output: Path,
     *,
     write_statistics: bool = True,
-    schema_version: int = 3,
 ) -> Path:
     tables = []
     for path in sorted((run / "results").glob("*/*/*/results.parquet")):
@@ -84,7 +97,7 @@ def _country_cache(
         )
     )
     manifest = {
-        "schema_version": schema_version,
+        "schema_version": 4,
         "boundary_path": str(boundary),
         "country_iso_a2": "XX",
         "country_iso_a3": "XXX",
@@ -95,8 +108,8 @@ def _country_cache(
         "parquet_file": output.name,
         "parquet_size_bytes": output.stat().st_size,
     }
-    if schema_version == 3:
-        manifest["selection_bounds"] = [-1.0, -1.0, 1.0, 1.0]
+    manifest["selection_bounds"] = [-1.0, -1.0, 1.0, 1.0]
+    manifest["scopes"] = cache_scopes(output)
     output.with_name("manifest.json").write_text(json.dumps(manifest))
     return output
 
@@ -138,6 +151,7 @@ def _rewrite_cache(cache: Path, table: pa.Table) -> None:
     manifest_path = cache.with_name("manifest.json")
     manifest = json.loads(manifest_path.read_text())
     manifest["parquet_size_bytes"] = cache.stat().st_size
+    manifest["scopes"] = cache_scopes(cache)
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -226,7 +240,7 @@ def test_country_cache_matches_hsb_hourly_classification(
     metadata = json.loads(country.metadata.read_text())
     assert metadata["country_selection"]["country_iso_a3"] == "XXX"
     assert metadata["thresholds_c"] == [25.0, 26.0, 28.0, 30.0]
-    assert (country.metadata.parent / ".source-index.json").is_file()
+    assert not (country.metadata.parent / ".source-index.json").exists()
     weights = tmp_path / "population.parquet"
     pq.write_table(
         pa.table(
@@ -254,7 +268,6 @@ def test_country_cache_matches_hsb_joint_quantiles(
         run,
         tmp_path / "country" / "observations.parquet",
         write_statistics=write_statistics,
-        schema_version=2,
     )
     spec = WBGTHistogramSpec(-70.0, 70.0, 1.0, 99)
     common = dict(

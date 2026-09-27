@@ -61,7 +61,8 @@ configured quantities; the plotting script renders their maps separately. Run ho
 class differences and non-consensus counts, then render the desired figures.
 
 Country extraction writes `<output_directory>/<iso3>/observations.parquet` and
-its selection manifest. Optional `bounds: [west, south, east, north]` clips the
+its selection manifest, including row-group routing. Country caches from earlier
+revisions need a fresh extraction to provide this routing metadata. Optional `bounds: [west, south, east, north]` clips the
 country polygon and supports selections such as CONUS. To use a country cache
 in either cellwise workflow, set `hsb_run_paths: null`, set `country_cache`, and
 choose a separate output directory. Country maps and population denominators

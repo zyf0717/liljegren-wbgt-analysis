@@ -14,10 +14,9 @@ import pyarrow as pa
 from ..comparison.distributions import WBGTHistogramSpec
 from ..grid import CellGrid, load_grid
 from ..io.artifacts import atomic_json, atomic_parquet
-from ..results import RESULT_QUANTITIES, ResultQuantity
+from ..results import RESULT_QUANTITIES, CellwiseSource, ResultQuantity
 from ._joint_io import HOURS_PER_DAY, JointMaskCache, scan_native_valid_day
 from ._joint_masks import load_joint_masks
-from ._source import CellwiseSource
 from .accumulator import CellwiseHistogramAccumulator, increment_counts
 from .quantiles import quantile_table
 

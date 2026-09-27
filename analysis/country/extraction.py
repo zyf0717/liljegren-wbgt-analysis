@@ -13,7 +13,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from ..io.artifacts import atomic_json, atomic_path
-from ..results import date_range, discover_results
+from ..results import ResultFile, date_range, discover_results
 from .cells import (
     Country,
     GeographicBounds,
@@ -40,6 +40,7 @@ class CountryExtraction:
     parquet_file: str
     parquet_size_bytes: int
     boundary_path: str
+    scopes: list[dict]
 
 
 _OUTPUT_COLUMNS = (
@@ -63,6 +64,7 @@ _SOURCE_COLUMNS = tuple(
     if column not in {"result_date", "run_id", "implementation", "cell_id"}
 )
 _OUTPUT_ROW_GROUP_SIZE = 250_000
+_ROUTING_COLUMNS = ["result_date", "implementation", "run_id"]
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ class _BufferedParquetWriter:
         self.pending: list[pa.Table] = []
         self.pending_rows = 0
         self.closed = False
+        self.row_group = 0
+        self.scopes = {}
 
     def write(self, table: pa.Table) -> None:
         self.pending.append(table)
@@ -89,7 +93,7 @@ class _BufferedParquetWriter:
         if self.closed:
             return
         if self.pending:
-            self.writer.write_table(pa.concat_tables(self.pending))
+            self._write_group(pa.concat_tables(self.pending))
             self.pending.clear()
             self.pending_rows = 0
         self.writer.close()
@@ -104,14 +108,29 @@ class _BufferedParquetWriter:
         table = pa.concat_tables(self.pending)
         offset = 0
         while table.num_rows - offset >= _OUTPUT_ROW_GROUP_SIZE:
-            self.writer.write_table(
-                table.slice(offset, _OUTPUT_ROW_GROUP_SIZE),
-                row_group_size=_OUTPUT_ROW_GROUP_SIZE,
-            )
+            self._write_group(table.slice(offset, _OUTPUT_ROW_GROUP_SIZE))
             offset += _OUTPUT_ROW_GROUP_SIZE
         remainder = table.slice(offset)
         self.pending = [remainder] if remainder.num_rows else []
         self.pending_rows = remainder.num_rows
+
+    def _write_group(self, table: pa.Table) -> None:
+        self.writer.write_table(table, row_group_size=_OUTPUT_ROW_GROUP_SIZE)
+        for row in (
+            table.select(_ROUTING_COLUMNS)
+            .group_by(_ROUTING_COLUMNS)
+            .aggregate([])
+            .to_pylist()
+        ):
+            key = tuple(str(row[name]) for name in _ROUTING_COLUMNS)
+            self.scopes.setdefault(key, []).append(self.row_group)
+        self.row_group += 1
+
+    def routing(self) -> list[dict]:
+        return [
+            dict(zip(_ROUTING_COLUMNS, key), row_groups=groups)
+            for key, groups in sorted(self.scopes.items())
+        ]
 
 
 def extract_countries_observations(
@@ -150,7 +169,7 @@ def extract_countries_observations(
         raise ValueError("No ERA5 cells intersect a requested country")
     _validate_outputs(selections, overwrite)
     files = _select_result_files(
-        tuple(item.path for item in discover_results(resolved_runs, dates)),
+        discover_results(resolved_runs, dates),
         _merge_ranges(
             (min(item.cells) + "-", max(item.cells) + ".") for item in selections
         ),
@@ -174,12 +193,12 @@ def extract_countries_observations(
             for item in selections
         }
         try:
-            for index, (path, row_groups) in enumerate(files, 1):
-                reader = pq.ParquetFile(path)
+            for index, (item, row_groups) in enumerate(files, 1):
+                reader = pq.ParquetFile(item.path)
                 result_date, run_id, implementation = (
-                    path.parents[2].name,
-                    path.parents[1].name,
-                    path.parent.name,
+                    item.result_date,
+                    item.run_id,
+                    item.implementation,
                 )
                 for batch in reader.iter_batches(
                     columns=list(_SOURCE_COLUMNS),
@@ -199,7 +218,7 @@ def extract_countries_observations(
                         table = pa.table(
                             {
                                 "result_date": pa.array(
-                                    [date.fromisoformat(result_date)] * rows,
+                                    [result_date] * rows,
                                     type=pa.date32(),
                                 ),
                                 "run_id": pa.array([run_id] * rows),
@@ -253,7 +272,7 @@ def extract_countries_observations(
                 iso_a3 = item.country.iso_a3
                 item.output.parent.mkdir(parents=True, exist_ok=True)
                 extraction = CountryExtraction(
-                    3,
+                    4,
                     datetime.now(timezone.utc).isoformat(),
                     item.country.iso_a2,
                     iso_a3,
@@ -268,6 +287,7 @@ def extract_countries_observations(
                     item.output.name,
                     temporary[iso_a3].stat().st_size,
                     str(boundary_path),
+                    writers[iso_a3].routing(),
                 )
                 result.append(extraction)
             for item in selections:
@@ -322,9 +342,9 @@ def _overlapping_row_groups(
 
 
 def _select_result_files(
-    files: Sequence[Path], ranges: Sequence[tuple[str, str]]
-) -> tuple[tuple[Path, tuple[int, ...]], ...]:
-    selected = ((path, _overlapping_row_groups(path, ranges)) for path in files)
+    files: Sequence[ResultFile], ranges: Sequence[tuple[str, str]]
+) -> tuple[tuple[ResultFile, tuple[int, ...]], ...]:
+    selected = ((item, _overlapping_row_groups(item.path, ranges)) for item in files)
     return tuple((path, row_groups) for path, row_groups in selected if row_groups)
 
 

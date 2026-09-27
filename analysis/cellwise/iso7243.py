@@ -36,16 +36,16 @@ from ..io.artifacts import (
     atomic_path,
     clear_outputs,
 )
-from ..results import date_range
-from ._joint_io import identity_batch
-from ._source import (
+from ..results import (
     CellwiseSource,
     build_source_grid,
     current_source_fingerprint,
+    date_range,
     iter_source_batches,
     resolve_source,
     source_metadata,
 )
+from ._joint_io import identity_batch
 
 ISO7243_SCHEMA_VERSION = 2
 ANALYSIS = "iso7243-hourly-wbgt-classification-v2"
@@ -135,7 +135,6 @@ def analyze_cellwise_iso7243_classification(
         country_cache,
         dates,
         names,
-        index_path=root / ".source-index.json",
     )
     fingerprint = source.fingerprint
     request = {
@@ -161,7 +160,6 @@ def analyze_cellwise_iso7243_classification(
             root,
             (
                 ".work",
-                ".source-index.json",
                 "metadata.json",
                 "settings.json",
                 "cell_pair_differences.parquet",

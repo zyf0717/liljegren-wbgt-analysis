@@ -11,8 +11,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from ..grid import CellGrid
-from ..results import RESULT_COLUMNS, RESULT_QUANTITIES, ResultQuantity
-from ._source import CellwiseSource, iter_source_batches
+from ..results import (
+    RESULT_COLUMNS,
+    RESULT_QUANTITIES,
+    CellwiseSource,
+    ResultQuantity,
+    iter_source_batches,
+)
 
 HOURS_PER_DAY = 24
 
