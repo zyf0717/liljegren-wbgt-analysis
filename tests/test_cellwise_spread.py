@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.csv as pcsv
 import pyarrow.parquet as pq
 from openpyxl import load_workbook
+from sample_settings import DEFAULT_IMPLEMENTATIONS, DEFAULT_PROBABILITIES
 
 from analysis.cellwise.spread import (
     PERCENTILES,
@@ -28,11 +29,7 @@ from analysis.cellwise.spread_plots import (
     plot_quantile_spread,
     plot_stacked_cellwise_quantile_spread,
 )
-from analysis.config import (
-    DEFAULT_IMPLEMENTATIONS,
-    DEFAULT_PROBABILITIES,
-    REFERENCE_IMPLEMENTATION,
-)
+from analysis.config import REFERENCE_IMPLEMENTATION
 from analysis.grid import grid_from_source_cell_ids
 
 IMPLEMENTATIONS = DEFAULT_IMPLEMENTATIONS

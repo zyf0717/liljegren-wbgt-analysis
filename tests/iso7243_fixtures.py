@@ -5,8 +5,7 @@ from datetime import date, timedelta
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-
-from analysis.config import DEFAULT_IMPLEMENTATIONS
+from sample_settings import DEFAULT_IMPLEMENTATIONS
 
 NAMES = DEFAULT_IMPLEMENTATIONS
 PAIR_COUNT = len(NAMES) * (len(NAMES) - 1) // 2

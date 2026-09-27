@@ -13,13 +13,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..config import (
-    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
-    SAMPLE_SCOPES,
-    implementation_names,
-)
 from ..io.artifacts import atomic_json, clear_outputs
-from ..results import RESULT_SCHEMA_ID
 from .distributions import ABS_HISTOGRAM_VERSION
 
 PAIRWISE_COLUMNS = (
@@ -73,33 +67,23 @@ _TABLE_COLUMNS = {
 
 
 def pairwise_metadata(
-    sample_scope: str, implementations: Sequence[str] | None = None
+    sample_scope: str, implementations: Sequence[str]
 ) -> dict[str, object]:
     """Return the canonical metadata for one pairwise product scope."""
 
-    if sample_scope not in SAMPLE_SCOPES:
-        raise ValueError(f"Unsupported sample scope: {sample_scope}")
-    metadata: dict[str, object] = {
+    return {
         "sample_scope": sample_scope,
-        "result_schema_id": RESULT_SCHEMA_ID,
         "quantity_scope": "joint",
         "abs_histogram_version": ABS_HISTOGRAM_VERSION,
+        "implementations": list(implementations),
     }
-    if implementations is None and sample_scope == "all-implementations":
-        implementations = DEFAULT_PAIRWISE_IMPLEMENTATIONS
-    metadata["implementation_scope"] = (
-        "data-derived" if implementations is None else "configured"
-    )
-    if implementations is not None:
-        metadata["implementations"] = list(implementation_names(implementations))
-    return metadata
 
 
 def initialize_pairwise_output(
     output_root: str | Path,
     sample_scope: str,
     *,
-    implementations: Sequence[str] | None = None,
+    implementations: Sequence[str],
     overwrite: bool = False,
 ) -> Path:
     """Validate or explicitly reset one pairwise output."""
@@ -172,7 +156,7 @@ def persist_date_partitions(
 def _write_metadata(
     root: Path,
     sample_scope: str,
-    implementations: Sequence[str] | None = None,
+    implementations: Sequence[str],
 ) -> None:
     metadata = pairwise_metadata(sample_scope, implementations)
     path = root / "metadata.json"

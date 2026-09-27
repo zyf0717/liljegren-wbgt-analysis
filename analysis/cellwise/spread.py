@@ -9,7 +9,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..config import (
-    DEFAULT_PROBABILITIES,
     REFERENCE_IMPLEMENTATION,
 )
 from ..grid import area_weights
@@ -17,7 +16,7 @@ from ..io.artifacts import atomic_csv, atomic_json, atomic_parquet
 from ..results import RESULT_QUANTITIES, ResultQuantity
 from .population import load_population_weights
 
-PERCENTILES = tuple(f"p{int(p * 100):02d}" for p in DEFAULT_PROBABILITIES)
+PERCENTILES = ("p50", "p95")
 SPREAD_METRICS = tuple(f"spread_{p}_c" for p in PERCENTILES)
 Weighting = Literal["none", "geometry", "population"]
 
@@ -151,7 +150,7 @@ def _load_source_metadata(root: Path) -> dict:
         raise ValueError("Unsupported cellwise input schema")
     if metadata["support_scope"] != "all-implementations-all-quantities":
         raise ValueError("Unsupported cellwise support scope")
-    if metadata["probabilities"] != list(DEFAULT_PROBABILITIES):
+    if not {0.50, 0.95}.issubset(metadata["probabilities"]):
         raise ValueError("Cellwise input metadata lacks the required quantiles")
     return metadata
 

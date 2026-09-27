@@ -1,6 +1,7 @@
 import json
 
 import matplotlib
+from sample_settings import DEFAULT_IMPLEMENTATIONS
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -47,6 +48,7 @@ def test_hourly_rates_weighting_and_endpoint_bins(tmp_path):
         thresholds_c=[25.0, 30.0],
         output_root=tmp_path / "out",
         date_workers=1,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     weights = tmp_path / "population.parquet"
     pq.write_table(
@@ -178,6 +180,7 @@ def test_pairwise_plot_uses_each_pairs_support(tmp_path):
         sample_scope="pairwise",
         output_root=tmp_path / "out",
         date_workers=1,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     weights = tmp_path / "population.parquet"
     pq.write_table(
@@ -302,6 +305,7 @@ def test_no_supported_cells_remain_undefined(tmp_path):
         thresholds_c=[25.0],
         output_root=tmp_path / "out",
         date_workers=1,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     weights = tmp_path / "population.parquet"
     pq.write_table(
@@ -350,6 +354,7 @@ def test_non_consensus_summary_does_not_read_pair_tables(tmp_path, monkeypatch):
         thresholds_c=[25, 30],
         output_root=tmp_path / "out",
         date_workers=1,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     # A valid completion record still names this file, but map loading need not open it.
     (output / "cell_pair_differences.parquet").write_bytes(b"not needed by this figure")

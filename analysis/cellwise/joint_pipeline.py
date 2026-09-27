@@ -13,9 +13,6 @@ import numpy as np
 
 from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
 from ..config import (
-    DEFAULT_DATE_WORKERS,
-    DEFAULT_IMPLEMENTATIONS,
-    DEFAULT_PROBABILITIES,
     implementation_names,
 )
 from ..grid import CellGrid, load_grid
@@ -42,7 +39,6 @@ from .accumulator import counter_dtype
 
 JOINT_CELLWISE_SCHEMA_VERSION = 2
 JOINT_SUPPORT_SCOPE = "all-implementations-all-quantities"
-DEFAULT_REPLAY_WORKERS = 2
 
 
 def compute_joint_cellwise_temperature_quantiles(
@@ -53,12 +49,12 @@ def compute_joint_cellwise_temperature_quantiles(
     end_date: str | date,
     output_root: str | Path,
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
-    probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
+    probabilities: tuple[float, ...],
     exact_validation_cells: int = 100,
     exact_validation_seed: int = 0,
-    implementations: Sequence[str] = DEFAULT_IMPLEMENTATIONS,
-    date_workers: int = DEFAULT_DATE_WORKERS,
-    replay_workers: int = DEFAULT_REPLAY_WORKERS,
+    implementations: Sequence[str],
+    date_workers: int = 1,
+    replay_workers: int = 1,
     overwrite: bool = False,
 ) -> Path:
     """Compute WBGT, Tg and Tnwb quantiles on one strict common support.

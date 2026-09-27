@@ -80,7 +80,9 @@ class AreaWeightedTests(unittest.TestCase):
             _, summaries = (
                 date(2025, 1, 1),
                 compute_daily_pairwise(
-                    date(2025, 1, 1), discover_results((root,), (date(2025, 1, 1),))
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    implementations=("alpha", "beta"),
                 ),
             )
         row = next(

@@ -10,7 +10,7 @@ import pandas as pd
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from ..config import DEFAULT_IMPLEMENTATIONS, implementation_names
+from ..config import implementation_names
 from ..grid import grid_from_source_cell_ids
 from ..results import date_range, open_country_cache
 from ._summary_tables import change_summary, non_consensus_summary, transition_summary
@@ -24,7 +24,7 @@ def analyze_era5_country_cache(
     end_date: date,
     thresholds_c,
     *,
-    implementations=DEFAULT_IMPLEMENTATIONS,
+    implementations,
 ) -> dict[str, pd.DataFrame]:
     """Read bounded batches for each available date and keep monthly counts only."""
     requested = set(date_range(start_date, end_date))

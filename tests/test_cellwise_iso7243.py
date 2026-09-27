@@ -15,6 +15,7 @@ from iso7243_fixtures import (
     write_day,
     write_days,
 )
+from sample_settings import DEFAULT_IMPLEMENTATIONS
 
 from analysis.cellwise import iso7243
 
@@ -28,7 +29,11 @@ def analyze(run, output, **kwargs):
         date_workers=1,
     )
     options.update(kwargs)
-    return iso7243.analyze_cellwise_iso7243_classification(run, **options)
+    return iso7243.analyze_cellwise_iso7243_classification(
+        run,
+        **options,
+        implementations=DEFAULT_IMPLEMENTATIONS,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 7, 100])
@@ -112,6 +117,7 @@ def test_parallel_resume_and_completed_reuse(tmp_path, sample_scope):
             output_root=tmp_path / "resume",
             date_workers=1,
             sample_scope=sample_scope,
+            implementations=DEFAULT_IMPLEMENTATIONS,
         )
     assert pq.read_table((resumed / "cell_pair_differences.parquet")).equals(
         pq.read_table((serial / "cell_pair_differences.parquet"))

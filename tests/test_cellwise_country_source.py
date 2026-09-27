@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from iso7243_fixtures import CELLS, NAMES, write_day, write_days
+from sample_settings import DEFAULT_IMPLEMENTATIONS, DEFAULT_PROBABILITIES
 
 from analysis.cellwise.iso7243 import (
     analyze_cellwise_iso7243_classification,
@@ -205,10 +206,16 @@ def test_country_cache_matches_hsb_hourly_classification(
     )
 
     raw = analyze_cellwise_iso7243_classification(
-        run, output_root=tmp_path / "raw", **common
+        run,
+        output_root=tmp_path / "raw",
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     country = analyze_cellwise_iso7243_classification(
-        country_cache=cache, output_root=tmp_path / "country-output", **common
+        country_cache=cache,
+        output_root=tmp_path / "country-output",
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     progress = capsys.readouterr().out
     assert "Example WBGT classification: 1 dates, 0 cached, 1 to scan" in progress
@@ -280,10 +287,18 @@ def test_country_cache_matches_hsb_joint_quantiles(
     )
 
     raw_root = compute_joint_cellwise_temperature_quantiles(
-        run, output_root=tmp_path / "raw", **common
+        run,
+        output_root=tmp_path / "raw",
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
+        probabilities=DEFAULT_PROBABILITIES,
     )
     country_root = compute_joint_cellwise_temperature_quantiles(
-        country_cache=cache, output_root=tmp_path / "country-output", **common
+        country_cache=cache,
+        output_root=tmp_path / "country-output",
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
+        probabilities=DEFAULT_PROBABILITIES,
     )
 
     assert pq.read_table(raw_root / "grid.parquet").equals(
@@ -323,7 +338,11 @@ def test_country_cache_requires_exclusive_input_and_output_root(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="exactly one"):
         analyze_cellwise_iso7243_classification(
-            run, country_cache=cache, output_root=tmp_path / "out", **common
+            run,
+            country_cache=cache,
+            output_root=tmp_path / "out",
+            **common,
+            implementations=DEFAULT_IMPLEMENTATIONS,
         )
 
 
@@ -339,10 +358,16 @@ def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
         batch_size=11,
     )
     serial = analyze_cellwise_iso7243_classification(
-        output_root=tmp_path / "serial", date_workers=1, **common
+        output_root=tmp_path / "serial",
+        date_workers=1,
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     parallel = analyze_cellwise_iso7243_classification(
-        output_root=tmp_path / "parallel", date_workers=2, **common
+        output_root=tmp_path / "parallel",
+        date_workers=2,
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     assert pq.read_table((serial / "cell_pair_differences.parquet")).equals(
         pq.read_table((parallel / "cell_pair_differences.parquet"))
@@ -364,7 +389,10 @@ def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
         end_date="2025-01-01",
         thresholds_c=(25, 26, 28, 30),
     )
-    analyze_cellwise_iso7243_classification(**common)
+    analyze_cellwise_iso7243_classification(
+        **common,
+        implementations=DEFAULT_IMPLEMENTATIONS,
+    )
     table = pq.read_table(cache)
     values = table["wbgt_c"].to_pylist()
     values[0] = 19.5
@@ -377,7 +405,10 @@ def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:
         ),
     )
     with pytest.raises(ValueError, match="Incompatible ISO 7243 resume configuration"):
-        analyze_cellwise_iso7243_classification(**common)
+        analyze_cellwise_iso7243_classification(
+            **common,
+            implementations=DEFAULT_IMPLEMENTATIONS,
+        )
 
 
 def test_country_cache_configured_scripts(tmp_path: Path, monkeypatch) -> None:
@@ -391,6 +422,7 @@ def test_country_cache_configured_scripts(tmp_path: Path, monkeypatch) -> None:
     _write_valid_day(run)
     cache = _country_cache(run, tmp_path / "country" / "observations.parquet")
     common = dict(
+        implementations=list(DEFAULT_IMPLEMENTATIONS),
         country_cache=str(cache),
         start_date="2025-01-01",
         end_date="2025-01-01",
@@ -398,6 +430,7 @@ def test_country_cache_configured_scripts(tmp_path: Path, monkeypatch) -> None:
     )
     settings = {
         "quantiles": dict(
+            probabilities=list(DEFAULT_PROBABILITIES),
             **common,
             output_root=str(tmp_path / "quantiles"),
             exact_validation_cells=0,

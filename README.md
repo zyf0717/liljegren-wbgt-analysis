@@ -31,6 +31,8 @@ Input shards follow this layout:
 to share input paths, dates, and implementation selections. Edit the relevant
 section when switching between global and country analyses. Relative paths
 resolve against the repository root. Date ranges include both endpoints.
+Input paths, implementation selections, and quantile probabilities are explicit
+settings; annual pairwise aggregation inherits its scope from the daily product.
 
 Scripts take no command-line arguments. Run them as modules from the repository
 root. They read their section, call the core function, and save effective

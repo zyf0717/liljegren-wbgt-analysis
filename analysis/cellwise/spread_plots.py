@@ -11,7 +11,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from shapely.geometry.base import BaseGeometry
 
-from ..config import DEFAULT_PROBABILITIES
 from .projection import (
     PANEL_TITLE_FONT_SIZE_PT,
     STACKED_MAP_DPI,
@@ -77,7 +76,7 @@ def write_figures(
 
     metric_names = summary["metric"].to_pylist()
     rows = [metric_names.index(f"spread_{percentile}_c") for percentile in PERCENTILES]
-    x = np.asarray(DEFAULT_PROBABILITIES) * 100
+    x = [int(p[1:]) for p in PERCENTILES]
     figure, axis = plt.subplots(figsize=(6.4, 4.0), layout="constrained")
     weight_label = {
         "none": "Unweighted",

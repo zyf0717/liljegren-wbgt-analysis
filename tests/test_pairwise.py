@@ -10,6 +10,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 from polars.testing import assert_frame_equal
+from sample_settings import DEFAULT_PAIRWISE_IMPLEMENTATIONS
 
 from analysis.comparison.pairwise import (
     PAIRWISE_COLUMNS,
@@ -25,7 +26,6 @@ from analysis.comparison.persistence import (
     initialize_pairwise_output,
     pairwise_metadata,
 )
-from analysis.config import DEFAULT_PAIRWISE_IMPLEMENTATIONS
 from analysis.results import discover_results
 
 
@@ -116,6 +116,7 @@ class PairwiseTests(unittest.TestCase):
                     discover_results(
                         (root / "first", root / "second"), (date(2025, 1, 1),)
                     ),
+                    implementations=("alpha", "beta", "gamma"),
                 ),
             )
             rows = {
@@ -174,6 +175,7 @@ class PairwiseTests(unittest.TestCase):
                     date(2025, 1, 1),
                     discover_results((root,), (date(2025, 1, 1),)),
                     "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
                 ),
             )
             self.assertEqual(
@@ -192,6 +194,7 @@ class PairwiseTests(unittest.TestCase):
                     date(2025, 1, 1),
                     discover_results((root,), (date(2025, 1, 1),)),
                     "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
                 )
 
     def test_all_implementations_excludes_unconfigured_target(self) -> None:
@@ -206,6 +209,7 @@ class PairwiseTests(unittest.TestCase):
                     date(2025, 1, 1),
                     discover_results((root,), (date(2025, 1, 1),)),
                     "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
                 ),
             )
             self.assertEqual(
@@ -232,6 +236,7 @@ class PairwiseTests(unittest.TestCase):
                     date(2025, 1, 1),
                     discover_results((root,), (date(2025, 1, 1),)),
                     "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
                 )
 
     def test_all_implementations_replaces_defaults_with_explicit_targets(self) -> None:
@@ -262,7 +267,10 @@ class PairwiseTests(unittest.TestCase):
             ] == ["alpha", "beta"]
 
     def test_default_target_metadata_records_selected_implementations(self) -> None:
-        metadata = pairwise_metadata("all-implementations")
+        metadata = pairwise_metadata(
+            "all-implementations",
+            implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+        )
         assert metadata["implementations"] == list(DEFAULT_PAIRWISE_IMPLEMENTATIONS)
 
     def test_pairwise_output_requires_explicit_reset(self) -> None:
@@ -274,25 +282,42 @@ class PairwiseTests(unittest.TestCase):
             stale = root / "dates" / "stale"
             stale.mkdir(parents=True)
             with self.assertRaisesRegex(ValueError, "Incompatible"):
-                initialize_pairwise_output(output, "all-implementations")
+                initialize_pairwise_output(
+                    output,
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                )
             initialized = initialize_pairwise_output(
-                output, "all-implementations", overwrite=True
+                output,
+                "all-implementations",
+                overwrite=True,
+                implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
             )
             self.assertEqual(initialized, root.resolve())
             self.assertFalse(stale.exists())
             self.assertEqual(
                 json.loads((initialized / "metadata.json").read_text()),
-                pairwise_metadata("all-implementations"),
+                pairwise_metadata(
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                ),
             )
             self.assertEqual(
-                pairwise_metadata("all-implementations")["implementations"],
+                pairwise_metadata(
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                )["implementations"],
                 list(DEFAULT_PAIRWISE_IMPLEMENTATIONS),
             )
 
     def test_completed_dates_require_manifest_and_all_tables(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
-            root = initialize_pairwise_output(output, "all-implementations")
+            root = initialize_pairwise_output(
+                output,
+                "all-implementations",
+                implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+            )
             complete = root / "dates" / "2025-01-01"
             complete.mkdir(parents=True)
             filenames = [

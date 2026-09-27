@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from sample_settings import DEFAULT_IMPLEMENTATIONS, DEFAULT_PROBABILITIES
 
 from analysis.cellwise.joint_pipeline import (
     _open_manifest,
@@ -14,10 +15,6 @@ from analysis.cellwise.joint_pipeline import (
 )
 from analysis.cellwise.spread import analyze_cellwise_quantile_spread
 from analysis.comparison.distributions import WBGTHistogramSpec
-from analysis.config import (
-    DEFAULT_IMPLEMENTATIONS,
-    DEFAULT_PROBABILITIES,
-)
 
 _CELLS = (
     "era5-global-n000000-e0000000",
@@ -130,6 +127,8 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 date_workers=2,
                 replay_workers=2,
                 overwrite=True,
+                implementations=DEFAULT_IMPLEMENTATIONS,
+                probabilities=DEFAULT_PROBABILITIES,
             )
             self.assertTrue(stale.exists())
 
@@ -203,6 +202,8 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                     histogram_spec=WBGTHistogramSpec(
                         minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
                     ),
+                    implementations=DEFAULT_IMPLEMENTATIONS,
+                    probabilities=DEFAULT_PROBABILITIES,
                 ),
                 output.resolve(),
             )
@@ -226,6 +227,8 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                         minimum_c=-70.0, maximum_c=70.0, width_c=1.0, version=99
                     ),
                     exact_validation_cells=0,
+                    implementations=DEFAULT_IMPLEMENTATIONS,
+                    probabilities=DEFAULT_PROBABILITIES,
                 )
 
     def test_reported_open_edge_quantile_is_rejected(self) -> None:
@@ -244,6 +247,8 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                         minimum_c=-10.0, maximum_c=10.0, width_c=1.0, version=99
                     ),
                     exact_validation_cells=0,
+                    implementations=DEFAULT_IMPLEMENTATIONS,
+                    probabilities=DEFAULT_PROBABILITIES,
                 )
 
 

@@ -17,12 +17,9 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from analysis.config import DEFAULT_IMPLEMENTATIONS
-
 from ..classification.core import class_definitions, validate_thresholds
 from ..classification.daily import load_daily_classes
 from ..config import (
-    DEFAULT_DATE_WORKERS,
     SAMPLE_SCOPES,
     SampleScope,
     implementation_names,
@@ -74,10 +71,10 @@ def analyze_cellwise_iso7243_classification(
     start_date: str | date,
     end_date: str | date,
     thresholds_c: Sequence[float],
-    implementations: Sequence[str] = DEFAULT_IMPLEMENTATIONS,
+    implementations: Sequence[str],
     sample_scope: SampleScope = "all-implementations",
     output_root: str | Path,
-    date_workers: int = DEFAULT_DATE_WORKERS,
+    date_workers: int = 1,
     batch_size: int = DEFAULT_BATCH_SIZE,
     overwrite: bool = False,
 ) -> Path:

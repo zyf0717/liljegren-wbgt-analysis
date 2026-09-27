@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 from reference_classification import analyze_wbgt_classification
+from sample_settings import DEFAULT_IMPLEMENTATIONS
 
 from analysis.classification.era5 import analyze_era5_country_cache
-from analysis.config import DEFAULT_IMPLEMENTATIONS
 
 
 def write_cache(source, path):
@@ -119,7 +119,11 @@ class ClassificationTests(unittest.TestCase):
             source = write_cache(source, cache)
 
             analysis = analyze_era5_country_cache(
-                cache, date(2025, 1, 1), date(2025, 1, 1), (25.0,)
+                cache,
+                date(2025, 1, 1),
+                date(2025, 1, 1),
+                (25.0,),
+                implementations=DEFAULT_IMPLEMENTATIONS,
             )
 
             self.assertEqual(
@@ -290,7 +294,11 @@ def test_shuffled_cache_missing_implementation_and_month_boundary(tmp_path):
     ]
     _rewrite_cache(cache, pa.Table.from_pandas(rows, preserve_index=False))
     actual = analyze_era5_country_cache(
-        cache, date(2025, 1, 1), date(2025, 2, 28), [25, 30]
+        cache,
+        date(2025, 1, 1),
+        date(2025, 2, 28),
+        [25, 30],
+        implementations=DEFAULT_IMPLEMENTATIONS,
     )
     valid = rows.wbgt_status.eq("ok") & np.isfinite(rows.wbgt_c)
     expected = analyze_wbgt_classification(

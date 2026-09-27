@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from sample_settings import DEFAULT_PAIRWISE_IMPLEMENTATIONS
 
 from analysis.comparison.workflows import run_daily_pairwise
 
@@ -30,6 +31,7 @@ def test_daily_workflow_returns_without_starting_workers_when_complete(
             start_date=result_date,
             end_date=result_date,
             output_root=tmp_path,
+            implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
         )
 
     assert output == product
@@ -43,6 +45,7 @@ def test_daily_workflow_validates_cheap_options_before_io(tmp_path) -> None:
             start_date=date(2025, 1, 2),
             end_date=date(2025, 1, 1),
             output_root=tmp_path,
+            implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
         )
     with pytest.raises(ValueError, match="workers"):
         run_daily_pairwise(
@@ -51,15 +54,16 @@ def test_daily_workflow_validates_cheap_options_before_io(tmp_path) -> None:
             end_date=date(2025, 1, 1),
             output_root=tmp_path,
             workers=0,
+            implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
         )
 
 
 def test_daily_serial_parallel_and_single_discovery(tmp_path):
     import pyarrow.parquet as pq
+    from sample_settings import DEFAULT_IMPLEMENTATIONS
     from test_joint_cellwise_temperature_pipeline import _write_joint_day
 
     from analysis.comparison import workflows
-    from analysis.config import DEFAULT_IMPLEMENTATIONS
 
     run = tmp_path / "run"
     _write_joint_day(run, "2025-01-01", 1)

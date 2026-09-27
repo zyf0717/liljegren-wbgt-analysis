@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pyarrow.parquet as pq
 import pytest
+from sample_settings import DEFAULT_IMPLEMENTATIONS, DEFAULT_PROBABILITIES
 from test_joint_cellwise_temperature_pipeline import _write_joint_day
 
 from analysis.cellwise import _joint_masks
@@ -12,7 +13,6 @@ from analysis.cellwise.joint_pipeline import (
     compute_joint_cellwise_temperature_quantiles,
 )
 from analysis.comparison.distributions import WBGTHistogramSpec
-from analysis.config import DEFAULT_IMPLEMENTATIONS
 
 
 def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path):
@@ -31,6 +31,8 @@ def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path)
         run,
         output_root=tmp_path / "reference",
         **settings,
+        implementations=DEFAULT_IMPLEMENTATIONS,
+        probabilities=DEFAULT_PROBABILITIES,
     )
     output = tmp_path / "resumed"
     update = CellwiseHistogramAccumulator.update
@@ -46,7 +48,11 @@ def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path)
     with patch.object(CellwiseHistogramAccumulator, "update", interrupt):
         with pytest.raises(RuntimeError, match="partial histogram"):
             compute_joint_cellwise_temperature_quantiles(
-                run, output_root=output, **settings
+                run,
+                output_root=output,
+                **settings,
+                implementations=DEFAULT_IMPLEMENTATIONS,
+                probabilities=DEFAULT_PROBABILITIES,
             )
     assert not (output / "metadata.json").exists()
     completed = output / "implementations" / f"{DEFAULT_IMPLEMENTATIONS[0]}.parquet"
@@ -57,7 +63,11 @@ def test_interrupted_replay_reuses_masks_and_completed_implementations(tmp_path)
         side_effect=AssertionError("must reuse masks"),
     ):
         compute_joint_cellwise_temperature_quantiles(
-            run, output_root=output, **settings
+            run,
+            output_root=output,
+            **settings,
+            implementations=DEFAULT_IMPLEMENTATIONS,
+            probabilities=DEFAULT_PROBABILITIES,
         )
     assert completed.stat().st_mtime_ns == before
     for implementation in DEFAULT_IMPLEMENTATIONS:

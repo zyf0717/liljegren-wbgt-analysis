@@ -12,10 +12,7 @@ import polars as pl
 import pyarrow as pa
 
 from ..config import (
-    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
-    SAMPLE_SCOPES,
     SampleScope,
-    implementation_names,
 )
 from ..grid import LATITUDE_WEIGHT_TABLE
 from ..results import RESULT_QUANTITIES, ResultFile
@@ -52,21 +49,11 @@ def compute_daily_pairwise(
     files: Sequence[ResultFile],
     sample_scope: SampleScope = "pairwise",
     *,
-    implementations: Sequence[str] | None = None,
+    implementations: tuple[str, ...],
 ) -> DailyPairwiseSummaries:
     """Compute one date's pairwise and status summaries with Polars LazyFrames."""
 
-    if sample_scope not in SAMPLE_SCOPES:
-        raise ValueError(f"Unsupported sample scope: {sample_scope}")
-    selected = (
-        implementation_names(
-            DEFAULT_PAIRWISE_IMPLEMENTATIONS
-            if implementations is None
-            else implementations
-        )
-        if sample_scope == "all-implementations" or implementations is not None
-        else None
-    )
+    selected = implementations
     base, implementations = _base_results(
         result_date,
         files,

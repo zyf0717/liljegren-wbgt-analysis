@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date
 from itertools import combinations
 from pathlib import Path
 
@@ -13,12 +12,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..config import REFERENCE_IMPLEMENTATION, SampleScope
+from ..config import REFERENCE_IMPLEMENTATION
 from ..io.artifacts import atomic_json, atomic_parquet, atomic_path
-from ..results import RESULT_QUANTITIES
+from ..results import RESULT_QUANTITIES, date_range
 from .persistence import (
     completed_pairwise_dates,
-    pairwise_metadata,
 )
 from .statistics import histogram_quantile_statistics, pooled_sufficient_statistics
 
@@ -59,23 +57,15 @@ def analyze_yearly_pairwise(
     start_date: date,
     end_date: date,
     output_root: str | Path,
-    sample_scope: SampleScope = "all-implementations",
-    implementations: Sequence[str] | None = None,
     reference_implementation: str = REFERENCE_IMPLEMENTATION,
     export_implementations: tuple[str, ...] | None = None,
 ) -> Path:
     """Pool daily summaries and persist annual tables and reference workbook."""
 
-    if start_date > end_date:
-        raise ValueError("start_date must not be after end_date")
-    product = Path(input_root)
+    product = Path(input_root).expanduser().resolve()
     metadata = json.loads((product / "metadata.json").read_text())
-    if metadata != pairwise_metadata(sample_scope, implementations):
-        raise ValueError("Unexpected pairwise product metadata")
-    dates = tuple(
-        start_date + timedelta(days=offset)
-        for offset in range((end_date - start_date).days + 1)
-    )
+    implementations = tuple(sorted(metadata["implementations"]))
+    dates = date_range(start_date, end_date)
     completed = completed_pairwise_dates(input_root)
     missing_dates = set(dates) - completed
     if missing_dates:
@@ -99,7 +89,6 @@ def analyze_yearly_pairwise(
         )
     )
     status = _load(directories, "quantity_status")
-    implementations = tuple(sorted(status["implementation"].unique()))
     _validate_coverage(daily, status, dates, implementations)
 
     records = []
@@ -157,7 +146,7 @@ def analyze_yearly_pairwise(
         {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "sample_scope": sample_scope,
+            "sample_scope": metadata["sample_scope"],
             "reference_implementation": reference_implementation,
             "implementations": list(implementations),
             "quantities": list(QUANTITY_ORDER),

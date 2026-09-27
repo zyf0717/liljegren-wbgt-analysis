@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import pytest
 import yaml
+from sample_settings import DEFAULT_IMPLEMENTATIONS, DEFAULT_PROBABILITIES
 from test_pairwise import _write_results
 
 from analysis import config
@@ -64,7 +65,8 @@ def test_daily_and_yearly_notebooks_run_export_and_record_overrides(
             **shared, hsb_run_paths=[str(run)], output_root="daily", workers=2
         ),
         "yearly_pairwise": dict(
-            **shared,
+            start_date=shared["start_date"],
+            end_date=shared["end_date"],
             input_root="daily",
             output_root="yearly",
             reference_implementation="alpha",
@@ -105,6 +107,8 @@ def test_quantile_and_map_notebooks_execute_with_small_grid(tmp_path, monkeypatc
     )
     settings = {
         "quantiles": dict(
+            implementations=list(DEFAULT_IMPLEMENTATIONS),
+            probabilities=list(DEFAULT_PROBABILITIES),
             hsb_run_paths=[str(run)],
             start_date="2025-01-01",
             end_date="2025-01-01",
@@ -162,6 +166,7 @@ def test_country_classification_notebook_executes(tmp_path, monkeypatch):
     assert pq.read_table(cache).num_rows > 0
     settings = {
         "country_classification": dict(
+            implementations=list(DEFAULT_IMPLEMENTATIONS),
             cache_path=str(cache),
             start_date="2025-01-01",
             end_date="2025-01-01",

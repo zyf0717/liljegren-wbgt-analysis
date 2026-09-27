@@ -76,7 +76,11 @@ def _daily_tables(result_date: date) -> DailyPairwiseSummaries:
 def test_yearly_api_pools_and_persists_outputs(tmp_path) -> None:
     input_root = tmp_path / "daily"
     result_date = date(2025, 1, 1)
-    initialize_pairwise_output(input_root, "pairwise")
+    initialize_pairwise_output(
+        input_root,
+        "pairwise",
+        implementations=("a", "b"),
+    )
     persist_daily_pairwise(input_root, result_date, _daily_tables(result_date))
 
     outputs = analyze_yearly_pairwise(
@@ -84,7 +88,6 @@ def test_yearly_api_pools_and_persists_outputs(tmp_path) -> None:
         start_date=result_date,
         end_date=result_date,
         output_root=tmp_path / "yearly",
-        sample_scope="pairwise",
         reference_implementation="a",
         export_implementations=("b",),
     )
@@ -102,7 +105,11 @@ def test_yearly_api_pools_and_persists_outputs(tmp_path) -> None:
 def test_yearly_api_requires_complete_date_coverage(tmp_path) -> None:
     input_root = tmp_path / "daily"
     result_date = date(2025, 1, 1)
-    initialize_pairwise_output(input_root, "pairwise")
+    initialize_pairwise_output(
+        input_root,
+        "pairwise",
+        implementations=("a", "b"),
+    )
     persist_daily_pairwise(input_root, result_date, _daily_tables(result_date))
 
     try:
@@ -111,7 +118,6 @@ def test_yearly_api_requires_complete_date_coverage(tmp_path) -> None:
             start_date=result_date,
             end_date=date(2025, 1, 2),
             output_root=tmp_path / "yearly",
-            sample_scope="pairwise",
             reference_implementation="a",
         )
     except ValueError as error:

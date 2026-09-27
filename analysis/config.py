@@ -25,22 +25,6 @@ _PATH_KEYS = {
 
 SampleScope = Literal["pairwise", "all-implementations"]
 SAMPLE_SCOPES: tuple[SampleScope, ...] = ("pairwise", "all-implementations")
-DEFAULT_IMPLEMENTATIONS = (
-    "argonne-liljegren-c",
-    "heatstress",
-    "meteor",
-    "thermofeel",
-    "kwodzicki-pywbgt",
-    "kong-huber-pywbgt",
-)
-DEFAULT_PAIRWISE_IMPLEMENTATIONS = (
-    "argonne-liljegren-c",
-    "heatstress",
-    "kong-huber-pywbgt",
-    "kwodzicki-pywbgt",
-    "meteor",
-    "thermofeel",
-)
 
 
 def implementation_names(
@@ -61,10 +45,6 @@ def implementation_names(
 
 
 REFERENCE_IMPLEMENTATION = "argonne-liljegren-c"
-
-
-DEFAULT_DATE_WORKERS = 8
-DEFAULT_PROBABILITIES = (0.50, 0.95)
 
 
 def load_settings(workflow: str, config_path: str | Path | None = None) -> dict:
