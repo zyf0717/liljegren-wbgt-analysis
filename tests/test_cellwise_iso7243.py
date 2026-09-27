@@ -37,14 +37,14 @@ def test_raw_reference_direction_and_wbgt_only_support(tmp_path, batch_size):
     write_day(run)
     output = analyze(run, tmp_path / "out", batch_size=batch_size)
     expected = reference_counts(run, ["2025-01-01"])
-    non = pq.read_table(output.cellwise_non_consensus)
+    non = pq.read_table((output / "cellwise_non_consensus.parquet"))
     np.testing.assert_array_equal(non["n_joint"], expected[0])
     np.testing.assert_array_equal(non["n_non_consensus"], expected[1])
     assert non["n_joint"].to_pylist() == [18, 24, 0]
     np.testing.assert_allclose(
         non["non_consensus_percent"].to_pylist(), [100 / 6, 0, np.nan], equal_nan=True
     )
-    pairs = pq.read_table(output.cell_pair_differences)
+    pairs = pq.read_table((output / "cell_pair_differences.parquet"))
     assert pairs.num_rows == 3 * PAIR_COUNT
     assert pairs.schema.field("n_compared").type == pa.uint32()
     assert pairs.schema.field("n_higher").type == pa.uint32()
@@ -55,10 +55,10 @@ def test_raw_reference_direction_and_wbgt_only_support(tmp_path, batch_size):
         np.testing.assert_array_equal(rows["n_lower"], expected[3 + 2 * pair])
     assert pairs["n_higher"][0].as_py() == 2
     assert pairs["n_lower"][0].as_py() == 1
-    metadata = iso7243.load_hourly_metadata(output.metadata.parent)
+    metadata = iso7243.load_hourly_metadata(output)
     assert metadata["joint_observation_count"] == 42
     assert metadata["support_scope"] == "all-implementations-wbgt-only"
-    assert '0,"< 25 C","wbgt_c < 25"' in output.classes.read_text()
+    assert '0,"< 25 C","wbgt_c < 25"' in (output / "classes.csv").read_text()
 
 
 @pytest.mark.parametrize("sample_scope", ["all-implementations", "pairwise"])
@@ -82,7 +82,7 @@ def test_parallel_resume_and_completed_reuse(tmp_path, sample_scope):
     )
     for field in ("cell_pair_differences", "cellwise_non_consensus", "cell_lookup"):
         left, right = (
-            pq.read_table(getattr(output, field)) for output in (serial, parallel)
+            pq.read_table(output / f"{field}.parquet") for output in (serial, parallel)
         )
         assert left.schema == right.schema
         for column in left.column_names:
@@ -113,11 +113,13 @@ def test_parallel_resume_and_completed_reuse(tmp_path, sample_scope):
             date_workers=1,
             sample_scope=sample_scope,
         )
-    assert pq.read_table(resumed.cell_pair_differences).equals(
-        pq.read_table(serial.cell_pair_differences)
+    assert pq.read_table((resumed / "cell_pair_differences.parquet")).equals(
+        pq.read_table((serial / "cell_pair_differences.parquet"))
     )
-    assert same.cellwise_non_consensus == resumed.cellwise_non_consensus
-    assert json.loads(resumed.metadata.read_text())["dates_reused"] == 2
+    assert (same / "cellwise_non_consensus.parquet") == (
+        resumed / "cellwise_non_consensus.parquet"
+    )
+    assert json.loads((resumed / "metadata.json").read_text())["dates_reused"] == 2
 
 
 @pytest.mark.parametrize("batch_size", [1, 11, 100])
@@ -136,7 +138,7 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
         run, tmp_path / "pairwise", sample_scope="pairwise", batch_size=batch_size
     )
     expected = reference_pairwise_counts(run, ["2025-01-01"])
-    pairs = pq.read_table(out.cell_pair_differences)
+    pairs = pq.read_table((out / "cell_pair_differences.parquet"))
     for pi in range(PAIR_COUNT):
         for ci, column in enumerate(("n_compared", "n_higher", "n_lower")):
             np.testing.assert_array_equal(
@@ -145,12 +147,12 @@ def test_pairwise_support_matches_independent_reference(tmp_path, batch_size):
     assert pairs["n_compared"][0].as_py() == 24
     assert pairs["n_higher"][0].as_py() == 8
     assert pairs["n_lower"][0].as_py() == 1
-    non = pq.read_table(out.cellwise_non_consensus)
+    non = pq.read_table((out / "cellwise_non_consensus.parquet"))
     common = reference_counts(run, ["2025-01-01"])
     np.testing.assert_array_equal(non["n_joint"], common[0])
     np.testing.assert_array_equal(non["n_non_consensus"], common[1])
     assert non["n_non_consensus"][0].as_py() == 3
-    metadata = iso7243.load_hourly_metadata(out.metadata.parent)
+    metadata = iso7243.load_hourly_metadata(out)
     assert metadata["sample_scope"] == "pairwise"
     assert metadata["support_scope"] == "pairwise-wbgt-only"
     assert metadata["non_consensus_support_scope"] == "all-implementations-wbgt-only"
@@ -162,20 +164,20 @@ def test_scope_isolation_and_incomplete_metadata_rejection(tmp_path):
     write_day(run)
     root = tmp_path / "out"
     out = analyze(run, root)
-    metadata = json.loads(out.metadata.read_text())
+    metadata = json.loads((out / "metadata.json").read_text())
     metadata.pop("sample_scope")
     metadata.pop("non_consensus_support_scope")
-    out.metadata.write_text(json.dumps(metadata))
+    (out / "metadata.json").write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="sample scope"):
         analyze(run, root)
     analyze(run, root, overwrite=True)
     with pytest.raises(ValueError, match="Incompatible"):
         analyze(run, root, sample_scope="pairwise")
     analyze(run, root, sample_scope="pairwise", overwrite=True)
-    assert json.loads(out.metadata.read_text())["dates_scanned"] == 1
+    assert json.loads((out / "metadata.json").read_text())["dates_scanned"] == 1
     assert len(list((root / ".work").glob("2025-01-01.npz"))) == 1
     analyze(run, root, overwrite=True)
-    assert json.loads(out.metadata.read_text())["dates_scanned"] == 1
+    assert json.loads((out / "metadata.json").read_text())["dates_scanned"] == 1
     with pytest.raises(ValueError, match="sample scope"):
         analyze(run, root, sample_scope="invalid")
 
@@ -184,7 +186,7 @@ def test_uint32_counts_above_255(tmp_path):
     run = tmp_path / "run"
     write_days(run, 12, complex_rows=False)
     out = analyze(run, tmp_path / "out", end_date="2025-01-12")
-    pairs = pq.read_table(out.cell_pair_differences)
+    pairs = pq.read_table((out / "cell_pair_differences.parquet"))
     assert pairs["n_compared"][0].as_py() == 288
     assert pairs["n_higher"][0].as_py() == 288
     assert pairs["n_lower"][0].as_py() == 0
@@ -230,12 +232,12 @@ def test_configuration_and_completion_validation(tmp_path):
     out = analyze(run, root)
     with pytest.raises(ValueError, match="Incompatible"):
         analyze(run, root, thresholds_c=[26.0])
-    out.classes.unlink()
+    (out / "classes.csv").unlink()
     with pytest.raises(ValueError, match="Incomplete"):
         analyze(run, root)
     analyze(run, root, overwrite=True)
     iso7243.load_hourly_metadata(root)
-    out.metadata.rename(root / "metadata.saved.json")
+    (out / "metadata.json").rename(root / "metadata.saved.json")
     with pytest.raises(ValueError, match="completion"):
         iso7243.load_hourly_metadata(root)
     # Existing compatible daily summaries remain sufficient to recover publication.
@@ -248,7 +250,10 @@ def test_class_dtype_promotion(tmp_path):
     write_day(run, complex_rows=False)
     thresholds = list(np.arange(-240.0, 31.0))
     out = analyze(run, tmp_path / "out", thresholds_c=thresholds)
-    assert pq.read_table(out.cell_pair_differences)["n_higher"][0].as_py() == 24
+    assert (
+        pq.read_table((out / "cell_pair_differences.parquet"))["n_higher"][0].as_py()
+        == 24
+    )
 
 
 def test_corrupt_checkpoint_and_changed_input(tmp_path):
@@ -259,12 +264,15 @@ def test_corrupt_checkpoint_and_changed_input(tmp_path):
     checkpoint = next((root / ".work").glob("2025-01-01.npz"))
     checkpoint.write_bytes(b"interrupted checkpoint")
     analyze(run, root, overwrite=True)
-    assert json.loads(out.metadata.read_text())["dates_scanned"] == 1
+    assert json.loads((out / "metadata.json").read_text())["dates_scanned"] == 1
     write_day(run, complex_rows=False)
     with pytest.raises(ValueError, match="Incompatible"):
         analyze(run, root)
     analyze(run, root, overwrite=True)
-    assert pq.read_table(out.cell_pair_differences)["n_higher"][0].as_py() == 24
+    assert (
+        pq.read_table((out / "cell_pair_differences.parquet"))["n_higher"][0].as_py()
+        == 24
+    )
 
 
 def test_unknown_cell_on_later_date(tmp_path):

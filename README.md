@@ -85,7 +85,9 @@ the repository root or `notebooks/`.
 - `30`: interactive annual comparison matrices and CSV export.
 - `31`: interactive implementation-pair quantile maps.
 
-Core functions take explicit arguments and do not load configuration:
+Core functions take explicit paths and do not load configuration. Workflows
+that publish files return their output directory; filenames are stable and
+documented alongside the analysis. Calculation functions return named tables.
 
 ```python
 from analysis.comparison.workflows import run_daily_pairwise

@@ -185,7 +185,7 @@ class CellwisePopulationTests(unittest.TestCase):
             outputs = population.compute_era5_population_weights(
                 raster, output_root=root / "output"
             )
-            table = pq.read_table(outputs.population)
+            table = pq.read_table((outputs / "population.parquet"))
             self.assertEqual(
                 table.column_names,
                 ["source_cell_id", "latitude", "longitude", "population"],
@@ -210,7 +210,7 @@ class CellwisePopulationTests(unittest.TestCase):
                 self.assertEqual(table["source_cell_id"][index].as_py(), cell_id)
                 self.assertEqual(table["latitude"][index].as_py(), latitude)
                 self.assertEqual(table["longitude"][index].as_py(), longitude)
-            metadata = json.loads(outputs.metadata.read_text())
+            metadata = json.loads((outputs / "metadata.json").read_text())
             self.assertEqual(metadata["schema_version"], 3)
             self.assertNotIn("population_weight_definition", metadata)
             self.assertEqual(metadata["population_total"], int(expected.sum()))

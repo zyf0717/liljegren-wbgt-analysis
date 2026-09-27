@@ -8,10 +8,9 @@ import numpy as np
 import pyarrow.parquet as pq
 from shapely.geometry.base import BaseGeometry
 
-from ..config import DEFAULT_ISO7243_OUTPUT_ROOT
 from ..grid import area_weights
 from .iso7243 import load_hourly_metadata
-from .population import DEFAULT_POPULATION_WEIGHTS_PATH, load_population_weights
+from .population import load_population_weights
 from .projection import country_boundary_from_metadata
 
 POPULATION_AFFECTED_THRESHOLDS_PERCENT = (5, 10, 20, 30)
@@ -83,9 +82,9 @@ def summarize_non_consensus(
 
 
 def summarize_cellwise_iso7243_classification(
-    input_root: str | Path = DEFAULT_ISO7243_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
-    population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
+    population_weights_path: str | Path,
 ) -> ISO7243PlotSummary:
     """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()

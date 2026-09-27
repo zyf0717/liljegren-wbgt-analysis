@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import date, timedelta
 from itertools import combinations
 from pathlib import Path
@@ -18,7 +17,6 @@ from ..config import REFERENCE_IMPLEMENTATION, SampleScope
 from ..io.artifacts import atomic_json, atomic_parquet, atomic_path
 from ..results import RESULT_QUANTITIES
 from .persistence import (
-    DEFAULT_PAIRWISE_OUTPUT_ROOT,
     completed_pairwise_dates,
     pairwise_metadata,
 )
@@ -55,25 +53,17 @@ STATISTIC_SPECS = {
 }
 
 
-@dataclass(frozen=True)
-class YearlyPairwiseOutputs:
-    pairwise: Path
-    quantity_coverage: Path
-    reference_xlsx: Path
-    metadata: Path
-
-
 def analyze_yearly_pairwise(
-    input_root: str | Path = DEFAULT_PAIRWISE_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
     start_date: date,
     end_date: date,
-    output_root: str | Path = Path("data/analysis/pairwise/yearly"),
+    output_root: str | Path,
     sample_scope: SampleScope = "all-implementations",
     implementations: Sequence[str] | None = None,
     reference_implementation: str = REFERENCE_IMPLEMENTATION,
     export_implementations: tuple[str, ...] | None = None,
-) -> YearlyPairwiseOutputs:
+) -> Path:
     """Pool daily summaries and persist annual tables and reference workbook."""
 
     if start_date > end_date:
@@ -149,18 +139,19 @@ def analyze_yearly_pairwise(
         raise ValueError(f"Export implementations are absent: {sorted(missing)}")
 
     root = Path(output_root).expanduser().resolve()
-    outputs = YearlyPairwiseOutputs(
-        root / "yearly_pairwise.parquet",
-        root / "quantity_coverage.parquet",
-        root / f"pairwise_metrics_vs_{reference_implementation}.xlsx",
-        root / "metadata.json",
-    )
-    atomic_parquet(pa.Table.from_pandas(yearly, preserve_index=False), outputs.pairwise)
     atomic_parquet(
-        pa.Table.from_pandas(coverage, preserve_index=False), outputs.quantity_coverage
+        pa.Table.from_pandas(yearly, preserve_index=False),
+        (root / "yearly_pairwise.parquet"),
+    )
+    atomic_parquet(
+        pa.Table.from_pandas(coverage, preserve_index=False),
+        (root / "quantity_coverage.parquet"),
     )
     _write_reference_xlsx(
-        yearly, reference_implementation, exports, outputs.reference_xlsx
+        yearly,
+        reference_implementation,
+        exports,
+        (root / f"pairwise_metrics_vs_{reference_implementation}.xlsx"),
     )
     atomic_json(
         {
@@ -171,9 +162,9 @@ def analyze_yearly_pairwise(
             "implementations": list(implementations),
             "quantities": list(QUANTITY_ORDER),
         },
-        outputs.metadata,
+        (root / "metadata.json"),
     )
-    return outputs
+    return root
 
 
 def pairwise_matrices(yearly: pd.DataFrame) -> dict[str, dict[str, pd.DataFrame]]:

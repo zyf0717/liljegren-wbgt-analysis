@@ -19,7 +19,6 @@ from ..io.artifacts import atomic_json, input_fingerprint
 from ..results import date_range, discover_results
 from .pairwise import compute_daily_pairwise, persist_daily_pairwise
 from .persistence import (
-    DEFAULT_PAIRWISE_OUTPUT_ROOT,
     completed_pairwise_dates,
     initialize_pairwise_output,
 )
@@ -30,7 +29,7 @@ def run_daily_pairwise(
     *,
     start_date: date,
     end_date: date,
-    output_root: str | Path = DEFAULT_PAIRWISE_OUTPUT_ROOT,
+    output_root: str | Path,
     sample_scope: SampleScope = "all-implementations",
     implementations: Sequence[str] | None = None,
     workers: int = 1,

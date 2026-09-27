@@ -89,11 +89,11 @@ def test_yearly_api_pools_and_persists_outputs(tmp_path) -> None:
         export_implementations=("b",),
     )
 
-    yearly = pq.read_table(outputs.pairwise).to_pandas()
+    yearly = pq.read_table((outputs / "yearly_pairwise.parquet")).to_pandas()
     assert yearly["mean_difference_c"].tolist() == [2.0, 2.0, 2.0]
-    assert pq.read_table(outputs.quantity_coverage).num_rows == 6
-    assert outputs.reference_xlsx.is_file()
-    assert outputs.metadata.is_file()
+    assert pq.read_table((outputs / "quantity_coverage.parquet")).num_rows == 6
+    assert (outputs / "pairwise_metrics_vs_a.xlsx").is_file()
+    assert (outputs / "metadata.json").is_file()
     matrices = pairwise_matrices(yearly)
     assert matrices["wbgt"]["mean_difference_c"].loc["a", "b"] == 2.0
     assert matrices["wbgt"]["mean_difference_c"].loc["b", "a"] == -2.0

@@ -218,18 +218,18 @@ def test_country_cache_matches_hsb_hourly_classification(
         "cell_pair_differences",
         "cell_lookup",
     ):
-        assert pq.read_table(getattr(raw, name)).equals(
-            pq.read_table(getattr(country, name))
+        assert pq.read_table((raw / f"{name}.parquet")).equals(
+            pq.read_table((country / f"{name}.parquet"))
         )
-    raw_non_consensus = pq.read_table(raw.cellwise_non_consensus)
-    country_non_consensus = pq.read_table(country.cellwise_non_consensus)
+    raw_non_consensus = pq.read_table((raw / "cellwise_non_consensus.parquet"))
+    country_non_consensus = pq.read_table((country / "cellwise_non_consensus.parquet"))
     for column in raw_non_consensus.column_names:
         np.testing.assert_equal(
             np.asarray(raw_non_consensus[column]),
             np.asarray(country_non_consensus[column]),
         )
-    assert raw.classes.read_text() == country.classes.read_text()
-    assert country.classes.read_text().splitlines() == [
+    assert (raw / "classes.csv").read_text() == (country / "classes.csv").read_text()
+    assert (country / "classes.csv").read_text().splitlines() == [
         '"class_id","class_label","threshold_definition"',
         '0,"< 25 C","wbgt_c < 25"',
         '1,"[25, 26) C","25 <= wbgt_c < 26"',
@@ -237,10 +237,10 @@ def test_country_cache_matches_hsb_hourly_classification(
         '3,"[28, 30) C","28 <= wbgt_c < 30"',
         '4,">= 30 C","wbgt_c >= 30"',
     ]
-    metadata = json.loads(country.metadata.read_text())
+    metadata = json.loads((country / "metadata.json").read_text())
     assert metadata["country_selection"]["country_iso_a3"] == "XXX"
     assert metadata["thresholds_c"] == [25.0, 26.0, 28.0, 30.0]
-    assert not (country.metadata.parent / ".source-index.json").exists()
+    assert not (country / ".source-index.json").exists()
     weights = tmp_path / "population.parquet"
     pq.write_table(
         pa.table(
@@ -252,7 +252,7 @@ def test_country_cache_matches_hsb_hourly_classification(
         weights,
     )
     summary = summarize_cellwise_iso7243_classification(
-        country.metadata.parent, population_weights_path=weights
+        country, population_weights_path=weights
     )
     assert summary.total_population == 60
     assert summary.region_label == "Example"
@@ -325,8 +325,6 @@ def test_country_cache_requires_exclusive_input_and_output_root(tmp_path: Path) 
         analyze_cellwise_iso7243_classification(
             run, country_cache=cache, output_root=tmp_path / "out", **common
         )
-    with pytest.raises(ValueError, match="explicit output_root"):
-        analyze_cellwise_iso7243_classification(country_cache=cache, **common)
 
 
 def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
@@ -346,11 +344,13 @@ def test_country_cache_process_execution_matches_serial(tmp_path: Path) -> None:
     parallel = analyze_cellwise_iso7243_classification(
         output_root=tmp_path / "parallel", date_workers=2, **common
     )
-    assert pq.read_table(serial.cell_pair_differences).equals(
-        pq.read_table(parallel.cell_pair_differences)
+    assert pq.read_table((serial / "cell_pair_differences.parquet")).equals(
+        pq.read_table((parallel / "cell_pair_differences.parquet"))
     )
-    assert serial.classes.read_text() == parallel.classes.read_text()
-    assert '4,">= 31 C","wbgt_c >= 31"' in serial.classes.read_text()
+    assert (serial / "classes.csv").read_text() == (
+        parallel / "classes.csv"
+    ).read_text()
+    assert '4,">= 31 C","wbgt_c >= 31"' in (serial / "classes.csv").read_text()
 
 
 def test_country_cache_change_rejects_checkpoint_reuse(tmp_path: Path) -> None:

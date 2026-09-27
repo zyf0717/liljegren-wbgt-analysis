@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 
-from ..config import DEFAULT_ISO7243_OUTPUT_ROOT
 from ..io.artifacts import atomic_csv
 from ..io.formatting import format_percentage as _format_percentage
 from ..io.formatting import (
@@ -21,7 +19,6 @@ from .iso7243_summary import (
     summarize_cellwise_iso7243_classification,
     summarize_non_consensus,
 )
-from .population import DEFAULT_POPULATION_WEIGHTS_PATH
 from .projection import (
     EQUAL_EARTH_X_LIMIT,
     EQUAL_EARTH_Y_LIMIT,
@@ -41,23 +38,12 @@ from .projection import (
 _WEIGHTINGS = ("Unweighted", "Geometric-weighted", "Population-weighted")
 
 
-@dataclass(frozen=True)
-class ISO7243FigureOutputs:
-    """Rendered figures and population-affected summary paths."""
-
-    png: Path
-    pairwise_png: Path
-    population_affected_png: Path
-    non_consensus_population_png: Path
-    population_affected_csv: Path
-
-
 def plot_cellwise_iso7243_classification(
-    input_root: str | Path = DEFAULT_ISO7243_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
     output_directory: str | Path | None = None,
-    population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
-) -> ISO7243FigureOutputs:
+    population_weights_path: str | Path,
+) -> Path:
     """Plot cell disagreement frequency and three weighted count distributions."""
 
     root = Path(input_root).expanduser().resolve()
@@ -80,20 +66,14 @@ def plot_cellwise_iso7243_classification(
     save_figure(population_affected_figure(summary), population_affected_png)
     save_figure(non_consensus_population_figure(summary), non_consensus_population_png)
     atomic_csv(_population_affected_table(summary), population_affected_csv)
-    return ISO7243FigureOutputs(
-        png,
-        pairwise_png,
-        population_affected_png,
-        non_consensus_population_png,
-        population_affected_csv,
-    )
+    return target
 
 
 def plot_global_iso7243_non_consensus_stack(
-    input_root: str | Path = DEFAULT_ISO7243_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
     output_directory: str | Path | None = None,
-    population_weights_path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
+    population_weights_path: str | Path,
 ) -> Path:
     """Render the global non-consensus maps on the shared stacked-map canvas."""
 

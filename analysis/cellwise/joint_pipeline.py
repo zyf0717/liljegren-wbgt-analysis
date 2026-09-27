@@ -15,7 +15,6 @@ from ..comparison.distributions import DEFAULT_WBGT_HISTOGRAM, WBGTHistogramSpec
 from ..config import (
     DEFAULT_DATE_WORKERS,
     DEFAULT_IMPLEMENTATIONS,
-    DEFAULT_JOINT_OUTPUT_ROOT,
     DEFAULT_PROBABILITIES,
     implementation_names,
 )
@@ -52,7 +51,7 @@ def compute_joint_cellwise_temperature_quantiles(
     country_cache: str | Path | None = None,
     start_date: str | date,
     end_date: str | date,
-    output_root: str | Path | None = None,
+    output_root: str | Path,
     histogram_spec: WBGTHistogramSpec = DEFAULT_WBGT_HISTOGRAM,
     probabilities: tuple[float, ...] = DEFAULT_PROBABILITIES,
     exact_validation_cells: int = 100,
@@ -75,9 +74,7 @@ def compute_joint_cellwise_temperature_quantiles(
     _validate_options(
         probabilities, exact_validation_cells, date_workers, replay_workers
     )
-    if country_cache is not None and output_root is None:
-        raise ValueError("country_cache requires an explicit output_root")
-    root = Path(output_root or DEFAULT_JOINT_OUTPUT_ROOT).expanduser().resolve()
+    root = Path(output_root).expanduser().resolve()
     if overwrite and root.exists():
         clear_outputs(
             root,

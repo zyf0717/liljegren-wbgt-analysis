@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -19,24 +18,11 @@ LANDSCAN_RESOLUTION_DEGREES = 1.0 / 120.0
 LANDSCAN_NODATA = -2_147_483_647
 ERA5_LATITUDES = np.arange(90.0, -90.0 - ERA5_SPACING_DEGREES, -ERA5_SPACING_DEGREES)
 ERA5_LONGITUDES = np.arange(-180.0, 180.0, ERA5_SPACING_DEGREES)
-DEFAULT_LANDSCAN_PATH = Path(
-    "data/population/landscan-global-2024/landscan-global-2024.tif"
-)
-DEFAULT_OUTPUT_ROOT = Path("data/analysis/population")
-DEFAULT_POPULATION_WEIGHTS_PATH = DEFAULT_OUTPUT_ROOT / "population.parquet"
-
-
-@dataclass(frozen=True)
-class PopulationWeightOutputs:
-    """Persisted global ERA5 population-weight artifacts."""
-
-    population: Path
-    metadata: Path
 
 
 def load_population_weights(
     source_ids: list[str],
-    path: str | Path = DEFAULT_POPULATION_WEIGHTS_PATH,
+    path: str | Path,
 ) -> tuple[np.ndarray, int]:
     """Align persisted integer counts to source IDs and return the dataset total.
 
@@ -74,11 +60,11 @@ def load_population_weights(
 
 
 def compute_era5_population_weights(
-    input_raster: str | Path = DEFAULT_LANDSCAN_PATH,
+    input_raster: str | Path,
     *,
-    output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+    output_root: str | Path,
     overwrite: bool = False,
-) -> PopulationWeightOutputs:
+) -> Path:
     """Write global ERA5 population totals from aligned LandScan pixels.
 
     The 30-arc-second LandScan grid aligns exactly with 0.25-degree ERA5 cell
@@ -137,7 +123,7 @@ def compute_era5_population_weights(
         },
         metadata_path,
     )
-    return PopulationWeightOutputs(population_path, metadata_path)
+    return root
 
 
 def _validate_landscan_raster(source: rasterio.io.DatasetReader) -> None:

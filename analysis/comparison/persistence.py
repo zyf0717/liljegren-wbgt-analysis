@@ -70,7 +70,6 @@ _TABLE_COLUMNS = {
     "abs_histogram": ABS_HISTOGRAM_COLUMNS,
     "quantity_status": QUANTITY_STATUS_COLUMNS,
 }
-DEFAULT_PAIRWISE_OUTPUT_ROOT = Path("data/analysis/pairwise/daily")
 
 
 def pairwise_metadata(

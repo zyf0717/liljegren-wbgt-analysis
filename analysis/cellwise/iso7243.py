@@ -23,7 +23,6 @@ from ..classification.core import class_definitions, validate_thresholds
 from ..classification.daily import load_daily_classes
 from ..config import (
     DEFAULT_DATE_WORKERS,
-    DEFAULT_ISO7243_OUTPUT_ROOT,
     SAMPLE_SCOPES,
     SampleScope,
     implementation_names,
@@ -68,27 +67,6 @@ class ClassificationState:
 _WORKER: ClassificationState | None = None
 
 
-@dataclass(frozen=True)
-class ISO7243ClassificationOutputs:
-    """Directional pair summaries and all-implementation unanimity counts."""
-
-    cell_pair_differences: Path
-    cellwise_non_consensus: Path
-    cell_lookup: Path
-    classes: Path
-    metadata: Path
-
-
-def _outputs(root: Path) -> ISO7243ClassificationOutputs:
-    return ISO7243ClassificationOutputs(
-        root / "cell_pair_differences.parquet",
-        root / "cellwise_non_consensus.parquet",
-        root / "cell_lookup.parquet",
-        root / "classes.csv",
-        root / "metadata.json",
-    )
-
-
 def analyze_cellwise_iso7243_classification(
     hsb_run_paths: str | Path | Sequence[str | Path] | None = None,
     *,
@@ -98,11 +76,11 @@ def analyze_cellwise_iso7243_classification(
     thresholds_c: Sequence[float],
     implementations: Sequence[str] = DEFAULT_IMPLEMENTATIONS,
     sample_scope: SampleScope = "all-implementations",
-    output_root: str | Path | None = None,
+    output_root: str | Path,
     date_workers: int = DEFAULT_DATE_WORKERS,
     batch_size: int = DEFAULT_BATCH_SIZE,
     overwrite: bool = False,
-) -> ISO7243ClassificationOutputs:
+) -> Path:
     """Classify raw hourly WBGT once and persist annual directional counts.
 
     Compatible checkpoints and completed outputs are reused automatically.
@@ -122,11 +100,8 @@ def analyze_cellwise_iso7243_classification(
     dates = date_range(start_date, end_date)
     if len(dates) * 24 > np.iinfo(np.uint32).max:
         raise ValueError("Date range exceeds uint32 per-cell counter capacity")
-    if country_cache is not None and output_root is None:
-        raise ValueError("country_cache requires an explicit output_root")
-    root = Path(output_root or DEFAULT_ISO7243_OUTPUT_ROOT).expanduser().resolve()
+    root = Path(output_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    outputs = _outputs(root)
     source = resolve_source(
         hsb_run_paths,
         country_cache,
@@ -170,12 +145,12 @@ def analyze_cellwise_iso7243_classification(
         raise ValueError(
             "Incompatible ISO 7243 resume configuration; use a new root or overwrite"
         )
-    if outputs.metadata.exists():
-        previous = json.loads(outputs.metadata.read_text())
+    if (root / "metadata.json").exists():
+        previous = json.loads((root / "metadata.json").read_text())
         if any(previous.get(key) != value for key, value in request.items()):
             raise ValueError("Incompatible existing ISO 7243 product")
         load_hourly_metadata(root)
-        return outputs
+        return root
     atomic_json(request, manifest_path)
     work = root / ".work"
     grid_path = work / "grid.parquet"
@@ -254,7 +229,7 @@ def analyze_cellwise_iso7243_classification(
             "Raw inputs changed during classification; outputs not published"
         )
     _validate_counts(total, len(dates) * 24, sample_scope)
-    _write_outputs(outputs, grid, total, names, thresholds, sample_scope)
+    _write_outputs(root, grid, total, names, thresholds, sample_scope)
     atomic_json(
         {
             **request,
@@ -279,9 +254,9 @@ def analyze_cellwise_iso7243_classification(
             "dates_reused": reused,
             "dates_scanned": len(pending),
         },
-        outputs.metadata,
+        (root / "metadata.json"),
     )
-    return outputs
+    return root
 
 
 def country_classification_label(metadata: dict[str, object]) -> str | None:
@@ -453,7 +428,7 @@ def _reduce_day(work, day, signature, total, sample_scope, progress_label):
 
 
 def _write_outputs(
-    outputs, grid, counts, names, thresholds, sample_scope="all-implementations"
+    root, grid, counts, names, thresholds, sample_scope="all-implementations"
 ):
     if np.any(counts > np.iinfo(np.uint32).max):
         raise ValueError("Per-cell counts overflow uint32")
@@ -468,7 +443,7 @@ def _write_outputs(
             ("n_lower", pa.uint32()),
         ]
     )
-    path = outputs.cell_pair_differences
+    path = root / "cell_pair_differences.parquet"
     with atomic_path(path) as temporary:
         with pq.ParquetWriter(temporary, schema, compression="zstd") as writer:
             for (a, b), (compared, higher, lower) in zip(
@@ -501,14 +476,15 @@ def _write_outputs(
                 "non_consensus_percent": percent,
             }
         ),
-        outputs.cellwise_non_consensus,
+        (root / "cellwise_non_consensus.parquet"),
     )
     atomic_parquet(
-        grid.table.set_column(0, "cell_id", pa.array(ids)), outputs.cell_lookup
+        grid.table.set_column(0, "cell_id", pa.array(ids)),
+        (root / "cell_lookup.parquet"),
     )
     atomic_csv(
         pa.Table.from_pandas(class_definitions(thresholds), preserve_index=False),
-        outputs.classes,
+        (root / "classes.csv"),
     )
 
 

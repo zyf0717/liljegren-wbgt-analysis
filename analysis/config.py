@@ -63,10 +63,6 @@ def implementation_names(
 REFERENCE_IMPLEMENTATION = "argonne-liljegren-c"
 
 
-DEFAULT_JOINT_OUTPUT_ROOT = Path("data/analysis/cellwise/quantiles")
-DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT = Path("data/analysis/cellwise/spread")
-DEFAULT_ISO7243_OUTPUT_ROOT = Path("data/analysis/cellwise/iso7243")
-
 DEFAULT_DATE_WORKERS = 8
 DEFAULT_PROBABILITIES = (0.50, 0.95)
 

@@ -9,7 +9,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..config import (
-    DEFAULT_JOINT_OUTPUT_ROOT,
     DEFAULT_PROBABILITIES,
     REFERENCE_IMPLEMENTATION,
 )
@@ -24,7 +23,7 @@ Weighting = Literal["none", "geometry", "population"]
 
 
 def analyze_cellwise_quantile_spread(
-    input_root: str | Path = DEFAULT_JOINT_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
     output_root: str | Path,
     quantity: ResultQuantity = "wbgt",
@@ -52,7 +51,7 @@ def analyze_cellwise_quantile_spread(
 
 
 def summarize_quantile_spread(
-    input_root: str | Path = DEFAULT_JOINT_OUTPUT_ROOT,
+    input_root: str | Path,
     *,
     quantity: ResultQuantity = "wbgt",
     weighting: Weighting = "geometry",
