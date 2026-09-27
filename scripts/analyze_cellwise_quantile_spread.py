@@ -1,6 +1,7 @@
 """Analyze each configured temperature quantity using config.yaml."""
 
 from analysis.cellwise.spread import analyze_cellwise_quantile_spread
+from analysis.cellwise.spread_coverage import export_spread_coverage
 from analysis.config import load_settings
 from analysis.io.artifacts import save_settings
 
@@ -16,8 +17,10 @@ def main() -> None:
             "output_root": output_root / quantity,
         }
         outputs = analyze_cellwise_quantile_spread(**arguments)
+        if settings.get("population_weights_path") is not None:
+            export_spread_coverage(outputs, settings["population_weights_path"])
         save_settings(arguments, arguments["output_root"])
-        print(outputs.cellwise_spread)
+        print((outputs / "cellwise_quantile_spread.parquet"))
 
 
 if __name__ == "__main__":

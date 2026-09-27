@@ -187,10 +187,10 @@ class JointCellwiseTemperaturePipelineTests(unittest.TestCase):
                 quantity="tg",
                 population_weights_path=population_path,
             )
-            spread_metadata = json.loads(spread.metadata.read_text())
+            spread_metadata = json.loads((spread / "metadata.json").read_text())
             self.assertEqual(spread_metadata["quantity"], "tg")
             self.assertEqual(spread_metadata["complete_case_cell_count"], 2)
-            self.assertLess(spread_metadata["complete_case_area_fraction"], 1.0)
+            self.assertLess(spread_metadata["complete_case_weight_fraction"], 1.0)
 
             # A completed compatible run is idempotent and does not rebuild masks.
             self.assertEqual(

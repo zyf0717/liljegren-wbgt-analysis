@@ -55,9 +55,9 @@ settings alongside the outputs. The sample writes new products under
 | Country observation caches | `scripts.extract_country` | `extract_country` |
 | Country classification summaries | `scripts.analyze_era5_country_classification` | `country_classification` |
 
-Run daily pairwise analysis before annual aggregation. Compute quantiles and
-population counts before spread analysis; the spread script processes all
-configured quantities. Run hourly classification once to produce both pairwise
+Run daily pairwise analysis before annual aggregation. Compute quantiles before spread analysis; population counts are needed for
+population weighting and coverage exports. The spread script processes all
+configured quantities; the plotting script renders their maps separately. Run hourly classification once to produce both pairwise
 class differences and non-consensus counts, then render the desired figures.
 
 Country extraction writes `<output_directory>/<iso3>/observations.parquet` and

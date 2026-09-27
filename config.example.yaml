@@ -73,7 +73,7 @@ quantile_spread:
   output_root: &spread data/analysis/cellwise/spread
   quantities: [wbgt, tnwb, tg]
   weighting: geometry # none, geometry, or population
-  population_weights_path: *population
+  population_weights_path: *population # null skips coverage; optional for geometry/none
 
 plot_quantile_spread:
   output_root: *spread

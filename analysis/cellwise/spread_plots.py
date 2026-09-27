@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Mapping
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 from shapely.geometry.base import BaseGeometry
 
 from ..config import DEFAULT_PROBABILITIES
@@ -15,22 +17,52 @@ from .projection import (
     STACKED_MAP_DPI,
     add_map_colorbar,
     configure_map_axis,
+    country_boundary_from_metadata,
     plot_country_boundary,
     plot_map_cells,
     regional_map_figure_size,
+    save_figure,
 )
+from .spread import PERCENTILES, SPREAD_METRICS, Weighting
 
-PERCENTILES = tuple(
-    f"p{int(probability * 100):02d}" for probability in DEFAULT_PROBABILITIES
-)
-SPREAD_METRICS = tuple(f"spread_{percentile}_c" for percentile in PERCENTILES)
 SPREAD_MAP_COLOR_LIMITS_C = (0.0, 10.0)
-Weighting = Literal["none", "geometry", "population"]
 STACKED_QUANTITIES = (
     ("wbgt", "WBGT"),
     ("tnwb", r"$T_{\mathrm{nwb}}$"),
     ("tg", r"$T_g$"),
 )
+
+
+def plot_quantile_spread(input_root: Path) -> None:
+    root = Path(input_root)
+    metadata = json.loads((root / "metadata.json").read_text())
+    directory = root / "figures"
+    directory.mkdir(parents=True, exist_ok=True)
+    write_figures(
+        pq.read_table(root / "global_quantile_spread_summary.parquet"),
+        pq.read_table(root / "cellwise_quantile_spread.parquet"),
+        directory,
+        metadata["weighting"],
+        region_label=metadata.get("country_selection", {}).get("country_name"),
+        country_boundary=country_boundary_from_metadata(metadata),
+    )
+
+
+def plot_stacked_cellwise_quantile_spread(
+    output_root: str | Path,
+) -> tuple[Path, ...]:
+    """Plot separate P50/P95 WBGT, Tnwb, and Tg map stacks."""
+
+    root = Path(output_root).expanduser().resolve()
+    columns = ["latitude", "longitude", *SPREAD_METRICS]
+    tables = {
+        quantity: pq.read_table(
+            root / quantity / "cellwise_quantile_spread.parquet",
+            columns=columns,
+        )
+        for quantity, _ in STACKED_QUANTITIES
+    }
+    return write_stacked_spread_maps(tables, root / "figures")
 
 
 def write_figures(
@@ -66,8 +98,7 @@ def write_figures(
         xticks=x,
     )
     axis.legend()
-    figure.savefig(directory / "spread_by_percentile.png", dpi=200)
-    plt.close(figure)
+    save_figure(figure, directory / "spread_by_percentile.png", dpi=200)
     _write_spread_maps(
         cellwise,
         directory,
@@ -117,8 +148,7 @@ def _write_spread_maps(
             SPREAD_MAP_COLOR_LIMITS_C[0], SPREAD_MAP_COLOR_LIMITS_C[1] + 1, 2
         )
         colorbar.set_ticks(ticks, labels=[f"{tick:g}" for tick in ticks])
-        figure.savefig(directory / f"{metric.replace('_c', '')}_map.png", dpi=220)
-        plt.close(figure)
+        save_figure(figure, directory / f"{metric.replace('_c', '')}_map.png")
 
 
 def write_stacked_spread_maps(
@@ -175,12 +205,12 @@ def write_stacked_spread_maps(
         )
         colorbar.set_ticks(ticks, labels=[f"{tick:g}" for tick in ticks])
         output = directory / f"stacked_spread_{percentile}.png"
-        figure.savefig(
+        save_figure(
+            figure,
             output,
             dpi=STACKED_MAP_DPI,
             bbox_inches="tight",
             pad_inches=0.05,
         )
-        plt.close(figure)
         outputs.append(output)
     return tuple(outputs)

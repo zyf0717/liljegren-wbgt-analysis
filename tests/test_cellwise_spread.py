@@ -14,11 +14,18 @@ from openpyxl import load_workbook
 from analysis.cellwise.spread import (
     PERCENTILES,
     _cellwise_table,
-    _excel_percentage_format,
     _extrema_fractions,
     _extrema_frequency,
-    _spread_coverage,
     analyze_cellwise_quantile_spread,
+    summarize_quantile_spread,
+)
+from analysis.cellwise.spread_coverage import (
+    _excel_percentage_format,
+    export_spread_coverage,
+)
+from analysis.cellwise.spread_coverage import coverage_table as _spread_coverage
+from analysis.cellwise.spread_plots import (
+    plot_quantile_spread,
     plot_stacked_cellwise_quantile_spread,
 )
 from analysis.config import (
@@ -112,24 +119,28 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 output_root=Path(temporary) / "analysis",
                 population_weights_path=population_path,
             )
-            self.assertFalse(
-                (output.metadata.parent / "tropical_spread_coverage.csv").exists()
-            )
-            self.assertFalse((output.metadata.parent / "spread_coverage.csv").exists())
+            tables, _ = summarize_quantile_spread(root)
+            for name, table in tables.items():
+                self.assertTrue(table.equals(pq.read_table(output / f"{name}.parquet")))
+            self.assertFalse((output / "figures").exists())
+            plot_quantile_spread(output)
+            export_spread_coverage(output, population_path)
+            self.assertFalse((output / "tropical_spread_coverage.csv").exists())
+            self.assertFalse((output / "spread_coverage.csv").exists())
 
             self.assertTrue(
-                (output.figure_directory / "spread_by_percentile.png").is_file()
+                ((output / "figures") / "spread_by_percentile.png").is_file()
             )
             self.assertFalse(
-                (output.figure_directory / "spread_by_percentile.pdf").exists()
+                ((output / "figures") / "spread_by_percentile.pdf").exists()
             )
             for percentile in PERCENTILES:
                 self.assertTrue(
-                    (output.figure_directory / f"spread_{percentile}_map.png").is_file()
+                    ((output / "figures") / f"spread_{percentile}_map.png").is_file()
                 )
-            self.assertEqual(list(output.figure_directory.glob("*.pdf")), [])
+            self.assertEqual(list((output / "figures").glob("*.pdf")), [])
 
-            cellwise = pq.read_table(output.cellwise_spread)
+            cellwise = pq.read_table((output / "cellwise_quantile_spread.parquet"))
             expected_spread = float(len(IMPLEMENTATIONS) - 1)
             self.assertEqual(
                 cellwise["spread_p50_c"].to_pylist(), [expected_spread] * 2
@@ -145,12 +156,12 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 cellwise["max_implementation_p95"].to_pylist(),
                 [IMPLEMENTATIONS[-1]] * 2,
             )
-            summary = pq.read_table(output.global_summary)
+            summary = pq.read_table((output / "global_quantile_spread_summary.parquet"))
             self.assertEqual(
                 summary["metric"].to_pylist(),
                 [f"spread_{percentile}_c" for percentile in PERCENTILES],
             )
-            anchor = pq.read_table(output.c_anchor_differences)
+            anchor = pq.read_table((output / "c_anchor_quantile_differences.parquet"))
             self.assertEqual(
                 anchor.num_rows, len(PERCENTILES) * (len(IMPLEMENTATIONS) - 1)
             )
@@ -159,10 +170,12 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 {REFERENCE_IMPLEMENTATION},
             )
             self.assertEqual(
-                pq.read_table(output.extrema_frequency).num_rows,
+                pq.read_table(
+                    (output / "implementation_extrema_frequency.parquet")
+                ).num_rows,
                 len(PERCENTILES) * len(IMPLEMENTATIONS),
             )
-            csv = pcsv.read_csv(output.extrema_frequency_csv)
+            csv = pcsv.read_csv((output / "implementation_extrema_frequency.csv"))
             self.assertEqual(
                 csv.column_names, ["implementation", "extremum", *PERCENTILES]
             )
@@ -174,10 +187,13 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             self.assertEqual(
                 csv.to_pylist(),
                 _extrema_fractions(
-                    pq.read_table(output.extrema_frequency), IMPLEMENTATIONS
+                    pq.read_table(
+                        (output / "implementation_extrema_frequency.parquet")
+                    ),
+                    IMPLEMENTATIONS,
                 ).to_pylist(),
             )
-            workbook = load_workbook(output.spread_coverage_xlsx, data_only=True)
+            workbook = load_workbook((output / "spread_coverage.xlsx"), data_only=True)
             self.assertEqual(
                 workbook.sheetnames, ["tropical", "non_tropical", "global"]
             )
@@ -226,7 +242,9 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 population_weights_path=population_path,
             )
             self.assertEqual(
-                pq.read_table(unweighted.cellwise_spread)["weight"].to_pylist(),
+                pq.read_table((unweighted / "cellwise_quantile_spread.parquet"))[
+                    "weight"
+                ].to_pylist(),
                 [1.0, 1.0],
             )
 
@@ -236,26 +254,26 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
                 weighting="population",
                 population_weights_path=population_path,
             )
-            population_cellwise = pq.read_table(population_weighted.cellwise_spread)
-            self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
-            population_metadata = json.loads(population_weighted.metadata.read_text())
-            self.assertEqual(population_metadata["weighting"], "population")
-            self.assertEqual(
-                population_metadata["extrema_csv_units"],
-                "fraction-of-complete-case-weight",
+            population_cellwise = pq.read_table(
+                (population_weighted / "cellwise_quantile_spread.parquet")
             )
+            self.assertEqual(population_cellwise["weight"].to_pylist(), [1.0, 3.0])
+            population_metadata = json.loads(
+                (population_weighted / "metadata.json").read_text()
+            )
+            self.assertEqual(population_metadata["weighting"], "population")
             self.assertEqual(
                 population_metadata["extrema_tie_policy"],
                 "first-in-implementation-order",
             )
-            self.assertEqual(population_metadata["primary_map_metric"], "spread_p95_c")
             self.assertEqual(
-                population_metadata["spread_coverage"]["population_source"],
+                population_metadata["population_weights_path"],
                 str(population_path),
             )
             for other in (unweighted, population_weighted):
+                export_spread_coverage(other, population_path)
                 other_workbook = load_workbook(
-                    other.spread_coverage_xlsx, data_only=True
+                    (other / "spread_coverage.xlsx"), data_only=True
                 )
                 for sheet_name in workbook.sheetnames:
                     self.assertEqual(
@@ -407,7 +425,7 @@ class CellwiseQuantileSpreadTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError, "Unsupported cellwise input schema"
             ):
-                analyze_cellwise_quantile_spread(root)
+                analyze_cellwise_quantile_spread(root, output_root=root / "out")
 
 
 if __name__ == "__main__":

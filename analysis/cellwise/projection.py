@@ -351,7 +351,7 @@ def _configure_mercator_axis(
     axis.set_axis_off()
 
 
-def save_figure(figure, path: Path, *, dpi: int = STACKED_MAP_DPI) -> None:
+def save_figure(figure, path: Path, *, dpi: int = STACKED_MAP_DPI, **kwargs) -> None:
     """Save a finished batch figure while leaving backend choice to the caller."""
     import matplotlib.pyplot as plt
 
@@ -359,7 +359,7 @@ def save_figure(figure, path: Path, *, dpi: int = STACKED_MAP_DPI) -> None:
 
     try:
         with atomic_path(path) as temporary:
-            figure.savefig(temporary, dpi=dpi, facecolor="white")
+            figure.savefig(temporary, dpi=dpi, facecolor="white", **kwargs)
     finally:
         plt.close(figure)
 

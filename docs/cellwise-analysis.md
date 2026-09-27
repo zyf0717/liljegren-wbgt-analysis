@@ -16,7 +16,7 @@ over complete-case cells. Exact ties go to the first target in implementation
 order, matching the existing Parquet extrema frequencies; each percentile
 sums to 1 separately for minima and maxima.
 
-Each analysis also writes a transposed `spread_coverage.xlsx` workbook with
+The spread script calls `export_spread_coverage` to write a transposed `spread_coverage.xlsx` workbook with
 `tropical`, `non_tropical`, and `global` sheets. Columns identify percentile
 (`p50`, `p95`) and inclusive spread threshold (≥1°C through ≥8°C); metrics are
 rows. Tropical cells have centers between 23.44°S and 23.44°N inclusive;
@@ -38,10 +38,13 @@ Land-area weights are normalized ERA5-cell equivalents, not km², and display
 to two decimal places while retaining full numeric precision. Threshold equality allows
 1e-12°C of subtraction roundoff.
 Both coverage measures are independent of `weighting`. Population counts
-are therefore required for every spread run; override the default file with
-`population_weights_path`.
+are needed for coverage and population weighting only. Set
+`population_weights_path: null` to compute geometric or unweighted spreads alone.
+`summarize_quantile_spread` returns tables without writing files; the analysis
+entry point publishes them, and the plotting script renders figures separately.
 
-The population pipeline reads LandScan Global 2024 with Rasterio windows and NumPy reductions, to stream one ERA5 latitude band at a time. Integer counts
+The population pipeline reads LandScan Global 2024 with Rasterio windows and
+NumPy reductions, streaming one ERA5 latitude band at a time. Integer counts
 are summed into cells centered on ERA5 grid points, extending 0.125° in each
 direction, wrapping longitude at the dateline and clipping latitude at the
 poles. Outputs under the configured population output directory contain raw population

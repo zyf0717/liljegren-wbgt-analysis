@@ -295,7 +295,7 @@ def test_country_cache_matches_hsb_joint_quantiles(
         weighting="none",
         population_weights_path=population_path,
     )
-    assert spread.cellwise_spread.is_file()
+    assert (spread / "cellwise_quantile_spread.parquet").is_file()
 
 
 def test_country_cache_requires_exclusive_input_and_output_root(tmp_path: Path) -> None:
