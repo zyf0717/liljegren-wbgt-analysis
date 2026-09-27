@@ -5,10 +5,10 @@ and performs a date-scoped Polars lazy scan for WBGT,
 Tg, and Tnwb. A shared lazy base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
 one self-join and expands quantities afterward. Complete-case scope selects the
-configured six-implementation inventory, aggregates all three quantities in
-one grouped pass, then expands 15 pairs after the 6:1 reduction.
-`persist_daily_pairwise()` atomically replaces one Parquet date
-directory containing all three summary tables.
+configured implementation inventory and aggregates all three quantities before
+expanding the implementation pairs. For six implementations, this produces 15
+pairs after a 6:1 reduction. `persist_daily_pairwise()` writes each daily table
+atomically, then publishes the partition completion record.
 
 ## Population selection
 
@@ -25,7 +25,7 @@ Overlapping scopes are rejected to prevent many-to-many joins.
 
 ## Parquet date tables
 
-`daily_pairwise`, keyed by date, quantity, and implementation pair, contains
+`pairwise.parquet`, keyed by date, quantity, and implementation pair, contains
 authoritative sufficient statistics:
 
 - `n`, `sum_difference_c`, `sum_squared_difference_c2`, and
@@ -39,7 +39,7 @@ Inputs are promoted to float64 before Polars differences and reductions. Daily
 derived means, variances, and scalar
 quantiles are intentionally absent.
 
-`daily_pairwise_abs_histogram` stores non-empty fixed bins keyed by quantity,
+`abs_histogram.parquet` stores non-empty fixed bins keyed by quantity,
 with count and area mass. Bounds are lower-inclusive and upper-exclusive:
 
 - `[0,2)` by 0.01 °C;
@@ -53,7 +53,7 @@ bounds are retained. An overflow percentile is an explicit error. Exact strict
 threshold fractions come from the main sufficient-statistics table rather than
 from histogram approximation.
 
-`daily_quantity_status` is keyed by date, quantity, implementation, status, and
+`quantity_status.parquet` is keyed by date, quantity, implementation, status, and
 `value_present`. It stores row count and area-weight mass independently of the
 joint-validity agreement filter.
 
@@ -85,8 +85,9 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-`metadata.json` records the result-schema ID, sample scope, exact configured
-implementation cohort, and histogram definition version. The workflow resume
+`metadata.json` records sample and quantity scope, the configured implementation
+cohort, and histogram definition version. Annual aggregation inherits these
+settings from the daily product. The workflow resume
 manifest records the selected dates and input identity.
 Each completed date contains three Parquet files and a manifest written last;
 incomplete directories are not valid inputs.

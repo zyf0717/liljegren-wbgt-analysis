@@ -16,7 +16,8 @@ over complete-case cells. Exact ties go to the first target in implementation
 order, matching the existing Parquet extrema frequencies; each percentile
 sums to 1 separately for minima and maxima.
 
-The spread script calls `export_spread_coverage` to write a transposed `spread_coverage.xlsx` workbook with
+When population weights are configured, the spread script calls
+`export_spread_coverage` to write a transposed `spread_coverage.xlsx` workbook with
 `tropical`, `non_tropical`, and `global` sheets. Columns identify percentile
 (`p50`, `p95`) and inclusive spread threshold (≥1°C through ≥8°C); metrics are
 rows. Tropical cells have centers between 23.44°S and 23.44°N inclusive;
@@ -55,7 +56,7 @@ Use `overwrite: true` to replace existing outputs.
 ## Hourly classification
 
 The analysis classifies raw **hourly WBGT only**. By default (`sample_scope: all-implementations`), a cell-hour must have an `ok`
-status and finite WBGT in all six selected implementations; Tg/Tnwb do not
+status and finite WBGT in every selected implementation; Tg/Tnwb do not
 affect its validity. Both pairwise differences and non-consensus use this same
 denominator. Threshold equality enters the higher class. Pairwise `n_higher`
 and `n_lower` describe class(A) relative to class(B), while maps show their sum
