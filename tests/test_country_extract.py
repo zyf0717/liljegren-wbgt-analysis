@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from datetime import date
@@ -79,6 +80,34 @@ def _results(root: Path, *, statistics: bool = True) -> Path:
 
 
 class CountryExtractionTests(unittest.TestCase):
+    def test_implementation_selection_excludes_unselected_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            boundaries = root / "boundaries.geojson"
+            _boundaries(boundaries)
+            first = _results(root / "hsb")
+            names = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+            for name in (*names[1:], "excluded"):
+                target = first.parent.parent / name / first.name
+                target.parent.mkdir()
+                shutil.copyfile(first, target)
+
+            for label, selection, expected in (
+                ("selected", names, set(names)),
+                ("default", None, {*names, "excluded"}),
+            ):
+                kwargs = {} if selection is None else {"implementations": selection}
+                (extraction,) = extract_countries_observations(
+                    ["XX"], (root / "hsb",), date(2025, 1, 1), date(2025, 1, 1),
+                    root / label, boundaries=boundaries, **kwargs,
+                )
+                table = pq.read_table(root / label / "xxx/observations.parquet")
+                self.assertEqual(set(table["implementation"].to_pylist()), expected)
+                self.assertEqual(table.num_rows, 2 * len(expected))
+                self.assertEqual(
+                    {scope["implementation"] for scope in extraction.scopes}, expected
+                )
+
     def test_streams_country_rows_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

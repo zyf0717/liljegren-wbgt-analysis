@@ -5,6 +5,7 @@ config.yaml
 
 # Generated analysis data and external runs
 data/
+results/
 .hsb
 
 # Python, Jupyter and test caches

@@ -140,12 +140,13 @@ def extract_countries_observations(
     end_date: date,
     output_directory: Path,
     *,
+    implementations: Sequence[str] | None = None,
     boundaries: str | Path | None = None,
     boundary_cache: str | Path | None = None,
     overwrite: bool = False,
     bounds: GeographicBounds | None = None,
 ) -> tuple[CountryExtraction, ...]:
-    """Scan selected shards once and write one bounded-memory cache per country."""
+    """Scan selected targets once; omit implementations to extract every target."""
     dates = date_range(start_date, end_date)
     resolved_runs = tuple(Path(run).expanduser().resolve() for run in runs)
     output_directory = Path(output_directory).expanduser().resolve()
@@ -169,7 +170,7 @@ def extract_countries_observations(
         raise ValueError("No ERA5 cells intersect a requested country")
     _validate_outputs(selections, overwrite)
     files = _select_result_files(
-        discover_results(resolved_runs, dates),
+        discover_results(resolved_runs, dates, implementations=implementations),
         _merge_ranges(
             (min(item.cells) + "-", max(item.cells) + ".") for item in selections
         ),

@@ -37,7 +37,10 @@ settings; annual pairwise aggregation inherits its scope from the daily product.
 Scripts take no command-line arguments. Run them as modules from the repository
 root. They read their section, call the core function, and save effective
 settings alongside the outputs. The sample writes new products under
-`data/analysis/`; existing datasets and older products are not migrated or removed.
+`results/<hsb-run>/`; existing datasets and older products are not migrated or removed.
+
+The example uses four daily workers and two Polars compute threads per worker.
+BLAS/OpenMP/MKL default to one thread; explicit environment settings take precedence.
 
 ## Workflows
 
@@ -64,6 +67,8 @@ plotting script renders their maps separately. Run hourly classification once
 to produce both pairwise class differences and non-consensus counts, then render
 the desired figures.
 
+The example selects six targets and JPN/THA only. Country extraction accepts an
+optional `implementations` list; omitting it extracts every available target.
 Country extraction writes `<output_directory>/<iso3>/observations.parquet` and
 its selection manifest, including row-group routing. Country caches from earlier
 revisions need a fresh extraction to provide this routing metadata. Optional
