@@ -1,6 +1,6 @@
 """Run plot non consensus using config.yaml."""
 
-from analysis.cellwise.non_consensus_plots import plot_cellwise_iso7243_non_consensus
+from analysis.cellwise.iso7243_plots import plot_cellwise_iso7243_non_consensus
 from analysis.config import load_settings
 from analysis.io.artifacts import save_settings
 

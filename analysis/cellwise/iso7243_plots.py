@@ -17,7 +17,9 @@ from ..io.formatting import (
 from .iso7243_summary import (
     POPULATION_AFFECTED_THRESHOLDS_PERCENT,
     ISO7243PlotSummary,
+    NonConsensusSummary,
     summarize_cellwise_iso7243_classification,
+    summarize_non_consensus,
 )
 from .population import DEFAULT_POPULATION_WEIGHTS_PATH
 from .projection import (
@@ -101,7 +103,7 @@ def plot_global_iso7243_non_consensus_stack(
         if output_directory is not None
         else root / "figures"
     )
-    summary = summarize_cellwise_iso7243_classification(
+    summary = summarize_non_consensus(
         root, population_weights_path=population_weights_path
     )
     if summary.region_label is not None:
@@ -320,22 +322,14 @@ def population_affected_figure(summary: ISO7243PlotSummary):
     return figure
 
 
-def non_consensus_population_figure(summary: ISO7243PlotSummary):
-    import matplotlib.pyplot as plt
+def _population_map(axis, summary: NonConsensusSummary):
     import seaborn as sns
     from matplotlib.colors import ListedColormap
-    from matplotlib.ticker import FuncFormatter
 
     affected = summary.non_consensus_fraction >= 0.20
     grey = summary.non_consensus_fraction < 0.20
     population = summary.population[affected]
     population_cap = float(np.quantile(population, 0.95)) if population.size else 0.0
-    figure_size = (
-        regional_map_figure_size(summary.longitude, summary.latitude)
-        if summary.region_label is not None
-        else (10.0, 4.8)
-    )
-    figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
     plot_map_cells(
         axis,
         summary.longitude[grey],
@@ -358,6 +352,20 @@ def non_consensus_population_figure(summary: ISO7243PlotSummary):
         vmin=0.0,
         vmax=population_cap or 1.0,
     )
+    return image
+
+
+def non_consensus_population_figure(summary: ISO7243PlotSummary):
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+
+    figure_size = (
+        regional_map_figure_size(summary.longitude, summary.latitude)
+        if summary.region_label is not None
+        else (10.0, 4.8)
+    )
+    figure, axis = plt.subplots(figsize=figure_size, layout="constrained")
+    image = _population_map(axis, summary)
     configure_map_axis(
         axis,
         summary.longitude if summary.region_label else None,
@@ -376,18 +384,14 @@ def non_consensus_population_figure(summary: ISO7243PlotSummary):
 
 def global_non_consensus_figure(summary: ISO7243PlotSummary):
     import matplotlib.pyplot as plt
-    import seaborn as sns
-    from matplotlib.colors import ListedColormap
     from matplotlib.ticker import FuncFormatter
 
     percent = 100.0 * summary.non_consensus_fraction
     valid = np.isfinite(percent)
     upper = percent_color_upper(percent)
-    affected = summary.non_consensus_fraction >= 0.20
-    grey = summary.non_consensus_fraction < 0.20
-    population = summary.population[affected]
-    population_cap = float(np.quantile(population, 0.95)) if population.size else 0.0
-    affected_population = int(population.sum(dtype=np.int64))
+    affected_population = int(
+        summary.population[summary.non_consensus_fraction >= 0.20].sum()
+    )
 
     figure_width = STACKED_MAP_WIDTH_IN
     map_left = 0.08
@@ -448,35 +452,14 @@ def global_non_consensus_figure(summary: ISO7243PlotSummary):
             )
             colorbar_label = "WBGT classification non-consensus (% valid hours)"
         else:
-            plot_map_cells(
-                axis,
-                summary.longitude[grey],
-                summary.latitude[grey],
-                np.zeros(np.count_nonzero(grey)),
-                regional=False,
-                point_size=0.35,
-                cmap=ListedColormap(["#bdbdbd"]),
-                vmin=0.0,
-                vmax=1.0,
-            )
-            image = plot_map_cells(
-                axis,
-                summary.longitude[affected],
-                summary.latitude[affected],
-                population,
-                regional=False,
-                point_size=0.35,
-                cmap=sns.color_palette("rocket_r", as_cmap=True),
-                vmin=0.0,
-                vmax=population_cap or 1.0,
-            )
+            image = _population_map(axis, summary)
             colorbar_label = "Population (thousands) of grid cell"
         configure_map_axis(axis)
         colorbar = figure.colorbar(
             image,
             cax=colorbar_axis,
             label=colorbar_label,
-            extend="max",
+            extend="max" if index or upper < 100 else "neither",
             extendfrac=0.05,
         )
         colorbar.ax.yaxis.labelpad = 8
@@ -495,4 +478,59 @@ def global_non_consensus_figure(summary: ISO7243PlotSummary):
             linespacing=1.2,
         )
 
+    return figure
+
+
+def plot_cellwise_iso7243_non_consensus(
+    input_root: Path, *, output_directory: Path | None = None
+) -> Path:
+    root = Path(input_root)
+    path = (
+        Path(output_directory) / "non_consensus_percent.png"
+        if output_directory is not None
+        else root / "figures/non_consensus_percent.png"
+    )
+    save_figure(non_consensus_figure(summarize_non_consensus(root)), path)
+    return path
+
+
+def non_consensus_figure(summary: NonConsensusSummary):
+    import matplotlib.pyplot as plt
+
+    percent = 100.0 * summary.non_consensus_fraction
+    upper = percent_color_upper(percent)
+    regional = summary.region_label is not None
+    size = (
+        regional_map_figure_size(summary.longitude, summary.latitude)
+        if regional
+        else (10.0, 4.8)
+    )
+    figure, axis = plt.subplots(figsize=size, layout="constrained")
+    valid = np.isfinite(percent)
+    image = plot_map_cells(
+        axis,
+        summary.longitude[valid],
+        summary.latitude[valid],
+        percent[valid],
+        regional=regional,
+        point_size=0.35,
+        cmap="cividis",
+        vmin=0.0,
+        vmax=upper,
+    )
+    configure_map_axis(
+        axis,
+        summary.longitude if regional else None,
+        summary.latitude if regional else None,
+    )
+    plot_country_boundary(axis, summary.country_boundary)
+    plot_major_cities(axis, summary.country_iso_a3)
+    colorbar = add_map_colorbar(
+        figure,
+        image,
+        ax=axis,
+        label="WBGT classification non-consensus (% valid hours)",
+        capped=upper < 100,
+    )
+    configure_percent_colorbar(colorbar, upper)
     return figure

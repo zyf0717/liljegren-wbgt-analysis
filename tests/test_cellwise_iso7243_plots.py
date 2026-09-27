@@ -282,7 +282,7 @@ def test_non_consensus_population_map_filters_cells(
 def test_no_supported_cells_remain_undefined(tmp_path):
     from iso7243_fixtures import NAMES
 
-    from analysis.cellwise.non_consensus_plots import (
+    from analysis.cellwise.iso7243_plots import (
         plot_cellwise_iso7243_non_consensus,
     )
 
@@ -343,3 +343,23 @@ def test_colorbar_endpoint(upper, label):
     if upper == 41:
         assert 40 not in bar.get_ticks()
     plt.close(figure)
+
+
+def test_non_consensus_summary_does_not_read_pair_tables(tmp_path, monkeypatch):
+    from analysis.cellwise.iso7243_summary import summarize_non_consensus
+
+    run = tmp_path / "run"
+    write_days(run, 1, complex_rows=False)
+    output = analyze_cellwise_iso7243_classification(
+        run,
+        start_date="2025-01-01",
+        end_date="2025-01-01",
+        thresholds_c=[25, 30],
+        output_root=tmp_path / "out",
+        date_workers=1,
+    )
+    # A valid completion record still names this file, but map loading need not open it.
+    output.cell_pair_differences.write_bytes(b"not needed by this figure")
+    summary = summarize_non_consensus(output.metadata.parent)
+    np.testing.assert_allclose(summary.non_consensus_fraction, [1, 0, np.nan])
+    assert summary.population is None

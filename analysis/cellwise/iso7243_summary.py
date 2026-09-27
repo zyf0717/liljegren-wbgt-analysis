@@ -1,6 +1,7 @@
 """Reduce hourly classification products to weighted map and table summaries."""
 
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 
 import numpy as np
@@ -16,23 +17,69 @@ from .projection import country_boundary_from_metadata
 POPULATION_AFFECTED_THRESHOLDS_PERCENT = (5, 10, 20, 30)
 
 
-@dataclass(frozen=True)
-class ISO7243PlotSummary:
-    """Compact aggregates used by the overview figure."""
-
+@dataclass(frozen=True, kw_only=True)
+class NonConsensusSummary:
     latitude: np.ndarray
     longitude: np.ndarray
-    changed_fraction: np.ndarray
     non_consensus_fraction: np.ndarray
-    population: np.ndarray
+    population: np.ndarray | None
+    total_population: int | None
+    region_label: str | None
+    country_boundary: BaseGeometry | None
+    country_iso_a3: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ISO7243PlotSummary(NonConsensusSummary):
+    changed_fraction: np.ndarray
     histogram_shares: np.ndarray
     implementation_pairs: tuple[tuple[str, str], ...]
     pair_changed_fraction: np.ndarray
     population_affected: np.ndarray
-    total_population: int
-    region_label: str | None
-    country_boundary: BaseGeometry | None
-    country_iso_a3: str | None = None
+
+
+def _load_cells(root: Path):
+    metadata = load_hourly_metadata(root)
+    lookup = pq.read_table(root / "cell_lookup.parquet")
+    counts = pq.read_table(root / "cellwise_non_consensus.parquet")
+    if not lookup["cell_id"].equals(counts["cell_id"]):
+        raise ValueError("Non-consensus lookup differs")
+    return metadata, lookup, counts
+
+
+def _map_summary(metadata, lookup, counts, population_weights_path):
+    joint = np.asarray(counts["n_joint"], dtype=np.int64)
+    changed = np.asarray(counts["n_non_consensus"], dtype=np.int64)
+    selection = metadata.get("country_selection", {})
+    region = selection.get("country_name")
+    population, total = (
+        _population_weights(
+            lookup["source_cell_id"].to_pylist(),
+            population_weights_path,
+            regional=region is not None,
+        )
+        if population_weights_path is not None
+        else (None, None)
+    )
+    return NonConsensusSummary(
+        latitude=np.asarray(lookup["latitude"]),
+        longitude=np.asarray(lookup["longitude"]),
+        non_consensus_fraction=np.divide(
+            changed, joint, out=np.full(len(joint), np.nan), where=joint > 0
+        ),
+        population=population,
+        total_population=total,
+        region_label=region,
+        country_iso_a3=selection.get("country_iso_a3"),
+        country_boundary=country_boundary_from_metadata(metadata),
+    )
+
+
+def summarize_non_consensus(
+    input_root: Path, *, population_weights_path: Path | None = None
+):
+    """Read only cell counts and optional population, without scanning pair tables."""
+    return _map_summary(*_load_cells(Path(input_root)), population_weights_path)
 
 
 def summarize_cellwise_iso7243_classification(
@@ -42,24 +89,14 @@ def summarize_cellwise_iso7243_classification(
 ) -> ISO7243PlotSummary:
     """Stream hourly counts into rates and weighted cell-pair distributions."""
     root = Path(input_root).expanduser().resolve()
-    metadata = load_hourly_metadata(root)
+    metadata, lookup, non_consensus = _load_cells(root)
+    maps = _map_summary(metadata, lookup, non_consensus, population_weights_path)
     implementation_pairs = _implementation_pairs(metadata)
-    lookup = pq.read_table(root / "cell_lookup.parquet")
     cell_ids = np.asarray(lookup["cell_id"], dtype=np.int64)
-    non_consensus = pq.read_table(root / "cellwise_non_consensus.parquet")
-    if not np.array_equal(
-        np.asarray(non_consensus["cell_id"], dtype=np.int64), cell_ids
-    ):
-        raise ValueError("Non-consensus lookup differs")
     joint = np.asarray(non_consensus["n_joint"], dtype=np.int64)
     non_unanimous = np.asarray(non_consensus["n_non_consensus"], dtype=np.int64)
-    source_ids = lookup["source_cell_id"].combine_chunks().to_pylist()
-    country_selection = metadata.get("country_selection", {})
-    region_label = country_selection.get("country_name")
-    raw_country_iso_a3 = country_selection.get("country_iso_a3")
-    population, total_population = _population_weights(
-        source_ids, population_weights_path, regional=region_label is not None
-    )
+    source_ids = lookup["source_cell_id"].to_pylist()
+    population = maps.population
     weights = np.vstack(
         (
             np.ones(len(cell_ids)),
@@ -133,13 +170,8 @@ def summarize_cellwise_iso7243_classification(
         where=supported_pairs > 0,
     )
     return ISO7243PlotSummary(
-        latitude=np.asarray(lookup["latitude"], dtype=np.float64),
-        longitude=np.asarray(lookup["longitude"], dtype=np.float64),
+        **vars(maps),
         changed_fraction=mean,
-        non_consensus_fraction=np.divide(
-            non_unanimous, joint, out=np.full(len(cell_ids), np.nan), where=joint > 0
-        ),
-        population=population,
         histogram_shares=np.divide(
             histogram,
             totals[:, None],
@@ -149,24 +181,11 @@ def summarize_cellwise_iso7243_classification(
         implementation_pairs=implementation_pairs,
         pair_changed_fraction=pair_changed_fraction,
         population_affected=population_affected,
-        total_population=total_population,
-        region_label=region_label,
-        country_boundary=country_boundary_from_metadata(metadata),
-        country_iso_a3=raw_country_iso_a3,
     )
 
 
-def _implementation_pairs(metadata: dict[str, object]) -> tuple[tuple[str, str], ...]:
-    ids = metadata["implementation_ids"]
-    implementations = tuple(
-        name for name, _ in sorted(ids.items(), key=lambda item: item[1])
-    )
-    pairs = tuple(
-        (implementations[implementation_a], implementations[implementation_b])
-        for implementation_a in range(len(implementations))
-        for implementation_b in range(implementation_a + 1, len(implementations))
-    )
-    return pairs
+def _implementation_pairs(metadata: dict) -> tuple[tuple[str, str], ...]:
+    return tuple(combinations(metadata["implementations"], 2))
 
 
 def _pair_index_by_code(
