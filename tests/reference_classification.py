@@ -2,21 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
-
-
-@dataclass(frozen=True)
-class ClassificationAnalysis:
-    """Optional row-level results and tabular classification summaries."""
-
-    classes: pd.DataFrame
-    classified: pd.DataFrame | None
-    paired: pd.DataFrame | None
-    outputs: Mapping[str, pd.DataFrame]
 
 
 def class_definitions(thresholds_c: Sequence[float]) -> pd.DataFrame:
@@ -35,38 +24,27 @@ def class_definitions(thresholds_c: Sequence[float]) -> pd.DataFrame:
     return pd.DataFrame({"class_id": range(len(labels)), "class_label": labels})
 
 
-def analyze_wbgt_classification(
+def reference_classification(
     observations: pd.DataFrame,
     thresholds_c: Sequence[float],
-    *,
-    pair_keys: Sequence[str],
-    month_column: str,
-    implementations: Sequence[str] | None = None,
-) -> ClassificationAnalysis:
-    """Classify valid WBGT values and compare every implementation pair.
-
-    ``observations`` must contain one valid WBGT row for each
-    ``pair_keys``/``implementation`` combination.
-    """
-
-    thresholds = tuple(thresholds_c)
-    selected = tuple(implementations or sorted(observations["implementation"].unique()))
-    observations = observations.loc[
-        observations["implementation"].isin(selected)
-    ].copy()
-    classes = class_definitions(thresholds)
-    classified = observations.copy()
-    values = pd.to_numeric(classified["wbgt_c"], errors="coerce")
-    classified["class_id"] = np.searchsorted(thresholds, values, side="right").astype(
-        "int8"
-    )
-    labels = classes.set_index("class_id")["class_label"]
-    classified["class_label"] = classified["class_id"].map(labels)
+    implementations: Sequence[str],
+) -> dict[str, pd.DataFrame]:
+    """Independent in-memory joins and reductions for small ERA5 fixtures."""
+    pair_keys = ["result_date", "run_id", "cycle_ordinal", "row_id", "cell_id"]
+    valid = observations["wbgt_status"].eq("ok") & np.isfinite(observations["wbgt_c"])
+    selected = observations["implementation"].isin(implementations)
+    classified = observations.loc[valid & selected].copy()
+    classes = class_definitions(thresholds_c)
+    # Explicit comparisons make threshold equality independent of runtime searchsorted.
+    classified["class_id"] = [
+        sum(value >= threshold for threshold in thresholds_c)
+        for value in classified["wbgt_c"]
+    ]
     classified["result_month"] = pd.to_datetime(
-        classified[month_column], utc=True
+        classified["result_date"], utc=True
     ).dt.strftime("%Y-%m")
 
-    pair_values = [*pair_keys, "result_month", "implementation", "wbgt_c", "class_id"]
+    pair_values = [*pair_keys, "result_month", "implementation", "class_id"]
     paired = classified[pair_values].merge(
         classified[pair_values],
         on=list(pair_keys),
@@ -75,11 +53,6 @@ def analyze_wbgt_classification(
         validate="many_to_many",
     )
     paired = paired.loc[paired["implementation_a"] < paired["implementation_b"]].copy()
-    if paired.empty:
-        raise ValueError("fewer than two implementations have matched observations")
-    paired["wbgt_difference_c"] = paired["wbgt_c_a"] - paired["wbgt_c_b"]
-    if not paired["result_month_a"].eq(paired["result_month_b"]).all():
-        raise ValueError("matched observations disagree on result month")
     paired["result_month"] = paired.pop("result_month_a")
     paired.pop("result_month_b")
     paired["class_difference"] = paired["class_id_a"] - paired["class_id_b"]
@@ -92,13 +65,13 @@ def analyze_wbgt_classification(
         outputs, paired, classes, ["result_month", *pair_columns], "monthly_pair"
     )
     complete = _complete_implementation_observations(
-        classified, pair_keys, len(selected)
+        classified, pair_keys, len(implementations)
     )
     outputs["non_consensus_summary.csv"] = _summarize_non_consensus(complete, [])
     outputs["monthly_non_consensus_summary.csv"] = _summarize_non_consensus(
         complete, ["result_month"]
     )
-    return ClassificationAnalysis(classes, classified, paired, outputs)
+    return outputs
 
 
 def _complete_implementation_observations(
@@ -106,8 +79,7 @@ def _complete_implementation_observations(
     pair_keys: Sequence[str],
     implementation_count: int,
 ) -> pd.DataFrame:
-    dimensions = [column for column in pair_keys if column in classified.columns]
-    complete = classified.groupby(dimensions, as_index=False, sort=True).agg(
+    complete = classified.groupby(list(pair_keys), as_index=False, sort=True).agg(
         result_month=("result_month", "first"),
         n_implementations=("implementation", "nunique"),
         n_classes=("class_id", "nunique"),

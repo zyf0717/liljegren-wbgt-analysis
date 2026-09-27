@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from reference_classification import analyze_wbgt_classification
+from reference_classification import reference_classification
 from sample_settings import DEFAULT_IMPLEMENTATIONS
 
 from analysis.classification.era5 import analyze_era5_country_cache
@@ -35,58 +35,6 @@ def write_cache(source, path):
 
 
 class ClassificationTests(unittest.TestCase):
-    def test_shared_engine_classifies_and_summarizes_pairs(self) -> None:
-        observations = pd.DataFrame(
-            {
-                "sample_id": [1, 1, 2, 2],
-                "timestamp": pd.to_datetime(
-                    ["2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z"] * 2
-                ),
-                "implementation": ["a", "b", "a", "b"],
-                "wbgt_c": [24.9, 25.0, 31.1, 30.9],
-            }
-        )
-
-        analysis = analyze_wbgt_classification(
-            observations,
-            (25.0, 31.0),
-            pair_keys=["sample_id", "timestamp"],
-            month_column="timestamp",
-        )
-
-        summary = analysis.outputs["pair_change_summary.csv"].iloc[0]
-        self.assertEqual(summary["n_paired"], 2)
-        self.assertEqual(summary["n_changed"], 2)
-        self.assertEqual(summary["a_higher_class"], 1)
-        self.assertEqual(summary["b_higher_class"], 1)
-        self.assertEqual(analysis.classified["class_id"].tolist(), [0, 1, 2, 1])
-        non_consensus = analysis.outputs["non_consensus_summary.csv"].iloc[0]
-        self.assertEqual(non_consensus["n_joint"], 2)
-        self.assertEqual(non_consensus["n_non_consensus"], 2)
-        self.assertEqual(non_consensus["non_consensus_percent"], 100.0)
-
-    def test_shared_engine_non_consensus_requires_all_target_support(self) -> None:
-        observations = pd.DataFrame(
-            {
-                "sample_id": [1, 1, 1, 2, 2],
-                "timestamp": pd.to_datetime(["2025-01-01T00:00:00Z"] * 5),
-                "implementation": ["a", "b", "c", "a", "b"],
-                "wbgt_c": [24.0, 26.0, 24.0, 24.0, 26.0],
-            }
-        )
-
-        analysis = analyze_wbgt_classification(
-            observations,
-            (25.0,),
-            pair_keys=["sample_id", "timestamp"],
-            month_column="timestamp",
-            implementations=("a", "b", "c"),
-        )
-
-        summary = analysis.outputs["non_consensus_summary.csv"].iloc[0]
-        self.assertEqual(summary["n_joint"], 1)
-        self.assertEqual(summary["n_non_consensus"], 1)
-
     def test_era5_adapter_reads_only_preselected_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / "observations.parquet"
@@ -146,27 +94,19 @@ class ClassificationTests(unittest.TestCase):
             selected = source.loc[
                 source["implementation"].isin(DEFAULT_IMPLEMENTATIONS)
             ].copy()
-            expected = analyze_wbgt_classification(
+            expected = reference_classification(
                 selected,
                 (25.0,),
-                pair_keys=[
-                    "result_date",
-                    "run_id",
-                    "cycle_ordinal",
-                    "row_id",
-                    "cell_id",
-                ],
-                month_column="result_date",
                 implementations=DEFAULT_IMPLEMENTATIONS,
             )
-            for filename, expected_frame in expected.outputs.items():
+            for filename, expected_frame in expected.items():
                 pd.testing.assert_frame_equal(
                     analysis[filename],
                     expected_frame,
                     check_dtype=False,
                 )
 
-    def test_era5_streaming_matches_shared_engine_across_months(self) -> None:
+    def test_era5_streaming_matches_reference_across_months(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / "observations.parquet"
             rows = []
@@ -210,21 +150,13 @@ class ClassificationTests(unittest.TestCase):
                 implementations=("a", "b", "c"),
             )
             valid = source["wbgt_status"].eq("ok") & source["wbgt_c"].notna()
-            expected = analyze_wbgt_classification(
+            expected = reference_classification(
                 source.loc[valid].copy(),
                 (25.0,),
-                pair_keys=[
-                    "result_date",
-                    "run_id",
-                    "cycle_ordinal",
-                    "row_id",
-                    "cell_id",
-                ],
-                month_column="result_date",
                 implementations=("a", "b", "c"),
             )
 
-            for filename, expected_frame in expected.outputs.items():
+            for filename, expected_frame in expected.items():
                 pd.testing.assert_frame_equal(
                     analysis[filename],
                     expected_frame,
@@ -301,12 +233,52 @@ def test_shuffled_cache_missing_implementation_and_month_boundary(tmp_path):
         implementations=DEFAULT_IMPLEMENTATIONS,
     )
     valid = rows.wbgt_status.eq("ok") & np.isfinite(rows.wbgt_c)
-    expected = analyze_wbgt_classification(
+    expected = reference_classification(
         rows.loc[valid],
         [25, 30],
-        pair_keys=["result_date", "run_id", "cycle_ordinal", "row_id", "cell_id"],
-        month_column="result_date",
         implementations=DEFAULT_IMPLEMENTATIONS,
     )
-    for name, table in expected.outputs.items():
+    for name, table in expected.items():
         pd.testing.assert_frame_equal(actual[name], table, check_dtype=False)
+
+
+def test_threshold_equality_and_incomplete_support(tmp_path):
+    rows = []
+    for hour, values in enumerate(((24.9, 25.0, 24.9), (31.1, 30.9, None))):
+        for name, value in zip(("a", "b", "c"), values):
+            rows.append(
+                dict(
+                    result_date=date(2025, 1, 1),
+                    run_id="1",
+                    cycle_ordinal=1,
+                    row_id=str(hour),
+                    implementation=name,
+                    wbgt_status="ok" if value is not None else "failed",
+                    wbgt_c=value,
+                    tg_status="ok",
+                    tg_c=35.0,
+                    tnwb_status="ok",
+                    tnwb_c=20.0,
+                )
+            )
+    cache = tmp_path / "observations.parquet"
+    source = write_cache(pd.DataFrame(rows), cache)
+    result = analyze_era5_country_cache(
+        cache,
+        date(2025, 1, 1),
+        date(2025, 1, 1),
+        (25.0, 31.0),
+        implementations=("a", "b", "c"),
+    )
+    summary = result["pair_change_summary.csv"].iloc[0]
+    assert (summary.n_paired, summary.n_changed) == (2, 2)
+    assert (summary.a_higher_class, summary.b_higher_class) == (1, 1)
+    transitions = result["pair_transition_counts.csv"]
+    ab = transitions.loc[transitions.implementation_b.eq("b")]
+    assert list(zip(ab.class_id_a, ab.class_id_b)) == [(0, 1), (2, 1)]
+    consensus = result["non_consensus_summary.csv"].iloc[0]
+    assert (consensus.n_joint, consensus.n_non_consensus) == (1, 1)
+    for name, table in reference_classification(
+        source, (25.0, 31.0), ("a", "b", "c")
+    ).items():
+        pd.testing.assert_frame_equal(result[name], table, check_dtype=False)
