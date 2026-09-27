@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import combinations
-from pathlib import Path
 
 import polars as pl
 import pyarrow as pa
@@ -21,7 +20,6 @@ from .persistence import (
     ABS_HISTOGRAM_COLUMNS,
     PAIRWISE_COLUMNS,
     QUANTITY_STATUS_COLUMNS,
-    persist_date_partitions,
 )
 
 PAIRWISE_GROUP_COLUMNS = (
@@ -53,12 +51,11 @@ def compute_daily_pairwise(
 ) -> DailyPairwiseSummaries:
     """Compute one date's pairwise and status summaries with Polars LazyFrames."""
 
-    selected = implementations
-    base, implementations = _base_results(
+    base = _base_results(
         result_date,
         files,
         require_common_shards=sample_scope == "all-implementations",
-        required_implementations=selected,
+        implementations=implementations,
     )
     enriched_histogram = _enriched_histogram_summary(
         _pairwise_values(base, sample_scope, implementations)
@@ -93,50 +90,20 @@ def compute_daily_pairwise(
     )
 
 
-def persist_daily_pairwise(
-    output_root: str | Path,
-    result_date: date,
-    summaries: DailyPairwiseSummaries,
-) -> Path:
-    """Atomically publish one date's three Parquet summary tables."""
-
-    return persist_date_partitions(
-        Path(output_root),
-        result_date,
-        {
-            "pairwise": summaries.pairwise,
-            "abs_histogram": summaries.abs_histogram,
-            "quantity_status": summaries.quantity_status,
-        },
-    )
-
-
 def _base_results(
     result_date: date,
     files: Sequence[ResultFile],
     *,
-    require_common_shards: bool = False,
-    required_implementations: tuple[str, ...] | None = None,
-) -> tuple[pl.LazyFrame, tuple[str, ...]]:
-    selected = frozenset(required_implementations) if required_implementations else None
-    files = tuple(
-        item for item in files if selected is None or item.implementation in selected
-    )
-    if not files:
-        raise FileNotFoundError(f"No result shards found for {result_date.isoformat()}")
-    discovered = {item.implementation for item in files}
-    if required_implementations is not None:
-        missing = set(required_implementations) - discovered
-        if missing:
-            raise ValueError(
-                f"Configured pairwise implementations are missing for {result_date}: "
-                f"{sorted(missing)}"
-            )
-        implementations = tuple(sorted(required_implementations))
-    else:
-        implementations = tuple(sorted(discovered))
-    if len(implementations) < 2:
-        raise ValueError(f"Fewer than two implementations exist for {result_date}")
+    require_common_shards: bool,
+    implementations: tuple[str, ...],
+) -> pl.LazyFrame:
+    files = tuple(item for item in files if item.implementation in implementations)
+    missing = set(implementations) - {item.implementation for item in files}
+    if missing:
+        raise ValueError(
+            f"Configured pairwise implementations are missing for {result_date}: "
+            f"{sorted(missing)}"
+        )
     if require_common_shards:
         scopes = {
             implementation: tuple(
@@ -149,7 +116,7 @@ def _base_results(
             for implementation in implementations
         }
         reference_scopes = scopes[implementations[0]]
-        if not reference_scopes or any(
+        if any(
             implementation_scopes != reference_scopes
             for implementation_scopes in scopes.values()
         ):
@@ -186,7 +153,7 @@ def _base_results(
         .join(weights, on="latitude_code", how="left")
         .drop("latitude_code")
     )
-    return base, implementations
+    return base
 
 
 def _joint_valid(base: pl.LazyFrame) -> pl.LazyFrame:

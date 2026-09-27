@@ -109,6 +109,7 @@ def test_scripts_import_without_installation_or_config():
 
 def test_daily_script_resume_input_changes_and_interrupted_write(tmp_path, monkeypatch):
     from analysis.comparison import persistence
+    from analysis.io import artifacts
 
     monkeypatch.setattr(config, "REPOSITORY", tmp_path)
     run = tmp_path / "run"
@@ -125,7 +126,7 @@ def test_daily_script_resume_input_changes_and_interrupted_write(tmp_path, monke
     )
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump({"daily_pairwise": settings}))
-    real_write = persistence.pq.write_table
+    real_write = artifacts.pq.write_table
     calls = 0
 
     def interrupt(table, destination, **kwargs):
@@ -135,7 +136,7 @@ def test_daily_script_resume_input_changes_and_interrupted_write(tmp_path, monke
             raise RuntimeError("interrupted write")
         return real_write(table, destination, **kwargs)
 
-    with patch.object(persistence.pq, "write_table", side_effect=interrupt):
+    with patch.object(artifacts.pq, "write_table", side_effect=interrupt):
         with pytest.raises(RuntimeError, match="interrupted write"):
             daily_pairwise.main()
     assert not persistence.completed_pairwise_dates(tmp_path / "out")

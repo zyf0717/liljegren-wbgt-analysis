@@ -5,8 +5,11 @@ from datetime import date
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from analysis.comparison.pairwise import DailyPairwiseSummaries, persist_daily_pairwise
-from analysis.comparison.persistence import initialize_pairwise_output
+from analysis.comparison.pairwise import DailyPairwiseSummaries
+from analysis.comparison.persistence import (
+    initialize_pairwise_output,
+    persist_daily_pairwise,
+)
 from analysis.comparison.yearly import analyze_yearly_pairwise, pairwise_matrices
 
 

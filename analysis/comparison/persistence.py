@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-from ..io.artifacts import atomic_json, clear_outputs
+from ..io.artifacts import atomic_json, atomic_parquet, clear_outputs
 from .distributions import ABS_HISTOGRAM_VERSION
+
+if TYPE_CHECKING:
+    from .pairwise import DailyPairwiseSummaries
 
 PAIRWISE_COLUMNS = (
     "result_date",
@@ -91,7 +89,11 @@ def initialize_pairwise_output(
     root = Path(output_root)
     if overwrite and root.exists():
         clear_outputs(root, ("dates", ".work", "metadata.json", "settings.json"))
-    _write_metadata(root, sample_scope, implementations)
+    metadata = pairwise_metadata(sample_scope, implementations)
+    path = root / "metadata.json"
+    if path.exists() and json.loads(path.read_text()) != metadata:
+        raise ValueError("Incompatible pairwise Parquet metadata")
+    atomic_json(metadata, path)
     return root
 
 
@@ -123,46 +125,20 @@ def completed_pairwise_dates(output_root: str | Path) -> frozenset[date]:
     return frozenset(completed)
 
 
-def persist_date_partitions(
+def persist_daily_pairwise(
     output_root: Path,
     result_date: date,
-    tables: dict[str, pa.Table],
+    summaries: DailyPairwiseSummaries,
 ) -> Path:
-    """Publish one date directory after all tables and its completion record are written."""
-
-    root = Path(output_root)
-    dates = root / "dates"
-    dates.mkdir(parents=True, exist_ok=True)
-    destination = dates / result_date.isoformat()
-    temporary = Path(tempfile.mkdtemp(prefix=f".{result_date.isoformat()}.", dir=dates))
-    try:
-        filenames: list[str] = []
-        for name, table in tables.items():
-            filename = f"{name}.parquet"
-            pq.write_table(table, temporary / filename, compression="zstd")
-            filenames.append(filename)
-        atomic_json(
-            {"result_date": result_date.isoformat(), "files": filenames},
-            temporary / "manifest.json",
-        )
-        if destination.exists():
-            shutil.rmtree(destination)
-        os.replace(temporary, destination)
-        return destination
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
-
-
-def _write_metadata(
-    root: Path,
-    sample_scope: str,
-    implementations: Sequence[str],
-) -> None:
-    metadata = pairwise_metadata(sample_scope, implementations)
-    path = root / "metadata.json"
-    if path.exists():
-        if json.loads(path.read_text()) != metadata:
-            raise ValueError("Incompatible pairwise Parquet metadata")
-        return
-    root.mkdir(parents=True, exist_ok=True)
-    atomic_json(metadata, path)
+    """Publish the three daily tables, then mark the partition complete."""
+    destination = output_root / "dates" / result_date.isoformat()
+    manifest = destination / "manifest.json"
+    # An interrupted rewrite must never retain an earlier completion record.
+    manifest.unlink(missing_ok=True)
+    filenames = []
+    for name, table in vars(summaries).items():
+        filename = f"{name}.parquet"
+        atomic_parquet(table, destination / filename)
+        filenames.append(filename)
+    atomic_json({"result_date": result_date.isoformat(), "files": filenames}, manifest)
+    return destination

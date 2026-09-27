@@ -16,10 +16,11 @@ from ..config import (
 )
 from ..io.artifacts import atomic_json, input_fingerprint
 from ..results import date_range, discover_results
-from .pairwise import compute_daily_pairwise, persist_daily_pairwise
+from .pairwise import compute_daily_pairwise
 from .persistence import (
     completed_pairwise_dates,
     initialize_pairwise_output,
+    persist_daily_pairwise,
 )
 
 

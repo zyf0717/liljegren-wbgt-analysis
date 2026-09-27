@@ -19,12 +19,12 @@ from analysis.comparison.pairwise import (
     _pairwise_aggregations,
     _pairwise_summary,
     compute_daily_pairwise,
-    persist_daily_pairwise,
 )
 from analysis.comparison.persistence import (
     completed_pairwise_dates,
     initialize_pairwise_output,
     pairwise_metadata,
+    persist_daily_pairwise,
 )
 from analysis.results import discover_results
 
@@ -343,3 +343,40 @@ class PairwiseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_interrupted_partition_rewrite_is_not_complete(tmp_path, monkeypatch):
+    import pytest
+
+    from analysis.comparison import persistence
+
+    day = date(2025, 1, 1)
+    for name in ("alpha", "beta"):
+        _write_results(tmp_path / "run", name, [25.0, 30.0])
+    summaries = compute_daily_pairwise(
+        day,
+        discover_results((tmp_path / "run",), (day,)),
+        implementations=("alpha", "beta"),
+    )
+    output = tmp_path / "output"
+    partition = persist_daily_pairwise(output, day, summaries)
+    note = partition / "notes.txt"
+    note.write_text("keep")
+    assert completed_pairwise_dates(output) == {day}
+    original_write = persistence.atomic_parquet
+
+    def interrupt(table, path):
+        if path.name == "abs_histogram.parquet":
+            raise RuntimeError("interrupted")
+        original_write(table, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(persistence, "atomic_parquet", interrupt)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            persist_daily_pairwise(output, day, summaries)
+    assert not completed_pairwise_dates(output)
+    persist_daily_pairwise(output, day, summaries)
+    assert completed_pairwise_dates(output) == {day}
+    assert note.read_text() == "keep"
+    for name, table in vars(summaries).items():
+        assert pq.read_table(partition / f"{name}.parquet").equals(table)
