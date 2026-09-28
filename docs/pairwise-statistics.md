@@ -61,7 +61,16 @@ joint-validity agreement filter.
 
 `analyze_yearly_pairwise()` reads a requested range of completed date
 partitions, checks pair and implementation coverage, and writes the pooled
-pairwise table, quantity coverage, metadata, and reference-comparison workbook.
+pairwise table, quantity coverage, metadata, and two workbooks:
+
+- `pairwise_metrics_vs_<reference>.xlsx`: metrics relative to the reference implementation.
+- `pairwise_area_weighted_matrices.xlsx`: nine pairwise matrices covering area-weighted
+  mean difference, mean absolute difference, and RMSE for WBGT, Tnwb, and Tg.
+
+The matrix workbook follows the notebook's reference-then-export implementation
+order. Values are in degrees Celsius; signed differences are row minus column.
+Diagonals and unavailable comparisons remain blank. Excel displays two decimal
+places while retaining the underlying numeric precision.
 The yearly script and notebook call this function with settings from `config.yaml`.
 
 For count (N), signed sum (S_1), squared sum (S_2), and absolute sum

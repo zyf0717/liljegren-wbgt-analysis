@@ -60,7 +60,7 @@ def analyze_yearly_pairwise(
     reference_implementation: str = REFERENCE_IMPLEMENTATION,
     export_implementations: tuple[str, ...] | None = None,
 ) -> Path:
-    """Pool daily summaries and persist annual tables and reference workbook."""
+    """Pool daily summaries and persist annual tables and comparison workbooks."""
 
     product = Path(input_root).expanduser().resolve()
     metadata = json.loads((product / "metadata.json").read_text())
@@ -141,6 +141,11 @@ def analyze_yearly_pairwise(
         reference_implementation,
         exports,
         (root / f"pairwise_metrics_vs_{reference_implementation}.xlsx"),
+    )
+    _write_area_weighted_matrices_xlsx(
+        yearly,
+        (reference_implementation, *exports),
+        root / "pairwise_area_weighted_matrices.xlsx",
     )
     atomic_json(
         {
@@ -240,6 +245,50 @@ def _quantity_coverage(status: pd.DataFrame) -> pd.DataFrame:
     )
     result["valid_percent"] = 100.0 * result["valid_n"] / result["total_n"]
     return result
+
+
+def _write_area_weighted_matrices_xlsx(
+    yearly: pd.DataFrame,
+    implementations: tuple[str, ...],
+    path: Path,
+) -> None:
+    """Export the notebook's area-weighted matrices, preserving blanks and signs."""
+    from openpyxl.comments import Comment
+    from openpyxl.utils import get_column_letter
+
+    matrices = pairwise_matrices(yearly)
+    metrics = {
+        "mean_diff": "area_weighted_mean_difference_c",
+        "mae": "area_weighted_mean_absolute_difference_c",
+        "rmse": "area_weighted_rmse_c",
+    }
+    with (
+        atomic_path(path) as temporary_path,
+        pd.ExcelWriter(temporary_path, engine="openpyxl") as writer,
+    ):
+        for quantity in QUANTITY_ORDER:
+            for name, metric in metrics.items():
+                matrix = matrices[quantity][metric].reindex(
+                    index=implementations, columns=implementations,
+                )
+                sheet = f"{quantity}_aw_{name}_c"
+                matrix.rename_axis("implementation_a").to_excel(
+                    writer, sheet_name=sheet, freeze_panes=(1, 1),
+                )
+                worksheet = writer.sheets[sheet]
+                worksheet["A1"].comment = Comment(
+                    f"{quantity.upper()}: {metric}. Units: degrees Celsius. "
+                    "Rows are implementation_a; columns are implementation_b. "
+                    "Signed mean differences are row minus column. "
+                    "Diagonal and unavailable comparisons are blank.",
+                    "liljegren-wbgt-analysis",
+                )
+                worksheet.column_dimensions["A"].width = 27
+                for column in range(2, len(implementations) + 2):
+                    worksheet.column_dimensions[get_column_letter(column)].width = 24
+                for row in worksheet.iter_rows(min_row=2, min_col=2):
+                    for cell in row:
+                        cell.number_format = "0.00"
 
 
 def _write_reference_xlsx(

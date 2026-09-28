@@ -84,7 +84,7 @@ population/extraction require disabling after completion or `overwrite: true`.
 | Analysis | Run with `uv run python -m` | Configuration section |
 | --- | --- | --- |
 | Daily pairwise statistics | `scripts.daily_pairwise` | `daily_pairwise` |
-| Annual statistics and workbook | `scripts.analyze_yearly_pairwise` | `yearly_pairwise` |
+| Annual statistics and comparison workbooks | `scripts.analyze_yearly_pairwise` | `yearly_pairwise` |
 | Joint cellwise temperature quantiles | `scripts.compute_joint_cellwise_temperature_quantiles` | `quantiles` |
 | Population on the ERA5 grid | `scripts.compute_era5_population_weights` | `population` |
 | Quantile spread and coverage | `scripts.analyze_cellwise_quantile_spread` | `quantile_spread` |
