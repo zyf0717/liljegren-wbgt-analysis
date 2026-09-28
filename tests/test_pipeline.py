@@ -15,7 +15,8 @@ from analysis.config import REPOSITORY, load_settings
 from scripts import run_pipeline
 
 
-def test_pipeline_order_resume_overwrite_and_failure(tmp_path):
+@pytest.mark.parametrize("compact", [False, True])
+def test_pipeline_order_resume_overwrite_and_failure(tmp_path, compact):
     run = tmp_path / "run"
     _write_results(run, "alpha", [25.0, 30.0])
     _write_results(run, "beta", [26.0, 31.0])
@@ -35,6 +36,21 @@ def test_pipeline_order_resume_overwrite_and_failure(tmp_path):
             "output_root": str(tmp_path / "annual"), "reference_implementation": "alpha",
         },
     }
+    daily_section = "daily"
+    if compact:
+        daily_section = "daily_pairwise"
+        config = {
+            "run": {
+                **dates, "hsb_run_path": str(run), "implementations": ["alpha", "beta"],
+                "output_root": str(tmp_path), "population_raster": "unused.tif",
+            },
+            "pipeline": {
+                "output_root": str(tmp_path / "logs"),
+                "steps": ["yearly_pairwise", "daily_pairwise"],
+            },
+            "daily_pairwise": {"output_root": str(tmp_path / "daily"), "workers": 1},
+            "yearly_pairwise": {"output_root": str(tmp_path / "annual"), "reference_implementation": "alpha"},
+        }
     path = tmp_path / "config.yaml"
 
     def invoke(expected_code=0):
@@ -70,7 +86,7 @@ def test_pipeline_order_resume_overwrite_and_failure(tmp_path):
     assert events[-1]["event"] == "failed"
     assert annual.stat().st_mtime_ns == annual_before  # stopped before next step
     assert "Incompatible pairwise inputs" in Path(events[-1]["log"]).read_text()
-    config["daily"]["overwrite"] = True
+    config[daily_section]["overwrite"] = True
     invoke()
     assert daily.stat().st_mtime_ns != before
 

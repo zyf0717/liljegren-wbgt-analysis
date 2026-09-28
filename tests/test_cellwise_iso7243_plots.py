@@ -26,9 +26,11 @@ from analysis.cellwise.iso7243_plots import (
     non_consensus_population_figure,
     plot_cellwise_iso7243_classification,
     plot_global_iso7243_non_consensus_stack,
+    regional_non_consensus_figure,
 )
 from analysis.cellwise.iso7243_summary import (
     ISO7243PlotSummary,
+    NonConsensusSummary,
     _accumulate_population_affected,
     summarize_cellwise_iso7243_classification,
 )
@@ -279,6 +281,40 @@ def test_non_consensus_population_map_filters_cells(
     finally:
         monkeypatch.undo()
         plt.close("all")
+
+
+def test_regional_stack_layout_titles_and_population():
+    summary = NonConsensusSummary(
+        latitude=np.asarray([35.0, 36.0, 37.0, 38.0]),
+        longitude=np.asarray([135.0, 136.0, 137.0, 138.0]),
+        non_consensus_fraction=np.asarray([0.20, 0.19, np.nan, 0.80]),
+        population=np.asarray([1_000_000, 99_000_000, 99_000_000, 3_000_000]),
+        total_population=202_000_000,
+        region_label="Japan",
+        country_boundary=None,
+    )
+    figure = regional_non_consensus_figure(summary)
+    try:
+        figure.canvas.draw()
+        left, right = figure.axes[::2]
+        assert left.get_position().x1 < right.get_position().x0
+        np.testing.assert_allclose(
+            [left.get_position().y0, left.get_position().y1],
+            [right.get_position().y0, right.get_position().y1],
+        )
+        assert figure.texts[0].get_text() == "A) Non-consensus in local WBGT classifications"
+        assert figure.texts[1].get_text() == (
+            "B) 4.0 million people lived in grid cells with local WBGT\n"
+            "classification non-consensus in ≥20% of valid hours"
+        )
+        assert all(title.get_fontsize() == 15 for title in figure.texts)
+        for axis, colorbar in zip(figure.axes[::2], figure.axes[1::2], strict=True):
+            gap = (colorbar.get_position().x0 - axis.get_position().x1) * figure.get_figwidth()
+            assert gap == pytest.approx(0.30)
+        # The title counts exactly-20% cells, excluding lower rates and missing data.
+        assert figure.get_figwidth() > figure.get_figheight()
+    finally:
+        plt.close(figure)
 
 
 def test_no_supported_cells_remain_undefined(tmp_path):

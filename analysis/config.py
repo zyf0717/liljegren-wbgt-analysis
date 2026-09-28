@@ -50,8 +50,9 @@ REFERENCE_IMPLEMENTATION = "argonne-liljegren-c"
 def load_settings(workflow: str, config_path: str | Path | None = None) -> dict:
     """Load one YAML section with repository-relative paths and ISO dates.
 
-    YAML anchors share settings explicitly in the file. Each call returns an
-    independent dictionary so notebook overrides never mutate other workflows.
+    A run section derives workflow paths and country variants. Explicit workflow
+    sections override those settings. Files without a run section remain fully
+    explicit. Each call returns an independent dictionary.
     """
     path = Path(config_path) if config_path is not None else REPOSITORY / "config.yaml"
     if not path.is_file():
@@ -60,6 +61,10 @@ def load_settings(workflow: str, config_path: str | Path | None = None) -> dict:
         )
     with path.open() as stream:
         config = yaml.safe_load(stream)
+    if isinstance(config, dict) and "run" in config:
+        from .run_config import expand_run_config
+
+        config = expand_run_config(config)
     if not isinstance(config, dict) or not isinstance(config.get(workflow), dict):
         # The YAML content is invalid; the function arguments are valid.
         raise ValueError(f"Missing or invalid configuration section: {workflow}")  # noqa: TRY004

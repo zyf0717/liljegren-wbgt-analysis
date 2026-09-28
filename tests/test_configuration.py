@@ -91,6 +91,79 @@ def test_sample_configuration_matches_function_arguments():
         inspect.signature(function).bind(**settings)
 
 
+def test_run_config_derives_paths_and_country_settings(tmp_path):
+    document = yaml.safe_load((REPOSITORY / "config.example.yaml").read_text())
+    document["run"].update(
+        hsb_run_path="inputs/wbgt-comparison-test",
+        output_root=str(tmp_path / "outputs"),
+    )
+    document["population"] = {"output_root": str(tmp_path / "population")}
+    document["daily_pairwise"]["output_root"] = str(tmp_path / "daily")
+    document["quantiles"]["output_root"] = str(tmp_path / "quantiles")
+    document["extract_country"] = {"output_directory": str(tmp_path / "countries")}
+    document["iso7243_tha"] = {"date_workers": 2, "output_root": str(tmp_path / "tha")}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+
+    def settings(section):
+        return config.load_settings(section, path)
+
+    global_iso = settings("iso7243")
+    assert global_iso["hsb_run_paths"] == (REPOSITORY / "inputs/wbgt-comparison-test",)
+    assert global_iso["start_date"] == date(2025, 1, 1)
+    assert global_iso["output_root"] == tmp_path / "outputs/cellwise/iso7243"
+    assert settings("yearly_pairwise")["input_root"] == tmp_path / "daily"
+    spread = settings("quantile_spread")
+    assert spread["input_root"] == tmp_path / "quantiles"
+    assert spread["population_weights_path"] == tmp_path / "population/population.parquet"
+    for country, thresholds, workers in (("jpn", [21, 25, 28, 31], 1), ("tha", [30, 32, 34], 2)):
+        local = settings(f"iso7243_{country}")
+        assert local["hsb_run_paths"] is None
+        assert local["country_cache"] == tmp_path / f"countries/{country}/observations.parquet"
+        assert local["thresholds_c"] == thresholds
+        assert local["date_workers"] == workers
+        assert local["implementations"] == global_iso["implementations"]
+        assert settings(f"plot_iso7243_{country}")["input_root"] == local["output_root"]
+    assert settings("country_classification")["cache_path"] == tmp_path / "countries/jpn/observations.parquet"
+    assert settings("iso7243_jpn")["output_root"] == tmp_path / "outputs/country/jpn/hourly_classification"
+    assert settings("country_classification_tha")["thresholds_c"] == [30, 32, 34]
+    assert settings("country_cells")["boundary_cache"] == REPOSITORY / "data/administrative_boundaries"
+    global_iso["thresholds_c"].append(40)
+    assert settings("iso7243")["thresholds_c"] == [25, 26, 28, 30, 33]
+
+
+def test_run_config_global_only_and_selected_variants(tmp_path):
+    document = yaml.safe_load((REPOSITORY / "config.example.yaml").read_text())
+    document["run"]["countries"] = {}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(document))
+    pipeline = config.load_settings("pipeline", path)
+    assert pipeline["steps"]["country_classification"] == []
+    assert pipeline["steps"]["extract_country"] == []
+    assert pipeline["steps"]["iso7243"] == ["iso7243"]
+    assert pipeline["output_root"] == REPOSITORY / "results/REPLACE_WITH_ERA5_RUN/pipeline"
+
+    document["run"]["countries"] = {"THA": [30, 32, 34]}
+    document["pipeline"]["steps"] = {"iso7243": ["iso7243_tha"]}
+    path.write_text(yaml.safe_dump(document))
+    assert config.load_settings("pipeline", path)["steps"] == {"iso7243": ["iso7243_tha"]}
+    assert config.load_settings("country_classification", path)["thresholds_c"] == [30, 32, 34]
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"run": []}, "run must be a mapping"),
+    ({"run": {}}, "Missing run settings"),
+    ({"pipeline": {"steps": ["typo"]}}, "unknown or unavailable workflow"),
+])
+def test_invalid_run_configuration(tmp_path, change, message):
+    document = yaml.safe_load((REPOSITORY / "config.example.yaml").read_text())
+    document.update(change)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=message):
+        config.load_settings("pipeline", path)
+
+
 def test_scripts_import_without_installation_or_config():
     modules = [f"scripts.{path.stem}" for path in (REPOSITORY / "scripts").glob("*.py")]
     subprocess.run(

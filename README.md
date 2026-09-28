@@ -19,6 +19,21 @@ The repository is not installed as a Python package. `pyproject.toml` and
 `uv.lock` manage the analysis environment. Local configuration, datasets,
 external HSB runs, and generated results are ignored by Git.
 
+Downloaded artifacts stay in `data/`: country and administrative boundaries in
+`data/administrative_boundaries/`, LandScan files in `data/population/`, and raw health data in
+`data/{fdma,hpa,kdca}/2025/raw/`.
+
+Generated outputs live in `results/<hsb-run>/`. Older products previously stored
+in `data/` were moved under `results/wbgt-comparison-20260911-175232/`, using the
+source ERA5 run recorded in the country manifests and refresh log. Their relative
+paths are preserved: `cellwise/`,
+`cellwise_population_weight/`, `country/`, `pairwise/`, and the processed
+tables, manifests, weights, exposures, and searches in `{fdma,hpa,kdca}/2025/`.
+Historical metadata and logs retain their original paths; references to these
+moved products now resolve by replacing the repository's `data/` prefix with
+`results/wbgt-comparison-20260911-175232/`. The former `data/boundaries/` directory is now
+`data/administrative_boundaries/`; raw health and population download paths are unchanged.
+
 Input shards follow this layout:
 
 ```text
@@ -27,17 +42,22 @@ Input shards follow this layout:
 
 ## Configuration
 
-`config.yaml` contains one section per workflow. The sample uses YAML anchors
-to share input paths, dates, and implementation selections. Edit the relevant
-section when switching between global and country analyses. Relative paths
-resolve against the repository root. Date ranges include both endpoints.
-Input paths, implementation selections, and quantile probabilities are explicit
-settings; annual pairwise aggregation inherits its scope from the daily product.
+`config.yaml` defines the source run, inclusive date range, implementations,
+population raster, and country thresholds once in `run`. Workflow paths are
+derived under `results/<source-run-folder>/`; set `run.output_root` to change
+that root. Relative paths resolve against the repository root. Boundary downloads
+default to `data/administrative_boundaries/`, configurable with `run.boundary_cache`.
 
-Individual workflow scripts take no command-line arguments. Run them as modules from the repository
-root. They read their section, call the core function, and save effective
+Workflow sections contain only overrides, such as worker counts, quantile
+probabilities, and global classification thresholds. They also accept explicit
+input and output paths. Derived downstream paths follow upstream output overrides.
+Existing configurations without a `run` section retain their explicit behavior.
+Inspect the expanded arguments with `load_settings("iso7243")`, for example.
+
+YAML-configured workflow scripts take no command-line arguments. Run them as modules
+from the repository root. They read their section, call the core function, and save effective
 settings alongside the outputs. The sample writes new products under
-`results/<hsb-run>/`; existing datasets and older products are not migrated or removed.
+`results/<hsb-run>/`.
 
 The example uses four daily workers and two Polars compute threads per worker.
 BLAS/OpenMP/MKL default to one thread; explicit environment settings take precedence.
@@ -48,9 +68,11 @@ Run the selected workflows sequentially with:
 uv run python -m scripts.run_pipeline --config config.yaml
 ```
 
-`pipeline.steps` maps workflow names to lists of settings sections; omit a workflow
-or use `[]` to disable it. Python fixes the workflow order, and each section runs
-in its own subprocess. The example includes global, JPN, and THA products. Workers
+`pipeline.steps` lists the workflows to run. Remove an entry to skip it. Python
+fixes the execution order and expands country variants automatically. For precise
+selection, a mapping such as `iso7243: [iso7243_jpn]` selects named sections;
+an empty list disables that workflow. Each section runs in its own subprocess.
+The example includes global, JPN, and THA products. Workers
 within a step still follow its settings. Timestamped logs under
 `pipeline.output_root` capture stdout/stderr and start/exit events; the runner
 stops on failure. It adds no caching or overwrite policy: daily/classification/
@@ -82,7 +104,16 @@ plotting script renders their maps separately. Run hourly classification once
 to produce both pairwise class differences and non-consensus counts, then render
 the desired figures.
 
-The example selects six targets and JPN/THA only. Country extraction accepts an
+The example selects six targets and JPN/THA only. `run.countries` maps uppercase
+ISO3 codes to classification thresholds in degrees Celsius; `{}` disables country
+workflows. It generates sections such as `iso7243_jpn` and `plot_iso7243_tha`,
+which accept their own overrides and write to `country/<iso3>/hourly_classification/`.
+These country products use the configured local thresholds. Country classification uses
+`country_classification` for the first country (also used by notebook 20), then
+`country_classification_<iso3>` for the remaining countries. Country workers
+default to one; override `iso7243_jpn.date_workers`, for example, to change this.
+
+Country extraction accepts an
 optional `implementations` list; omitting it extracts every available target.
 Country extraction writes `<output_directory>/<iso3>/observations.parquet` and
 its selection manifest, including row-group routing. Country caches from earlier
@@ -92,6 +123,16 @@ country polygon and supports selections such as CONUS. To use a country cache
 in either cellwise workflow, set `hsb_run_paths: null`, set `country_cache`, and
 choose a separate output directory. Country maps and population denominators
 follow the selected country grid.
+
+To regenerate only the country non-consensus composite, use
+`uv run python -m scripts.plot_jpn_hourly_classification` or
+`uv run python -m scripts.plot_tha_hourly_classification`, with
+`--input-root results/<hsb-run>/country/<iso3>/hourly_classification` and
+`--population-weights-path results/<hsb-run>/population/population.parquet`.
+Each script checks the country and restores the original horizontal layout,
+including its measured margins, title spacing, colorbars, and final whitespace
+crop. The output is `figures/non_consensus_stacked.png`; `--output-directory`
+can place it elsewhere. These scripts read the saved tables without recomputation.
 
 ## Notebooks and reusable functions
 

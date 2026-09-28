@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 
-from ..io.artifacts import atomic_csv
+from ..io.artifacts import atomic_csv, atomic_path
 from ..io.formatting import format_percentage as _format_percentage
 from ..io.formatting import (
     format_two_significant_figures as _format_two_significant_figures,
@@ -27,6 +27,7 @@ from .projection import (
     add_map_colorbar,
     configure_map_axis,
     configure_percent_colorbar,
+    mercator_coordinates,
     percent_color_upper,
     plot_country_boundary,
     plot_major_cities,
@@ -65,6 +66,10 @@ def plot_cellwise_iso7243_classification(
     save_figure(pairwise_maps_figure(summary), pairwise_png)
     save_figure(population_affected_figure(summary), population_affected_png)
     save_figure(non_consensus_population_figure(summary), non_consensus_population_png)
+    if summary.region_label is not None:
+        _save_regional_non_consensus_figure(
+            regional_non_consensus_figure(summary), target / "non_consensus_stacked.png"
+        )
     atomic_csv(_population_affected_table(summary), population_affected_csv)
     return target
 
@@ -359,6 +364,155 @@ def non_consensus_population_figure(summary: ISO7243PlotSummary):
     colorbar.formatter = FuncFormatter(lambda value, _: f"{value / 1_000:g}")
     colorbar.update_ticks()
     colorbar.ax.yaxis.labelpad = 10
+    return figure
+
+
+def plot_country_non_consensus_stack(
+    input_root: str | Path,
+    *,
+    country_iso_a3: str,
+    population_weights_path: str | Path,
+    output_directory: str | Path | None = None,
+) -> Path:
+    """Regenerate a country's two-panel figure from its persisted numerical data."""
+    root = Path(input_root)
+    summary = summarize_non_consensus(
+        root, population_weights_path=Path(population_weights_path)
+    )
+    if summary.country_iso_a3 != country_iso_a3:
+        raise ValueError(
+            f"Expected {country_iso_a3} results, found {summary.country_iso_a3}"
+        )
+    target = Path(output_directory) if output_directory is not None else root / "figures"
+    output = target / "non_consensus_stacked.png"
+    _save_regional_non_consensus_figure(regional_non_consensus_figure(summary), output)
+    return output
+
+
+def _save_regional_non_consensus_figure(figure, output: Path) -> None:
+    """Apply the original pixel-exact crop that halves the title-to-map whitespace."""
+    from PIL import Image
+
+    with atomic_path(output) as temporary:
+        save_figure(figure, temporary)
+        with Image.open(temporary) as source:
+            image = source.convert("RGB")
+            dpi = source.info["dpi"]
+        occupied = np.any(np.asarray(image) < 245, axis=2).sum(axis=1)
+        last_title = int(np.flatnonzero(occupied[:200])[-1])
+        first_plot = int(np.flatnonzero(occupied[200:])[0] + 200)
+        remove_rows = (first_plot - last_title - 1) // 2
+        cut_start = last_title + 1
+        cut_end = cut_start + remove_rows
+        tightened = Image.new("RGB", (image.width, image.height - remove_rows), "white")
+        tightened.paste(image.crop((0, 0, image.width, cut_start)), (0, 0))
+        tightened.paste(
+            image.crop((0, cut_end, image.width, image.height)), (0, cut_start)
+        )
+        tightened.save(temporary, dpi=dpi)
+
+
+def regional_non_consensus_figure(summary: NonConsensusSummary):
+    """Reproduce the measured September 2026 JPN/THA layout before its final crop.
+
+    Measure titles and colorbars at the original 18.4-inch width, then halve and
+    equalize the three horizontal margins. Keep map scale, 15-point titles, and
+    the 0.30-inch map-to-colorbar gap fixed rather than using automatic layout.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+    from matplotlib.transforms import Bbox
+
+    initial_width, height, map_height, map_bottom = 18.4, 7.4, 5.9, 0.2
+    colorbar_gap, colorbar_width = 0.30, 0.16
+    percent = 100.0 * summary.non_consensus_fraction
+    valid = np.isfinite(percent)
+    upper = percent_color_upper(percent)
+    affected_population = int(
+        summary.population[summary.non_consensus_fraction >= 0.20].sum()
+    )
+    titles = (
+        "A) Non-consensus in local WBGT classifications",
+        (
+            f"B) {_format_population(affected_population, regional=True)} million people "
+            "lived in grid cells with local WBGT\n"
+            "classification non-consensus in ≥20% of valid hours"
+        ),
+    )
+    x, y = mercator_coordinates(summary.longitude, summary.latitude)
+    x_span, y_span = np.ptp(x), np.ptp(y)
+    x_padding = max(0.05 * x_span, np.deg2rad(0.25))
+    y_padding = max(0.05 * y_span, np.deg2rad(0.25))
+    map_width = map_height * (x_span + 2 * x_padding) / (y_span + 2 * y_padding)
+
+    def make_figure(width):
+        figure = plt.figure(figsize=(width, height))
+        groups = []
+        for index, (center, title) in enumerate(
+            zip((width / 4, 3 * width / 4), titles, strict=True)
+        ):
+            group_width = map_width + colorbar_gap + colorbar_width + 0.72
+            left = center - group_width / 2
+            axis = figure.add_axes([
+                left / width, map_bottom / height, map_width / width, map_height / height,
+            ])
+            colorbar_axis = figure.add_axes([
+                (left + map_width + colorbar_gap) / width, map_bottom / height,
+                colorbar_width / width, map_height / height,
+            ])
+            if index == 0:
+                image = plot_map_cells(
+                    axis, summary.longitude[valid], summary.latitude[valid], percent[valid],
+                    regional=True, point_size=0.35, cmap="cividis", vmin=0.0, vmax=upper,
+                )
+                label = "WBGT classification non-consensus (% valid hours)"
+            else:
+                image = _population_map(axis, summary)
+                label = "Population (thousands) of grid cell"
+            configure_map_axis(axis, summary.longitude, summary.latitude)
+            plot_country_boundary(axis, summary.country_boundary)
+            plot_major_cities(axis, summary.country_iso_a3)
+            colorbar = figure.colorbar(
+                image, cax=colorbar_axis, label=label, extend="max", extendfrac=0.05,
+            )
+            colorbar.ax.yaxis.labelpad = 9
+            if index == 0:
+                configure_percent_colorbar(colorbar, upper)
+            else:
+                colorbar.formatter = FuncFormatter(lambda value, _: f"{value / 1_000:g}")
+                colorbar.update_ticks()
+            title_artist = figure.text(
+                center / width, 7.16 / height, title,
+                ha="center", va="top", fontsize=15, linespacing=1.2,
+            )
+            groups.append((axis, colorbar_axis, title_artist))
+        return figure, groups
+
+    def group_bounds(figure, groups):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        return [Bbox.union([
+            axis.get_window_extent(renderer), colorbar.get_tightbbox(renderer),
+            title.get_window_extent(renderer),
+        ]) for axis, colorbar, title in groups]
+
+    probe, probe_groups = make_figure(initial_width)
+    panel_widths = [bound.width / probe.dpi for bound in group_bounds(probe, probe_groups)]
+    padding = (initial_width - sum(panel_widths)) / 6
+    final_width = sum(panel_widths) + 3 * padding
+    plt.close(probe)
+    figure, groups = make_figure(final_width)
+    bounds = group_bounds(figure, groups)
+    target_lefts = (padding, 2 * padding + panel_widths[0])
+    for (axis, colorbar, title), bound, left in zip(groups, bounds, target_lefts, strict=True):
+        delta = (left - bound.x0 / figure.dpi) / final_width
+        for item in (axis, colorbar):
+            position = item.get_position()
+            item.set_position([
+                position.x0 + delta, position.y0, position.width, position.height,
+            ], which="both")
+        title.set_x(title.get_position()[0] + delta)
+    figure.canvas.draw()
     return figure
 
 
