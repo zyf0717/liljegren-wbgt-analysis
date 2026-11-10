@@ -1,27 +1,24 @@
-#!/usr/bin/env python3
-"""Plot stacked WBGT, Tnwb, and Tg cellwise quantile-spread maps."""
+"""Run plot quantile spread using config.yaml."""
 
-from __future__ import annotations
-
-import argparse
-from pathlib import Path
-
-from liljegren_analysis.cellwise import (
-    DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+from analysis.cellwise.spread_plots import (
+    plot_quantile_spread,
     plot_stacked_cellwise_quantile_spread,
 )
+from analysis.config import load_settings
+from analysis.io.artifacts import save_settings
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=DEFAULT_QUANTILE_SPREAD_OUTPUT_ROOT,
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("plot_quantile_spread")
+    for quantity in ("wbgt", "tnwb", "tg"):
+        plot_quantile_spread(settings["output_root"] / quantity)
+    result = plot_stacked_cellwise_quantile_spread(**settings)
+    save_settings(
+        settings,
+        settings["output_root"] / "figures",
+        filename="plot_cellwise_quantile_spread.settings.json",
     )
-    arguments = parser.parse_args()
-    for output in plot_stacked_cellwise_quantile_spread(arguments.output_root):
-        print(output)
+    print(result)
 
 
 if __name__ == "__main__":

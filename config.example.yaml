@@ -1,0 +1,45 @@
+# Copy to config.yaml. Paths are relative to the repository.
+# Outputs default to results/<hsb_run_path folder name>/.
+run:
+  hsb_run_path: ../HeatStressBench/.hsb/runs/REPLACE_WITH_ERA5_RUN
+  start_date: 2025-01-01
+  end_date: 2025-12-31
+  implementations:
+    - argonne-liljegren-c
+    - heatstress
+    - meteor
+    - thermofeel
+    - kwodzicki-pywbgt
+    - kong-huber-pywbgt
+  population_raster: data/population/landscan-global-2024/landscan-global-2024.tif
+  countries: # Classification thresholds in degrees Celsius; {} for global only
+    JPN: [21, 25, 28, 31]
+    THA: [30, 32, 34]
+
+pipeline:
+  steps: # Remove entries to skip them; execution follows dependency order.
+    - population
+    - country_cells
+    - extract_country
+    - daily_pairwise
+    - yearly_pairwise
+    - iso7243
+    - plot_iso7243
+    - plot_non_consensus
+    - plot_non_consensus_stack
+    - country_classification
+    - quantiles
+    - quantile_spread
+    - plot_quantile_spread
+
+# Workflow overrides. Unspecified options use the computation's defaults.
+daily_pairwise:
+  workers: 4
+quantiles:
+  probabilities: [0.50, 0.95]
+  date_workers: 2
+  replay_workers: 2
+iso7243:
+  thresholds_c: [25, 26, 28, 30, 33]
+  date_workers: 4
+  batch_size: 65536

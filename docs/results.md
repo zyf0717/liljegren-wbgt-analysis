@@ -1,37 +1,60 @@
-# HSB result files
+# Data and result files
 
-`HSBRunResults` resolves validated Parquet shards below:
+## Repository layout
+
+Downloaded data lives in `data/`. Country and administrative boundaries go
+in `data/administrative_boundaries/`, LandScan files in `data/population/`,
+and raw health data in `data/{fdma,hpa,kdca}/2025/raw/`. Generated outputs
+default to `results/<hsb-run>/`. Git ignores local configuration, downloaded
+datasets, external HSB runs, and generated outputs.
+
+Older generated products moved from `data/` to
+`results/wbgt-comparison-20260911-175232/`, the source ERA5 run named in
+the country manifests and refresh log. They retain their relative paths
+under `cellwise/`, `cellwise_population_weight/`, `country/`, and
+`pairwise/`, along with processed tables, manifests, weights, exposures,
+and searches under `{fdma,hpa,kdca}/2025/`. For references to these
+products in historical logs and metadata, replace the `data/` prefix with
+`results/wbgt-comparison-20260911-175232/`. The former `data/boundaries/`
+directory is now `data/administrative_boundaries/`.
+
+## HeatStressBench inputs
+
+HeatStressBench (HSB) stores Parquet shards under each source run directory.
+`discover_results()` lists the shards for the requested scope.
 
 ```text
-results/<result_date>/<run_id>/<implementation>/results.parquet
+<hsb-run>/results/<result_date>/<run_id>/<implementation>/results.parquet
 ```
-
-Use `files()` to select deterministic file records; it does not read observation
-rows or expose a query-engine relation.
 
 ```python
-from liljegren_analysis.results import HSBRunResults
-from liljegren_analysis.io.results import iter_result_batches
+from datetime import date
+from pathlib import Path
+from analysis.results import date_range, discover_results, iter_result_batches
 
-files = HSBRunResults.from_hsb_run(hsb_run).files(
-    start_date="2025-01-01",
-    end_date="2025-01-07",
-    implementations=["heatstress", "meteor"],
+files = discover_results(
+    (Path("../HeatStressBench/.hsb/runs/example"),),
+    date_range(date(2025, 1, 1), date(2025, 1, 7)),
+    implementations=("heatstress", "meteor"),
 )
 for batch in iter_result_batches(files, ("row_id", "wbgt_status", "wbgt_c")):
-    ...
+    print(batch.num_rows)
 ```
 
-`files()` accepts one exact date (`result_date`), explicit dates (`dates`), or
-an inclusive date range (`start_date`/`end_date`), plus singular or plural run
-and implementation selectors. Integer run IDs are zero-padded to four digits.
-Plural selectors are deduplicated and empty selectors are rejected.
+Each `ResultFile` records its path, date, run ID, and implementation. Discovery
+is deterministic and rejects overlapping run scopes, which would double-count
+observations. Workflows discover their input inventory once and pass the selected
+records to computation. HSB schemas and identifier formats are trusted.
 
-Each `ResultFile` carries `path`, `result_date`, `run_id`, and
-`implementation`. Source schemas must include `cycle_ordinal`, `row_id`,
-`row_ordinal`, and qualified WBGT/Tg/Tnwb status/value columns. Any other
-schema is rejected before scanning.
+`iter_result_batches()` reads only requested columns and yields bounded Arrow
+record batches. Temperature calculations retain the workflow's status, missing
+value, and support rules. Cross-implementation observation identity is checked
+where daily common support is constructed.
 
-`iter_result_batches()` reads only its requested columns and yields bounded
-Arrow record batches. Use it for row-scale processing; use Polars only for the
-daily pairwise relational aggregation.
+## Country caches
+
+Cellwise workflows also accept country caches produced by
+`extract_countries_observations()`. Extraction records row-group routing
+in the manifest so readers can scan only the requested date and implementation.
+The manifest also records the resolved boundary path so maps use the same
+geometry and clipping bounds. See the [country workflow](workflows.md#country-analysis).

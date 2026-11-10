@@ -3,11 +3,11 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
+from sample_settings import DEFAULT_PROBABILITIES
 
-from liljegren_analysis.cellwise import DEFAULT_PROBABILITIES
-from liljegren_analysis.cellwise.quantiles import quantile_table
-from liljegren_analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
-from liljegren_analysis.comparison.statistics import histogram_quantile_bin_indices
+from analysis.cellwise.quantiles import quantile_table
+from analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
+from analysis.comparison.statistics import histogram_quantile_bin_indices
 
 
 class CellwiseQuantileTests(unittest.TestCase):
@@ -21,9 +21,6 @@ class CellwiseQuantileTests(unittest.TestCase):
         result = quantile_table(
             cell_ids=np.asarray([0, 1]),
             histogram=histogram,
-            valid=np.asarray([4, 0], dtype=np.uint16),
-            underflow=np.asarray([0, 0], dtype=np.uint16),
-            overflow=np.asarray([0, 0], dtype=np.uint16),
             histogram_spec=spec,
             probabilities=DEFAULT_PROBABILITIES,
             chunk_rows=1,
@@ -34,3 +31,25 @@ class CellwiseQuantileTests(unittest.TestCase):
             histogram_quantile_bin_indices(np.zeros(3, dtype=np.uint16)),
             np.asarray([-1, -1, -1]),
         )
+
+
+def test_quantile_table_owns_edge_counts_after_memmap_closes(tmp_path):
+    spec = DEFAULT_WBGT_HISTOGRAM
+    histogram = np.memmap(
+        tmp_path / "histogram", mode="w+", dtype=np.uint16, shape=(2, spec.bin_count)
+    )
+    histogram[0, 0] = 65535
+    histogram[0, -1] = 65535
+    result = quantile_table(
+        cell_ids=np.arange(2),
+        histogram=histogram,
+        histogram_spec=spec,
+        probabilities=(0.5, 0.95),
+        chunk_rows=1,
+    )
+    histogram._mmap.close()
+    assert result["n_valid"].to_pylist() == [131070, 0]
+    assert result["underflow_n"].to_pylist() == [65535, 0]
+    assert result["overflow_n"].to_pylist() == [65535, 0]
+    assert result["p50_c"].to_pylist() == [None, None]
+    assert result["p95_lower_c"].to_pylist() == [70.0, None]

@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from liljegren_analysis.cellwise.accumulator import (
+from analysis.cellwise.accumulator import (
     CellwiseHistogramAccumulator,
     counter_dtype,
 )
-from liljegren_analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
+from analysis.comparison.distributions import DEFAULT_WBGT_HISTOGRAM
 
 
 class CellwiseHistogramTests(unittest.TestCase):
@@ -22,9 +22,6 @@ class CellwiseHistogramTests(unittest.TestCase):
             spec.bin_ids(np.asarray([-70.01, -70.0, -69.98, 69.98, 70.0])),
             np.asarray([0, 1, 2, 7000, 7001]),
         )
-        self.assertEqual(spec.bin_bounds(0), (None, -70.0))
-        self.assertEqual(spec.bin_bounds(1), (-70.0, -69.98))
-        self.assertEqual(spec.bin_bounds(7001), (70.0, None))
 
     def test_daily_updates_equal_pooled_observation_histogram(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -34,17 +31,20 @@ class CellwiseHistogramTests(unittest.TestCase):
                 cell_count=2,
                 histogram_spec=DEFAULT_WBGT_HISTOGRAM,
                 dtype=np.dtype(np.uint16),
-                mode="w+",
             )
             try:
-                accumulator.update(np.asarray([0, 1, 0]), np.asarray([20.0, -80.0, 21.0]))
-                accumulator.update(np.asarray([0, 1, 1]), np.asarray([22.0, 80.0, 23.0]))
-                self.assertEqual(accumulator.valid.tolist(), [3, 3])
-                self.assertEqual(accumulator.underflow.tolist(), [0, 1])
-                self.assertEqual(accumulator.overflow.tolist(), [0, 1])
+                accumulator.update(
+                    np.asarray([0, 1, 0]), np.asarray([20.0, -80.0, 21.0])
+                )
+                accumulator.update(
+                    np.asarray([0, 1, 1]), np.asarray([22.0, 80.0, 23.0])
+                )
+                self.assertEqual(accumulator.histogram.sum(axis=1).tolist(), [3, 3])
+                self.assertEqual(accumulator.histogram[:, 0].tolist(), [0, 1])
+                self.assertEqual(accumulator.histogram[:, -1].tolist(), [0, 1])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
-                accumulator.discard_cached_pages()
-                self.assertEqual(accumulator.valid.tolist(), [3, 3])
+                accumulator.histogram.flush()
+                self.assertEqual(accumulator.histogram.sum(axis=1).tolist(), [3, 3])
                 self.assertEqual(int(accumulator.histogram.sum()), 6)
             finally:
                 accumulator.close()
@@ -59,10 +59,10 @@ class CellwiseHistogramTests(unittest.TestCase):
                 cell_count=1,
                 histogram_spec=DEFAULT_WBGT_HISTOGRAM,
                 dtype=np.dtype(np.uint16),
-                mode="w+",
             )
             try:
-                accumulator.valid[0] = np.iinfo(np.uint16).max
+                bin_id = DEFAULT_WBGT_HISTOGRAM.bin_ids(np.asarray([20.0]))[0]
+                accumulator.histogram[0, bin_id] = np.iinfo(np.uint16).max
                 with self.assertRaisesRegex(OverflowError, "counter overflow"):
                     accumulator.update(np.asarray([0]), np.asarray([20.0]))
             finally:

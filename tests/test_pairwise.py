@@ -6,67 +6,95 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-import polars as pl
 from polars.testing import assert_frame_equal
+from sample_settings import DEFAULT_PAIRWISE_IMPLEMENTATIONS
 
-from liljegren_analysis.comparison import (
-    completed_pairwise_dates,
+from analysis.comparison.pairwise import (
+    PAIRWISE_COLUMNS,
+    PAIRWISE_GROUP_COLUMNS,
+    _enriched_histogram_summary,
+    _pairwise_aggregations,
+    _pairwise_summary,
     compute_daily_pairwise,
+)
+from analysis.comparison.persistence import (
+    completed_pairwise_dates,
     initialize_pairwise_output,
     pairwise_metadata,
     persist_daily_pairwise,
 )
-from liljegren_analysis.comparison.config import (
-    DEFAULT_PAIRWISE_IMPLEMENTATIONS,
-)
-from liljegren_analysis.comparison.pairwise import (
-    PAIRWISE_COLUMNS,
-    PAIRWISE_GROUP_COLUMNS,
-    DailyPairwiseSummaries,
-    _enriched_histogram_summary,
-    _pairwise_aggregations,
-    _pairwise_summary,
-)
+from analysis.results import discover_results
 
 
 def _row_id(index: int) -> str:
     return f"era5-global-n000000-e0000000-20250101{index:02d}"
 
 
-def _write_results(hsb_run: Path, implementation: str, values: list[float | None], *, statuses: list[str] | None = None, tg_statuses: list[str] | None = None, cycle_ordinals: list[int] | None = None, row_ids: list[str] | None = None) -> None:
-    path = hsb_run / "results" / "2025-01-01" / "0001" / implementation / "results.parquet"
+def _write_results(
+    hsb_run: Path,
+    implementation: str,
+    values: list[float | None],
+    *,
+    statuses: list[str] | None = None,
+    tg_statuses: list[str] | None = None,
+    cycle_ordinals: list[int] | None = None,
+    row_ids: list[str] | None = None,
+) -> None:
+    path = (
+        hsb_run / "results" / "2025-01-01" / "0001" / implementation / "results.parquet"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     statuses = statuses or ["ok"] * len(values)
-    pq.write_table(pa.table({
-        "cycle_ordinal": pa.array(cycle_ordinals or [1] * len(values), type=pa.uint32()),
-        "row_id": row_ids or [_row_id(index) for index in range(len(values))],
-        "row_ordinal": pa.array(range(len(values)), type=pa.uint32()),
-        "wbgt_status": statuses, "wbgt_c": pa.array(values, type=pa.float32()),
-        "tg_status": tg_statuses or statuses, "tg_c": pa.array([None if value is None else value + 100 for value in values], type=pa.float32()),
-        "tnwb_status": statuses, "tnwb_c": pa.array([None if value is None else value - 100 for value in values], type=pa.float32()),
-    }), path)
+    pq.write_table(
+        pa.table(
+            {
+                "cycle_ordinal": pa.array(
+                    cycle_ordinals or [1] * len(values), type=pa.uint32()
+                ),
+                "row_id": row_ids or [_row_id(index) for index in range(len(values))],
+                "row_ordinal": pa.array(range(len(values)), type=pa.uint32()),
+                "wbgt_status": statuses,
+                "wbgt_c": pa.array(values, type=pa.float32()),
+                "tg_status": tg_statuses or statuses,
+                "tg_c": pa.array(
+                    [None if value is None else value + 100 for value in values],
+                    type=pa.float32(),
+                ),
+                "tnwb_status": statuses,
+                "tnwb_c": pa.array(
+                    [None if value is None else value - 100 for value in values],
+                    type=pa.float32(),
+                ),
+            }
+        ),
+        path,
+    )
 
 
 class PairwiseTests(unittest.TestCase):
     def test_enriched_histogram_preserves_direct_pairwise_statistics(self) -> None:
-        values = pl.DataFrame({
-            "result_date": [date(2025, 1, 1)] * 6,
-            "quantity": ["wbgt"] * 6,
-            "implementation_a": ["alpha"] * 6,
-            "implementation_b": ["beta"] * 6,
-            "area_weight": [1.0, 0.5, 1.5, 2.0, 0.25, 0.75],
-            "difference_c": [-5.0, -0.5, -0.1, 0.0, 0.2, 2.0],
-        })
-        direct = values.group_by(*PAIRWISE_GROUP_COLUMNS).agg(
-            *_pairwise_aggregations()
-        ).select(PAIRWISE_COLUMNS)
+        values = pl.DataFrame(
+            {
+                "result_date": [date(2025, 1, 1)] * 6,
+                "quantity": ["wbgt"] * 6,
+                "implementation_a": ["alpha"] * 6,
+                "implementation_b": ["beta"] * 6,
+                "area_weight": [1.0, 0.5, 1.5, 2.0, 0.25, 0.75],
+                "difference_c": [-5.0, -0.5, -0.1, 0.0, 0.2, 2.0],
+            }
+        )
+        direct = (
+            values.group_by(*PAIRWISE_GROUP_COLUMNS)
+            .agg(*_pairwise_aggregations())
+            .select(PAIRWISE_COLUMNS)
+        )
         enriched = _enriched_histogram_summary(values.lazy()).collect(
             engine="streaming"
         )
         derived = _pairwise_summary(enriched)
-
         self.assertGreater(enriched.height, 1)
         assert_frame_equal(derived, direct, check_exact=False, rel_tol=1e-14)
 
@@ -74,23 +102,63 @@ class PairwiseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             _write_results(root / "first", "alpha", [10.0, 20.0, None])
-            _write_results(root / "first", "beta", [8.0, 99.0, 4.0], statuses=["ok", "failed", "ok"])
+            _write_results(
+                root / "first",
+                "beta",
+                [8.0, 99.0, 4.0],
+                statuses=["ok", "failed", "ok"],
+            )
             _write_results(root / "second", "gamma", [7.0, 15.0, 1.0])
-            result_date, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root / "first", root / "second"))
-            rows = {(row["implementation_a"], row["implementation_b"]): row for row in summaries.pairwise.to_pylist() if row["quantity"] == "wbgt"}
-            self.assertEqual(rows[("alpha", "beta")]["n"], 1)
-            self.assertEqual(rows[("alpha", "gamma")]["sum_difference_c"], 8.0)
+            result_date, summaries = (
+                date(2025, 1, 1),
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    discover_results(
+                        (root / "first", root / "second"), (date(2025, 1, 1),)
+                    ),
+                    implementations=("alpha", "beta", "gamma"),
+                ),
+            )
+            rows = {
+                (row["implementation_a"], row["implementation_b"]): row
+                for row in summaries.pairwise.to_pylist()
+                if row["quantity"] == "wbgt"
+            }
+            self.assertEqual(rows["alpha", "beta"]["n"], 1)
+            self.assertEqual(rows["alpha", "gamma"]["sum_difference_c"], 8.0)
             histogram_counts = {}
             for row in summaries.abs_histogram.to_pylist():
-                key = row["quantity"], row["implementation_a"], row["implementation_b"]
+                key = (
+                    row["quantity"],
+                    row["implementation_a"],
+                    row["implementation_b"],
+                )
                 histogram_counts[key] = histogram_counts.get(key, 0) + row["n"]
-            self.assertEqual(histogram_counts[("wbgt", "alpha", "gamma")], 2)
+            self.assertEqual(histogram_counts["wbgt", "alpha", "gamma"], 2)
+            # Conservation belongs in regression tests, not every artifact write.
+            for row in summaries.pairwise.to_pylist():
+                key = row["quantity"], row["implementation_a"], row["implementation_b"]
+                self.assertEqual(histogram_counts[key], row["n"])
+                weight = sum(
+                    bin["area_weight_sum"]
+                    for bin in summaries.abs_histogram.to_pylist()
+                    if (
+                        bin["quantity"],
+                        bin["implementation_a"],
+                        bin["implementation_b"],
+                    )
+                    == key
+                )
+                self.assertAlmostEqual(weight, row["area_weight_sum"])
+
             for name in (
                 "sum_difference_c",
                 "sum_squared_difference_c2",
                 "sum_absolute_difference_c",
             ):
-                self.assertTrue(pa.types.is_float64(summaries.pairwise.schema.field(name).type))
+                self.assertTrue(
+                    pa.types.is_float64(summaries.pairwise.schema.field(name).type)
+                )
             published = persist_daily_pairwise(root / "output", result_date, summaries)
             self.assertTrue((published / "manifest.json").exists())
             self.assertEqual(pq.read_table(published / "pairwise.parquet").num_rows, 9)
@@ -101,14 +169,33 @@ class PairwiseTests(unittest.TestCase):
             implementations = DEFAULT_PAIRWISE_IMPLEMENTATIONS
             for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index), float(index + 1)])
-            _, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
+            _, summaries = (
+                date(2025, 1, 1),
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                ),
+            )
             self.assertEqual(
                 summaries.pairwise.num_rows,
                 3 * len(implementations) * (len(implementations) - 1) // 2,
             )
-            _write_results(root, implementations[0], [1.0, 2.0], cycle_ordinals=[1, 1], row_ids=[_row_id(0), _row_id(0)])
+            _write_results(
+                root,
+                implementations[0],
+                [1.0, 2.0],
+                cycle_ordinals=[1, 1],
+                row_ids=[_row_id(0), _row_id(0)],
+            )
             with self.assertRaisesRegex(ValueError, "no complete"):
-                compute_daily_pairwise(date(2025, 1, 1), (root,), "all-implementations")
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                )
 
     def test_all_implementations_excludes_unconfigured_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,8 +203,14 @@ class PairwiseTests(unittest.TestCase):
             implementations = (*DEFAULT_PAIRWISE_IMPLEMENTATIONS, "extra")
             for index, implementation in enumerate(implementations):
                 _write_results(root, implementation, [float(index)])
-            _, summaries, _, _ = compute_daily_pairwise(
-                date(2025, 1, 1), (root,), "all-implementations"
+            _, summaries = (
+                date(2025, 1, 1),
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                ),
             )
             self.assertEqual(
                 summaries.pairwise.num_rows,
@@ -140,7 +233,10 @@ class PairwiseTests(unittest.TestCase):
                 _write_results(root, implementation, [1.0])
             with self.assertRaisesRegex(ValueError, "implementations are missing"):
                 compute_daily_pairwise(
-                    date(2025, 1, 1), (root,), "all-implementations"
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
                 )
 
     def test_all_implementations_replaces_defaults_with_explicit_targets(self) -> None:
@@ -152,59 +248,83 @@ class PairwiseTests(unittest.TestCase):
                 ("unselected", [100.0, 100.0]),
             ):
                 _write_results(root, implementation, values)
-
-            _, summaries, _, _ = compute_daily_pairwise(
+            _, summaries = (
                 date(2025, 1, 1),
-                (root,),
-                "all-implementations",
-                implementations=("alpha", "beta"),
+                compute_daily_pairwise(
+                    date(2025, 1, 1),
+                    discover_results((root,), (date(2025, 1, 1),)),
+                    "all-implementations",
+                    implementations=("alpha", "beta"),
+                ),
             )
-
             assert summaries.pairwise.num_rows == 3
             assert set(summaries.quantity_status["implementation"].to_pylist()) == {
                 "alpha",
                 "beta",
             }
-            assert pairwise_metadata(
-                "all-implementations", ("alpha", "beta")
-            )["implementations"] == ["alpha", "beta"]
+            assert pairwise_metadata("all-implementations", ("alpha", "beta"))[
+                "implementations"
+            ] == ["alpha", "beta"]
 
-    def test_default_target_metadata_has_stable_set_version(self) -> None:
-        metadata = pairwise_metadata("all-implementations")
-        assert metadata["implementation_set_version"] == 1
+    def test_default_target_metadata_records_selected_implementations(self) -> None:
+        metadata = pairwise_metadata(
+            "all-implementations",
+            implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+        )
         assert metadata["implementations"] == list(DEFAULT_PAIRWISE_IMPLEMENTATIONS)
 
     def test_pairwise_output_requires_explicit_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
-            root = output / "all-implementations" / "schema-v7"
+            root = output
             root.mkdir(parents=True)
             (root / "metadata.json").write_text('{"schema_version": 1}')
             stale = root / "dates" / "stale"
             stale.mkdir(parents=True)
             with self.assertRaisesRegex(ValueError, "Incompatible"):
-                initialize_pairwise_output(output, "all-implementations")
+                initialize_pairwise_output(
+                    output,
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                )
             initialized = initialize_pairwise_output(
-                output, "all-implementations", overwrite=True
+                output,
+                "all-implementations",
+                overwrite=True,
+                implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
             )
             self.assertEqual(initialized, root.resolve())
             self.assertFalse(stale.exists())
             self.assertEqual(
                 json.loads((initialized / "metadata.json").read_text()),
-                pairwise_metadata("all-implementations"),
+                pairwise_metadata(
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                ),
             )
             self.assertEqual(
-                pairwise_metadata("all-implementations")["implementations"],
+                pairwise_metadata(
+                    "all-implementations",
+                    implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+                )["implementations"],
                 list(DEFAULT_PAIRWISE_IMPLEMENTATIONS),
             )
 
     def test_completed_dates_require_manifest_and_all_tables(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
-            root = initialize_pairwise_output(output, "all-implementations")
+            root = initialize_pairwise_output(
+                output,
+                "all-implementations",
+                implementations=DEFAULT_PAIRWISE_IMPLEMENTATIONS,
+            )
             complete = root / "dates" / "2025-01-01"
             complete.mkdir(parents=True)
-            filenames = ["pairwise.parquet", "abs_histogram.parquet", "quantity_status.parquet"]
+            filenames = [
+                "pairwise.parquet",
+                "abs_histogram.parquet",
+                "quantity_status.parquet",
+            ]
             for filename in filenames:
                 (complete / filename).touch()
             (complete / "manifest.json").write_text(
@@ -216,74 +336,47 @@ class PairwiseTests(unittest.TestCase):
                 json.dumps({"result_date": "2025-01-02", "files": filenames})
             )
             self.assertEqual(
-                completed_pairwise_dates(output, "all-implementations"),
+                completed_pairwise_dates(output),
                 {date(2025, 1, 1)},
             )
-
-    def test_area_weight_validation_tolerates_reduction_order_noise(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            hsb = root / "hsb"
-            for index, implementation in enumerate(DEFAULT_PAIRWISE_IMPLEMENTATIONS):
-                _write_results(hsb, implementation, [float(index)])
-            result_date, summaries, _, _ = compute_daily_pairwise(
-                date(2025, 1, 1), (hsb,), "all-implementations"
-            )
-            status = summaries.quantity_status
-            offsets = {"wbgt": 0.0, "tg": 3e-6, "tnwb": 5e-6}
-            weights = pa.array(
-                [
-                    4_568_836.0 + offsets[quantity.as_py()]
-                    for quantity in status["quantity"]
-                ],
-                type=pa.float64(),
-            )
-            noisy = DailyPairwiseSummaries(
-                summaries.pairwise,
-                summaries.abs_histogram,
-                status.set_column(
-                    status.schema.get_field_index("area_weight_sum"),
-                    "area_weight_sum",
-                    weights,
-                ),
-            )
-            persist_daily_pairwise(
-                root / "accepted", result_date, noisy, "all-implementations"
-            )
-
-            material_weights = pa.array(
-                [
-                    4_568_836.0 + ({"wbgt": 0.0, "tg": 0.01, "tnwb": 0.0})[
-                        quantity.as_py()
-                    ]
-                    for quantity in status["quantity"]
-                ],
-                type=pa.float64(),
-            )
-            material = DailyPairwiseSummaries(
-                summaries.pairwise,
-                summaries.abs_histogram,
-                status.set_column(
-                    status.schema.get_field_index("area_weight_sum"),
-                    "area_weight_sum",
-                    material_weights,
-                ),
-            )
-            with self.assertRaisesRegex(ValueError, "Quantity status totals"):
-                persist_daily_pairwise(
-                    root / "rejected", result_date, material, "all-implementations"
-                )
-
-    def test_invalid_histogram_is_not_published(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            _write_results(root, "alpha", [1.0])
-            _write_results(root, "beta", [2.0])
-            result_date, summaries, _, _ = compute_daily_pairwise(date(2025, 1, 1), (root,))
-            invalid = DailyPairwiseSummaries(summaries.pairwise, summaries.abs_histogram.slice(1), summaries.quantity_status)
-            with self.assertRaisesRegex(ValueError, "histogram totals"):
-                persist_daily_pairwise(root / "output", result_date, invalid)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_interrupted_partition_rewrite_is_not_complete(tmp_path, monkeypatch):
+    import pytest
+
+    from analysis.comparison import persistence
+
+    day = date(2025, 1, 1)
+    for name in ("alpha", "beta"):
+        _write_results(tmp_path / "run", name, [25.0, 30.0])
+    summaries = compute_daily_pairwise(
+        day,
+        discover_results((tmp_path / "run",), (day,)),
+        implementations=("alpha", "beta"),
+    )
+    output = tmp_path / "output"
+    partition = persist_daily_pairwise(output, day, summaries)
+    note = partition / "notes.txt"
+    note.write_text("keep")
+    assert completed_pairwise_dates(output) == {day}
+    original_write = persistence.atomic_parquet
+
+    def interrupt(table, path):
+        if path.name == "abs_histogram.parquet":
+            raise RuntimeError("interrupted")
+        original_write(table, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(persistence, "atomic_parquet", interrupt)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            persist_daily_pairwise(output, day, summaries)
+    assert not completed_pairwise_dates(output)
+    persist_daily_pairwise(output, day, summaries)
+    assert completed_pairwise_dates(output) == {day}
+    assert note.read_text() == "keep"
+    for name, table in vars(summaries).items():
+        assert pq.read_table(partition / f"{name}.parquet").equals(table)

@@ -1,13 +1,14 @@
 # Single-pass daily-to-annual pairwise statistics
 
-`compute_daily_pairwise()` performs one date-scoped Polars lazy scan for WBGT,
-Tg, and Tnwb. A materialized base relation joins ERA5 latitude weights before any
+`compute_daily_pairwise(date, files, ...)` accepts preselected result records
+and performs a date-scoped Polars lazy scan for WBGT,
+Tg, and Tnwb. A shared lazy base relation joins ERA5 latitude weights before any
 fan-out and supplies both agreement and coverage summaries. Pairwise scope uses
 one self-join and expands quantities afterward. Complete-case scope selects the
-configured six-implementation inventory, aggregates all three quantities in
-one grouped pass, then expands 15 pairs after the 6:1 reduction.
-`persist_daily_pairwise()` validates and atomically replaces one Parquet date
-directory containing all three summary tables.
+configured implementation inventory and aggregates all three quantities before
+expanding the implementation pairs. For six implementations, this produces 15
+pairs after a 6:1 reduction. `persist_daily_pairwise()` writes each daily table
+atomically, then publishes the partition completion record.
 
 ## Population selection
 
@@ -22,9 +23,9 @@ quantity.
 Input roots are enumerated by `(run_id, implementation)` before scanning.
 Overlapping scopes are rejected to prevent many-to-many joins.
 
-## Schema-v7 Parquet date tables
+## Parquet date tables
 
-`daily_pairwise`, keyed by date, quantity, and implementation pair, contains
+`pairwise.parquet`, keyed by date, quantity, and implementation pair, contains
 authoritative sufficient statistics:
 
 - `n`, `sum_difference_c`, `sum_squared_difference_c2`, and
@@ -38,7 +39,7 @@ Inputs are promoted to float64 before Polars differences and reductions. Daily
 derived means, variances, and scalar
 quantiles are intentionally absent.
 
-`daily_pairwise_abs_histogram` stores non-empty fixed bins keyed by quantity,
+`abs_histogram.parquet` stores non-empty fixed bins keyed by quantity,
 with count and area mass. Bounds are lower-inclusive and upper-exclusive:
 
 - `[0,2)` by 0.01 °C;
@@ -52,7 +53,7 @@ bounds are retained. An overflow percentile is an explicit error. Exact strict
 threshold fractions come from the main sufficient-statistics table rather than
 from histogram approximation.
 
-`daily_quantity_status` is keyed by date, quantity, implementation, status, and
+`quantity_status.parquet` is keyed by date, quantity, implementation, status, and
 `value_present`. It stores row count and area-weight mass independently of the
 joint-validity agreement filter.
 
@@ -60,8 +61,17 @@ joint-validity agreement filter.
 
 `analyze_yearly_pairwise()` reads a requested range of completed date
 partitions, checks pair and implementation coverage, and writes the pooled
-pairwise table, quantity coverage, metadata, and reference-comparison workbook.
-The CLI in `scripts/analyze_yearly_pairwise.py` is a thin wrapper over this API.
+pairwise table, quantity coverage, metadata, and two workbooks:
+
+- `pairwise_metrics_vs_<reference>.xlsx`: metrics relative to the reference implementation.
+- `pairwise_area_weighted_matrices.xlsx`: nine pairwise matrices covering area-weighted
+  mean difference, mean absolute difference, and RMSE for WBGT, Tnwb, and Tg.
+
+The matrix workbook follows the notebook's reference-then-export implementation
+order. Values are in degrees Celsius; signed differences are row minus column.
+Diagonals and unavailable comparisons remain blank. Excel displays two decimal
+places while retaining the underlying numeric precision.
+The yearly script and notebook call this function with settings from `config.yaml`.
 
 For count (N), signed sum (S_1), squared sum (S_2), and absolute sum
 (S_A):
@@ -84,8 +94,9 @@ They are model-based limits, not empirical quantiles. ERA5 observations are
 spatially and temporally correlated, so the limits are descriptive unless that
 dependence is modeled.
 
-`metadata.json` records schema version 7, result-schema ID, sample scope,
-quantity-set version, the exact configured implementation cohort, and histogram
-version.
+`metadata.json` records sample and quantity scope, the configured implementation
+cohort, and histogram definition version. Annual aggregation inherits these
+settings from the daily product. The workflow resume
+manifest records the selected dates and input identity.
 Each completed date contains three Parquet files and a manifest written last;
 incomplete directories are not valid inputs.

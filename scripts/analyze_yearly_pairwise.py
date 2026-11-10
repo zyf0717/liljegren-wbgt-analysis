@@ -1,73 +1,15 @@
-#!/usr/bin/env python3
-"""Pool persisted daily pairwise summaries into annual outputs."""
+"""Run yearly pairwise using config.yaml."""
 
-from __future__ import annotations
-
-import argparse
-from datetime import date
-from pathlib import Path
-
-from liljegren_analysis.comparison import (
-    DEFAULT_PAIRWISE_OUTPUT_ROOT,
-    analyze_yearly_pairwise,
-)
-from liljegren_analysis.comparison.config import REFERENCE_IMPLEMENTATION, SAMPLE_SCOPES
-
-REPOSITORY = Path(__file__).parents[1]
+from analysis.comparison.yearly import analyze_yearly_pairwise
+from analysis.config import load_settings
+from analysis.io.artifacts import save_settings
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input-root", type=Path, default=REPOSITORY / DEFAULT_PAIRWISE_OUTPUT_ROOT
-    )
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=REPOSITORY / "data/pairwise/yearly/6-targets/2025",
-    )
-    parser.add_argument(
-        "--start-date", type=date.fromisoformat, default=date(2025, 1, 1)
-    )
-    parser.add_argument(
-        "--end-date", type=date.fromisoformat, default=date(2025, 12, 31)
-    )
-    parser.add_argument(
-        "--sample-scope", choices=SAMPLE_SCOPES, default="all-implementations"
-    )
-    parser.add_argument("--reference", default=REFERENCE_IMPLEMENTATION)
-    parser.add_argument(
-        "--implementation",
-        action="append",
-        dest="implementations",
-        help="target implementation; repeat to replace the default set",
-    )
-    parser.add_argument(
-        "--export-implementation",
-        action="append",
-        dest="export_implementations",
-        help="target to include in the reference workbook; repeat as needed",
-    )
-    return parser.parse_args()
-
-
-def main() -> None:
-    arguments = parse_args()
-    outputs = analyze_yearly_pairwise(
-        arguments.input_root,
-        start_date=arguments.start_date,
-        end_date=arguments.end_date,
-        output_root=arguments.output_root,
-        sample_scope=arguments.sample_scope,
-        implementations=arguments.implementations,
-        reference_implementation=arguments.reference,
-        export_implementations=(
-            tuple(arguments.export_implementations)
-            if arguments.export_implementations
-            else None
-        ),
-    )
-    print(outputs.pairwise)
+def main(settings: dict | None = None) -> None:
+    settings = dict(settings) if settings is not None else load_settings("yearly_pairwise")
+    result = analyze_yearly_pairwise(**settings)
+    save_settings(settings, settings["output_root"])
+    print(result)
 
 
 if __name__ == "__main__":

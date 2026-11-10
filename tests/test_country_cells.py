@@ -5,12 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from liljegren_analysis.country.cells import (
+from shapely.geometry import box
+
+from analysis.country.cells import (
     Country,
     country_cells,
     load_countries,
 )
-from shapely.geometry import box
 
 
 class CountryCellTests(unittest.TestCase):
@@ -24,7 +25,9 @@ class CountryCellTests(unittest.TestCase):
 
         cells = country_cells(country)
 
-        self.assertEqual([cell.cell_id for cell in cells], ["era5-global-n002500-e0002500"])
+        self.assertEqual(
+            [cell.cell_id for cell in cells], ["era5-global-n002500-e0002500"]
+        )
         self.assertFalse(cells[0].center_in_country)
         self.assertEqual(cells[0].row_id_prefix, "era5-global-n002500-e0002500-")
 
@@ -38,7 +41,9 @@ class CountryCellTests(unittest.TestCase):
 
         cells = country_cells(country)
 
-        self.assertEqual([cell.cell_id for cell in cells], ["era5-global-n000000-e0000000"])
+        self.assertEqual(
+            [cell.cell_id for cell in cells], ["era5-global-n000000-e0000000"]
+        )
         self.assertTrue(cells[0].center_in_country)
 
     def test_explicit_bounds_clip_country_geometry(self) -> None:
@@ -78,7 +83,15 @@ class CountryCellTests(unittest.TestCase):
                     },
                     "geometry": {
                         "type": "Polygon",
-                        "coordinates": [[[103.0, 1.0], [104.0, 1.0], [104.0, 2.0], [103.0, 2.0], [103.0, 1.0]]],
+                        "coordinates": [
+                            [
+                                [103.0, 1.0],
+                                [104.0, 1.0],
+                                [104.0, 2.0],
+                                [103.0, 2.0],
+                                [103.0, 1.0],
+                            ]
+                        ],
                     },
                 }
             ],
@@ -95,7 +108,9 @@ class CountryCellTests(unittest.TestCase):
     def test_rejects_unknown_country_code(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "countries.geojson"
-            path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+            path.write_text(
+                '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ValueError, "ZZ"):
                 load_countries(path, ["ZZ"])
 
