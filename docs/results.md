@@ -1,9 +1,30 @@
-# HSB result files
+# Data and result files
 
-`discover_results()` lists trusted HSB Parquet shards below each run directory:
+## Repository layout
+
+Downloaded data lives in `data/`. Country and administrative boundaries go
+in `data/administrative_boundaries/`, LandScan files in `data/population/`,
+and raw health data in `data/{fdma,hpa,kdca}/2025/raw/`. Generated outputs
+default to `results/<hsb-run>/`. Git ignores local configuration, downloaded
+datasets, external HSB runs, and generated outputs.
+
+Older generated products moved from `data/` to
+`results/wbgt-comparison-20260911-175232/`, the source ERA5 run named in
+the country manifests and refresh log. They retain their relative paths
+under `cellwise/`, `cellwise_population_weight/`, `country/`, and
+`pairwise/`, along with processed tables, manifests, weights, exposures,
+and searches under `{fdma,hpa,kdca}/2025/`. For references to these
+products in historical logs and metadata, replace the `data/` prefix with
+`results/wbgt-comparison-20260911-175232/`. The former `data/boundaries/`
+directory is now `data/administrative_boundaries/`.
+
+## HeatStressBench inputs
+
+HeatStressBench (HSB) stores Parquet shards under each source run directory.
+`discover_results()` lists the shards for the requested scope.
 
 ```text
-results/<result_date>/<run_id>/<implementation>/results.parquet
+<hsb-run>/results/<result_date>/<run_id>/<implementation>/results.parquet
 ```
 
 ```python
@@ -30,8 +51,10 @@ record batches. Temperature calculations retain the workflow's status, missing
 value, and support rules. Cross-implementation observation identity is checked
 where daily common support is constructed.
 
+## Country caches
+
 Cellwise workflows also accept country caches produced by
-`extract_countries_observations()`. Extraction records row-group routing in the manifest, limiting repeated scans
-to the requested date and implementation without a per-analysis index cache.
-Extraction records its resolved
-boundary path so country maps use the same geometry and clipping bounds.
+`extract_countries_observations()`. Extraction records row-group routing
+in the manifest so readers can scan only the requested date and implementation.
+The manifest also records the resolved boundary path so maps use the same
+geometry and clipping bounds. See the [country workflow](workflows.md#country-analysis).

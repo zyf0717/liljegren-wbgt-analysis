@@ -1,211 +1,35 @@
 # Liljegren WBGT implementation analysis
 
-ERA5 research workflows for comparing Liljegren wet-bulb globe temperature
-implementations in HeatStressBench results. Reusable computation lives in
-`analysis/`; scripts and notebooks call those functions directly.
+Compare Liljegren wet-bulb globe temperature (WBGT) implementations using
+HeatStressBench ERA5 results. The workflows produce pairwise statistics,
+cellwise temperature quantiles and spread maps, and global and country
+classification summaries.
 
-## Setup
+## Quick start
 
-Use Python 3.12 or newer and uv. From the repository root:
+Use Python 3.12 or newer and uv. From the repository root, install the
+dependencies and copy the example configuration.
 
 ```bash
 uv sync
 cp config.example.yaml config.yaml
-# Edit config.yaml to point to your ERA5 run and population raster.
-uv run python -m pytest -q
 ```
 
-The repository is not installed as a Python package. `pyproject.toml` and
-`uv.lock` manage the analysis environment. Local configuration, datasets,
-external HSB runs, and generated results are ignored by Git.
-
-Downloaded artifacts stay in `data/`: country and administrative boundaries in
-`data/administrative_boundaries/`, LandScan files in `data/population/`, and raw health data in
-`data/{fdma,hpa,kdca}/2025/raw/`.
-
-Generated outputs live in `results/<hsb-run>/`. Older products previously stored
-in `data/` were moved under `results/wbgt-comparison-20260911-175232/`, using the
-source ERA5 run recorded in the country manifests and refresh log. Their relative
-paths are preserved: `cellwise/`,
-`cellwise_population_weight/`, `country/`, `pairwise/`, and the processed
-tables, manifests, weights, exposures, and searches in `{fdma,hpa,kdca}/2025/`.
-Historical metadata and logs retain their original paths; references to these
-moved products now resolve by replacing the repository's `data/` prefix with
-`results/wbgt-comparison-20260911-175232/`. The former `data/boundaries/` directory is now
-`data/administrative_boundaries/`; raw health and population download paths are unchanged.
-
-Input shards follow this layout:
-
-```text
-<hsb-run>/results/<date>/<run>/<implementation>/results.parquet
-```
-
-## Configuration
-
-`config.yaml` defines the source run, inclusive date range, implementations,
-population raster, and country thresholds once in `run`. Workflow paths are
-derived under `results/<source-run-folder>/`; set `run.output_root` to change
-that root. Relative paths resolve against the repository root. Boundary downloads
-default to `data/administrative_boundaries/`, configurable with `run.boundary_cache`.
-
-Workflow sections contain only overrides, such as worker counts, quantile
-probabilities, and global classification thresholds. They also accept explicit
-input and output paths. Derived downstream paths follow upstream output overrides.
-Existing configurations without a `run` section retain their explicit behavior.
-Inspect the expanded arguments with `load_settings("iso7243")`, for example.
-
-YAML-configured workflow scripts take no command-line arguments. Run them as modules
-from the repository root. They read their section, call the core function, and save effective
-settings alongside the outputs. The sample writes new products under
-`results/<hsb-run>/`.
-
-The example uses four daily workers and two Polars compute threads per worker.
-BLAS/OpenMP/MKL default to one thread; explicit environment settings take precedence.
-
-Run the selected workflows sequentially with:
+In `config.yaml`, set `run.hsb_run_path` and `run.population_raster`, then
+choose the date range, implementations, countries, and `pipeline.steps`.
+Run the pipeline from the repository root.
 
 ```bash
 uv run python -m scripts.run_pipeline --config config.yaml
 ```
 
-`pipeline.steps` lists the workflows to run. Remove an entry to skip it. Python
-fixes the execution order and expands country variants automatically. For precise
-selection, a mapping such as `iso7243: [iso7243_jpn]` selects named sections;
-an empty list disables that workflow. Each section runs in its own subprocess.
-The example includes global, JPN, and THA products. Workers
-within a step still follow its settings. Timestamped logs under
-`pipeline.output_root` capture stdout/stderr and start/exit events; the runner
-stops on failure. It adds no caching or overwrite policy: daily/classification/
-quantile workflows reuse their checkpoints, summaries and plots regenerate, and
-population/extraction require disabling after completion or `overwrite: true`.
+Outputs default to `results/<hsb-run>/`. Use `uv run jupyter lab` for the
+notebooks or `uv run python -m pytest -q` to run the tests.
 
-## Workflows
+## Documentation
 
-| Analysis | Run with `uv run python -m` | Configuration section |
-| --- | --- | --- |
-| Daily pairwise statistics | `scripts.daily_pairwise` | `daily_pairwise` |
-| Annual statistics and comparison workbooks | `scripts.analyze_yearly_pairwise` | `yearly_pairwise` |
-| Joint cellwise temperature quantiles | `scripts.compute_joint_cellwise_temperature_quantiles` | `quantiles` |
-| Population on the ERA5 grid | `scripts.compute_era5_population_weights` | `population` |
-| Quantile spread and coverage | `scripts.analyze_cellwise_quantile_spread` | `quantile_spread` |
-| Stacked quantile-spread maps | `scripts.plot_cellwise_quantile_spread` | `plot_quantile_spread` |
-| Hourly classification and non-consensus | `scripts.analyze_cellwise_iso7243_classification` | `iso7243` |
-| Classification figures | `scripts.plot_cellwise_iso7243_classification` | `plot_iso7243` |
-| Non-consensus map | `scripts.plot_cellwise_iso7243_non_consensus` | `plot_non_consensus` |
-| Global non-consensus map stack | `scripts.plot_global_iso7243_non_consensus_stack` | `plot_non_consensus_stack` |
-| Country grid-cell CSV | `scripts.country_cells` | `country_cells` |
-| Country observation caches | `scripts.extract_country` | `extract_country` |
-| Country classification summaries | `scripts.analyze_era5_country_classification` | `country_classification` |
-
-Run daily pairwise analysis before annual aggregation. Compute quantiles before
-spread analysis; population counts are needed for population weighting and
-coverage exports. The spread script processes all configured quantities; the
-plotting script renders their maps separately. Run hourly classification once
-to produce both pairwise class differences and non-consensus counts, then render
-the desired figures.
-
-The example selects six targets and JPN/THA only. `run.countries` maps uppercase
-ISO3 codes to classification thresholds in degrees Celsius; `{}` disables country
-workflows. It generates sections such as `iso7243_jpn` and `plot_iso7243_tha`,
-which accept their own overrides and write to `country/<iso3>/hourly_classification/`.
-These country products use the configured local thresholds. Country classification uses
-`country_classification` for the first country (also used by notebook 20), then
-`country_classification_<iso3>` for the remaining countries. Country workers
-default to one; override `iso7243_jpn.date_workers`, for example, to change this.
-
-Country extraction accepts an
-optional `implementations` list; omitting it extracts every available target.
-Country extraction writes `<output_directory>/<iso3>/observations.parquet` and
-its selection manifest, including row-group routing. Country caches from earlier
-revisions need a fresh extraction to provide this routing metadata. Optional
-`bounds: [west, south, east, north]` clips the
-country polygon and supports selections such as CONUS. To use a country cache
-in either cellwise workflow, set `hsb_run_paths: null`, set `country_cache`, and
-choose a separate output directory. Country maps and population denominators
-follow the selected country grid.
-
-To regenerate only the country non-consensus composite, use
-`uv run python -m scripts.plot_jpn_hourly_classification` or
-`uv run python -m scripts.plot_tha_hourly_classification`, with
-`--input-root results/<hsb-run>/country/<iso3>/hourly_classification` and
-`--population-weights-path results/<hsb-run>/population/population.parquet`.
-Each script checks the country and restores the original horizontal layout,
-including its measured margins, title spacing, colorbars, and final whitespace
-crop. The output is `figures/non_consensus_stacked.png`; `--output-directory`
-can place it elsewhere. These scripts read the saved tables without recomputation.
-
-## Notebooks and reusable functions
-
-```bash
-uv run jupyter lab
-```
-
-Each notebook loads the same YAML section as its script. The first cell permits
-explicit changes to `SETTINGS` for exploration; the effective settings are saved
-when the analysis succeeds. Notebook setup supports kernels started in either
-the repository root or `notebooks/`.
-
-- `00`: environment imports.
-- `10`, `11`: daily pairwise statistics and joint quantiles.
-- `20`: country classification summaries.
-- `30`: interactive annual comparison matrices and CSV export.
-- `31`: interactive implementation-pair quantile maps.
-
-Core functions take explicit paths and do not load configuration. Workflows
-that publish files return their output directory; filenames are stable and
-documented alongside the analysis. Calculation functions return named tables.
-
-```python
-from analysis.comparison.workflows import run_daily_pairwise
-from analysis.classification.era5 import analyze_era5_country_cache
-from analysis.results import discover_results, iter_result_batches
-```
-
-Shared grid identities and area weights live in `analysis/grid.py`; input discovery
-and batch reading live in `analysis/results.py`. The topic directories contain
-comparison, cellwise, classification, and country calculations. HSB schemas and
-identifier formats are trusted. Workflow boundaries check settings and support;
-internal functions operate on the selected data directly.
-
-For interactive Matplotlib work, load an hourly summary and build a live figure:
-
-```python
-from analysis.config import load_settings
-from analysis.cellwise.iso7243_summary import summarize_cellwise_iso7243_classification
-from analysis.cellwise.iso7243_plots import classification_figure
-
-settings = load_settings("plot_iso7243")
-summary = summarize_cellwise_iso7243_classification(
-    settings["input_root"], population_weights_path=settings["population_weights_path"]
-)
-figure = classification_figure(summary)
-```
-
-Figure builders respect the active notebook backend; batch plotting entry
-points save and close figures.
-
-## Resume and recomputation
-
-Daily comparisons and hourly classification reuse completed dates. Quantiles
-reuse daily validity masks and completed implementations; an interrupted
-implementation replay restarts from its beginning. Temporary files are renamed
-only after successful writes. Completion metadata is written after the final
-outputs. Input paths, sizes, timestamps, and analysis settings guard reuse.
-
-Use one writer per output directory. Changing scientific settings or inputs
-requires a fresh output directory or `overwrite: true`, which discards only the
-workflow's named outputs and checkpoints. Set it back to `false` to resume.
-Cheap summaries and plots are regenerated when invoked. Input files should stay
-unchanged during a run; deliberate code changes to an algorithm require explicit
-recomputation.
-
-Global quantile replay uses disk-backed histograms and can require roughly
-35 GiB of available RAM with two replay workers. Keep the configurable batch
-sizes and worker limits modest; streaming and memory mapping remain necessary
-for annual global data.
-
-Statistical definitions and data interpretation:
-[pairwise statistics](docs/pairwise-statistics.md),
-[area weighting](docs/area-weighted-statistics.md),
-[cellwise analysis](docs/cellwise-analysis.md), and
-[HSB result files](docs/results.md).
+- Configuration, scripts, notebooks, and checkpoint reuse. [Workflow guide](docs/workflows.md)
+- Input and output paths. [Data and result files](docs/results.md)
+- Daily and annual comparisons. [Pairwise statistics](docs/pairwise-statistics.md), [area weighting](docs/area-weighted-statistics.md)
+- Quantiles, spread, population weighting, and hourly classification. [Cellwise analysis](docs/cellwise-analysis.md)
+- 2025 ERA5 diagnostic. [mdljts-wbgt invalid rows](docs/mdljts-era5-2025-invalid-rows.md)
